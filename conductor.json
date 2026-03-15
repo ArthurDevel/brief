@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "setup": "ln -s \"$CONDUCTOR_ROOT_PATH/.env.gateway\" apps/voice-gateway/.env && ln -s \"$CONDUCTOR_ROOT_PATH/.env.web\" apps/web/.env && pnpm install"
+  }
+}
