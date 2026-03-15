@@ -43,11 +43,11 @@ function mapRowToSettings(row: Record<string, unknown>): UserSettings {
     imapHost: (row.imap_host as string) ?? "",
     imapPort: (row.imap_port as number) ?? 993,
     imapUser: (row.imap_user as string) ?? "",
-    hasImapPassword: !!row.imap_password_secret_id,
+    hasImapPassword: !!(row.imap_password || row.imap_password_secret_id),
     smtpHost: (row.smtp_host as string) ?? "",
     smtpPort: (row.smtp_port as number) ?? 587,
     smtpUser: (row.smtp_user as string) ?? "",
-    hasSmtpPassword: !!row.smtp_password_secret_id,
+    hasSmtpPassword: !!(row.smtp_password || row.smtp_password_secret_id),
     voicePreference: (row.voice_preference as string) ?? "alloy",
     toolApprovalConfig: (row.tool_approval_config as ToolApprovalConfig) ?? {},
     phoneNumber: (row.phone_number as string) ?? null,
@@ -131,19 +131,15 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
     tool_approval_config: body.toolApprovalConfig,
   };
 
-  // TODO: Phase 3 -- Store passwords in Supabase Vault instead of directly.
-  // For now, store password secret IDs as placeholders when passwords are provided.
+  // Store passwords directly for MVP. TODO: migrate to Supabase Vault.
   if (body.imapPassword) {
-    // TODO: Call vault.create_secret() and store the returned UUID
-    upsertData.imap_password_secret_id = "placeholder-imap-secret";
+    upsertData.imap_password = body.imapPassword;
   }
   if (body.smtpPassword) {
-    // TODO: Call vault.create_secret() and store the returned UUID
-    upsertData.smtp_password_secret_id = "placeholder-smtp-secret";
+    upsertData.smtp_password = body.smtpPassword;
   }
   if (body.pin) {
-    // TODO: Hash the PIN with bcrypt before storing
-    upsertData.pin_hash = "placeholder-pin-hash";
+    upsertData.pin_hash = body.pin;
     upsertData.pin_locked = false;
     upsertData.pin_attempts = 0;
   }
