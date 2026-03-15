@@ -30,7 +30,7 @@ import { addTranscriptEntry, addTokenUsage } from "./session-manager.js";
 // CONSTANTS
 // ============================================================================
 
-const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
+const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17";
 
 // ============================================================================
 // TYPES
@@ -46,6 +46,8 @@ export interface RelayConfig {
   toolApprovalConfig: ToolApprovalConfig;
   memoryEntries: { key: string; value: string }[];
   voicePreference: string;
+  /** When true, audio is already PCM16 24kHz -- skip mulaw transcoding. */
+  skipTranscoding?: boolean;
 }
 
 /** A function call item returned by OpenAI in response.output_item.done. */
@@ -81,15 +83,15 @@ interface ResponseDoneEvent {
  * Creates a relay connection to the OpenAI Realtime API for a Twilio media stream.
  * Handles audio transcoding, tool call routing, transcript tracking, and token usage.
  * @param config - Full relay configuration including user context and session
- * @param onTwilioAudio - Callback to send mulaw audio back to Twilio (base64 encoded)
+ * @param onAudioOut - Callback to send audio back to the caller (base64 encoded)
  * @param onClose - Callback invoked when the OpenAI connection closes
- * @returns Object with sendTwilioAudio() to forward Twilio audio and close() to shut down
+ * @returns Object with sendAudio() to forward incoming audio and close() to shut down
  */
 export function createOpenAIRelay(
   config: RelayConfig,
-  onTwilioAudio: (base64Audio: string) => void,
+  onAudioOut: (base64Audio: string) => void,
   onClose: () => void
-): { sendTwilioAudio: (base64MulawPayload: string) => void; close: () => void } {
+): { sendAudio: (base64Payload: string) => void; close: () => void } {
   const {
     apiKey,
     session,
@@ -99,39 +101,50 @@ export function createOpenAIRelay(
     toolApprovalConfig,
     memoryEntries,
     voicePreference,
+    skipTranscoding,
   } = config;
 
   const systemPrompt = buildSystemPrompt(memoryEntries, toolApprovalConfig);
+  let audioSendLogCount = 0;
+  let sessionReady = false;
+  const pendingAudio: string[] = [];
 
   const openaiWs = new WebSocket(OPENAI_REALTIME_URL, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      "OpenAI-Beta": "realtime=v1",
     },
   });
 
   openaiWs.on("open", () => {
     console.log(`[relay] Connected to OpenAI Realtime API for session ${session.sessionId}`);
 
-    // Configure the session with user-specific prompt and tools
+    // Configure the session — GA format for gpt-4o-mini-realtime-preview
+    // Defaults: PCM16 24kHz, server_vad enabled
+    const sessionConfig: Record<string, unknown> = {
+      type: "realtime",
+      instructions: systemPrompt,
+      tools: toolDefinitions,
+      tool_choice: "auto",
+      audio: {
+        input: {
+          transcription: { model: "gpt-4o-mini-transcribe" },
+        },
+        output: {
+          voice: voicePreference || "alloy",
+        },
+      },
+    };
+
+    if (!skipTranscoding) {
+      // Twilio path: override audio format to g711 ulaw 8kHz
+      (sessionConfig.audio as any).input.format = { type: "audio/g711-ulaw", rate: 8000 };
+      (sessionConfig.audio as any).output.format = { type: "audio/g711-ulaw", rate: 8000 };
+    }
+
     openaiWs.send(
       JSON.stringify({
         type: "session.update",
-        session: {
-          instructions: systemPrompt,
-          voice: voicePreference,
-          modalities: ["text", "audio"],
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
-          input_audio_transcription: { model: "whisper-1" },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.7,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 800,
-          },
-          tools: toolDefinitions,
-        },
+        session: sessionConfig,
       })
     );
   });
@@ -147,19 +160,40 @@ export function createOpenAIRelay(
       return;
     }
 
-    // Handle audio output -- transcode PCM16 24kHz to mulaw and send to Twilio
-    if (event.type === "response.audio.delta") {
+    if (event.type === "error") {
+      console.error("[relay] OpenAI error:", JSON.stringify(event));
+    }
+
+    // Session is ready after session.updated — flush any queued audio
+    if (event.type === "session.updated" && !sessionReady) {
+      sessionReady = true;
+      if (pendingAudio.length > 0) {
+        console.log(`[relay] Flushing ${pendingAudio.length} queued audio packets`);
+        for (const audio of pendingAudio) {
+          openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio }));
+        }
+        pendingAudio.length = 0;
+      }
+    }
+
+    // Handle audio output -- transcode to mulaw for Twilio, or pass through for browser
+    // GA mini model uses "response.output_audio.delta"
+    if (event.type === "response.audio.delta" || event.type === "response.output_audio.delta") {
       const audioEvent = event as { delta?: string };
       if (audioEvent.delta) {
-        const pcm16Buffer = Buffer.from(audioEvent.delta, "base64");
-        const mulawBuffer = pcm16_24kToMulaw(pcm16Buffer);
-        onTwilioAudio(mulawBuffer.toString("base64"));
+        if (skipTranscoding) {
+          onAudioOut(audioEvent.delta);
+        } else {
+          const pcm16Buffer = Buffer.from(audioEvent.delta, "base64");
+          const mulawBuffer = pcm16_24kToMulaw(pcm16Buffer);
+          onAudioOut(mulawBuffer.toString("base64"));
+        }
       }
       return;
     }
 
-    // Track assistant transcript
-    if (event.type === "response.audio_transcript.done") {
+    // Track assistant transcript (GA mini uses "response.output_audio_transcript.done")
+    if (event.type === "response.audio_transcript.done" || event.type === "response.output_audio_transcript.done") {
       const transcriptEvent = event as { transcript?: string };
       if (transcriptEvent.transcript) {
         console.log(`[assistant] ${transcriptEvent.transcript}`);
@@ -223,19 +257,30 @@ export function createOpenAIRelay(
 
   return {
     /**
-     * Receives mulaw audio from Twilio, transcodes to PCM16 24kHz, and sends to OpenAI.
-     * @param base64MulawPayload - Base64-encoded mulaw audio from Twilio media event
+     * Receives audio, transcodes if needed, and sends to OpenAI.
+     * For Twilio: decodes mulaw 8kHz -> PCM16 24kHz. For browser: passes through PCM16 24kHz.
+     * @param base64Payload - Base64-encoded audio (mulaw for Twilio, PCM16 for browser)
      */
-    sendTwilioAudio(base64MulawPayload: string): void {
-      if (openaiWs.readyState !== WebSocket.OPEN) return;
+    sendAudio(base64Payload: string): void {
+      let pcm16Base64: string;
+      if (skipTranscoding) {
+        pcm16Base64 = base64Payload;
+      } else {
+        const mulawBuffer = Buffer.from(base64Payload, "base64");
+        const pcm16Buffer = mulawToPcm16_24k(mulawBuffer);
+        pcm16Base64 = pcm16Buffer.toString("base64");
+      }
 
-      const mulawBuffer = Buffer.from(base64MulawPayload, "base64");
-      const pcm16Buffer = mulawToPcm16_24k(mulawBuffer);
+      if (!sessionReady) {
+        // Queue audio until session.updated fires
+        pendingAudio.push(pcm16Base64);
+        return;
+      }
 
       openaiWs.send(
         JSON.stringify({
           type: "input_audio_buffer.append",
-          audio: pcm16Buffer.toString("base64"),
+          audio: pcm16Base64,
         })
       );
     },

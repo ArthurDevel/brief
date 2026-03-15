@@ -14,7 +14,8 @@
 
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase/client";
+import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
+import { storeSecret, updateSecret } from "@dublin/tools";
 import type { UserSettings } from "@/lib/types";
 import type { ToolApprovalConfig } from "@dublin/tools/src/types";
 
@@ -131,20 +132,39 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
     tool_approval_config: body.toolApprovalConfig,
   };
 
-  // Store passwords directly for MVP. TODO: migrate to Supabase Vault.
+  // Fetch existing settings to check for pre-existing secret IDs
+  const { data: existing } = await supabase
+    .from("user_settings")
+    .select("imap_password_secret_id, smtp_password_secret_id")
+    .eq("user_id", user.id)
+    .single();
+
+  // Store passwords in Supabase Vault using a service role client
+  const serviceClient = createServiceRoleClient();
+
   if (body.imapPassword) {
-    upsertData.imap_password = body.imapPassword;
+    if (existing?.imap_password_secret_id && existing.imap_password_secret_id !== "placeholder-imap-secret") {
+      await updateSecret(serviceClient, existing.imap_password_secret_id, body.imapPassword);
+      upsertData.imap_password_secret_id = existing.imap_password_secret_id;
+    } else {
+      const secretId = await storeSecret(serviceClient, body.imapPassword, `imap-password-${user.id}`);
+      upsertData.imap_password_secret_id = secretId;
+    }
   }
   if (body.smtpPassword) {
-    upsertData.smtp_password = body.smtpPassword;
+    if (existing?.smtp_password_secret_id && existing.smtp_password_secret_id !== "placeholder-smtp-secret") {
+      await updateSecret(serviceClient, existing.smtp_password_secret_id, body.smtpPassword);
+      upsertData.smtp_password_secret_id = existing.smtp_password_secret_id;
+    } else {
+      const secretId = await storeSecret(serviceClient, body.smtpPassword, `smtp-password-${user.id}`);
+      upsertData.smtp_password_secret_id = secretId;
+    }
   }
   if (body.pin) {
     upsertData.pin_hash = body.pin;
     upsertData.pin_locked = false;
     upsertData.pin_attempts = 0;
   }
-
-  // TODO: Phase 3 -- Validate IMAP connection before saving
 
   const { data, error } = await supabase
     .from("user_settings")
