@@ -1,0 +1,13 @@
+{
+  "name": "voice-email-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:gateway": "pnpm --filter @dublin/voice-gateway dev",
+    "dev:web": "pnpm --filter @dublin/web dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Email Assistant</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #0a0a0a;
+      color: #e0e0e0;
+    }
+
+    h1 {
+      font-size: 1.2rem;
+      font-weight: 400;
+      margin-bottom: 2rem;
+      color: #888;
+    }
+
+    #callBtn {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      border: 2px solid #333;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #callBtn:hover { border-color: #555; background: #222; }
+    #callBtn.active { border-color: #ef4444; background: #2a1a1a; color: #ef4444; }
+
+    #status {
+      margin-top: 1.5rem;
+      font-size: 0.85rem;
+      color: #666;
+      min-height: 1.2em;
+    }
+
+    #transcript {
+      margin-top: 2rem;
+      width: 90%;
+      max-width: 500px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-size: 0.8rem;
+      color: #555;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      line-height: 1.5;
+    }
+
+    .user-line { color: #6b9bd2; }
+    .assistant-line { color: #aaa; }
+    .tool-line { color: #a78bfa; font-size: 0.75rem; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Voice Email Assistant</h1>
+  <button id="callBtn">Start Call</button>
+  <div id="status"></div>
+  <div id="transcript"></div>
+
+  <script>
+    // ========================================================================
+    // CONSTANTS
+    // ========================================================================
+
+    const SAMPLE_RATE = 24000;
+    const BUFFER_SIZE = 4096;
+
+    // ========================================================================
+    // STATE
+    // ========================================================================
+
+    let isActive = false;
+    let ws = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let scriptProcessor = null;
+    let playbackContext = null;
+    let nextPlaybackTime = 0;
+    let activeSources = []; // Track playing AudioBufferSourceNodes for interruption
+
+    const callBtn = document.getElementById("callBtn");
+    const statusEl = document.getElementById("status");
+    const transcriptEl = document.getElementById("transcript");
+
+    // Accumulate transcript deltas before flushing
+    let currentAssistantTranscript = "";
+
+    // ========================================================================
+    // EVENT HANDLERS
+    // ========================================================================
+
+    callBtn.addEventListener("click", () => {
+      if (isActive) {
+        stopCall();
+      } else {
+        startCall();
+      }
+    });
+
+    // ========================================================================
+    // MAIN LOGIC -- START / STOP CALL
+    // ========================================================================
+
+    async function startCall() {
+      try {
+        statusEl.textContent = "Requesting microphone...";
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+
+        statusEl.textContent = "Connecting...";
+        ws = new WebSocket(`ws://${location.host}`);
+
+        ws.onopen = () => {
+          statusEl.textContent = "Connected -- speak to your assistant";
+          isActive = true;
+          callBtn.textContent = "End Call";
+          callBtn.classList.add("active");
+          startAudioCapture();
+        };
+
+        ws.onmessage = (event) => {
+          handleServerEvent(JSON.parse(event.data));
+        };
+
+        ws.onclose = () => {
+          if (isActive) stopCall();
+        };
+
+        ws.onerror = () => {
+          statusEl.textContent = "Connection error";
+        };
+      } catch (err) {
+        statusEl.textContent = "Microphone access denied";
+        console.error(err);
+      }
+    }
+
+    function stopCall() {
+      isActive = false;
+      callBtn.textContent = "Start Call";
+      callBtn.classList.remove("active");
+      statusEl.textContent = "Call ended";
+
+      if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor = null; }
+      if (audioContext) { audioContext.close(); audioContext = null; }
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      if (playbackContext) { playbackContext.close(); playbackContext = null; }
+      if (ws) { ws.close(); ws = null; }
+
+      nextPlaybackTime = 0;
+      flushAssistantTranscript();
+    }
+
+    // ========================================================================
+    // AUDIO CAPTURE -- MIC TO WEBSOCKET
+    // ========================================================================
+
+    /**
+     * Captures mic audio, downsamples to 24kHz PCM16, and sends as base64 over WebSocket.
+     */
+    function startAudioCapture() {
+      audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+      const source = audioContext.createMediaStreamSource(mediaStream);
+
+      // ScriptProcessorNode is deprecated but simple for a prototype
+      scriptProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+
+      scriptProcessor.onaudioprocess = (event) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+        const inputData = event.inputBuffer.getChannelData(0);
+        const pcm16 = float32ToPcm16(inputData);
+        const base64 = arrayBufferToBase64(pcm16.buffer);
+
+        ws.send(JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: base64,
+        }));
+      };
+
+      source.connect(scriptProcessor);
+      scriptProcessor.connect(audioContext.destination);
+    }
+
+    // ========================================================================
+    // AUDIO PLAYBACK -- WEBSOCKET TO SPEAKER
+    // ========================================================================
+
+    /**
+     * Handles incoming server events: plays audio and updates transcripts.
+     */
+    function handleServerEvent(event) {
+      switch (event.type) {
+        case "input_audio_buffer.speech_started":
+          stopPlayback();
+          break;
+
+        case "response.audio.delta":
+          playAudioChunk(event.delta);
+          break;
+
+        case "response.audio_transcript.delta":
+          currentAssistantTranscript += event.delta;
+          break;
+
+        case "response.audio_transcript.done":
+          flushAssistantTranscript();
+          break;
+
+        case "conversation.item.input_audio_transcription.completed":
+          appendTranscript("You: " + event.transcript, "user-line");
+          break;
+
+        case "tool_call":
+          appendTranscript(
+            `[tool] ${event.name}(${JSON.stringify(event.arguments)})`,
+            "tool-line"
+          );
+          break;
+
+        case "error":
+          console.error("[openai error]", event.error);
+          statusEl.textContent = "Error: " + (event.error?.message || "unknown");
+          break;
+      }
+    }
+
+    /**
+     * Decodes a base64 PCM16 audio chunk and schedules it for playback.
+     */
+    function playAudioChunk(base64Audio) {
+      if (!playbackContext) {
+        playbackContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+      }
+
+      const pcm16 = base64ToInt16Array(base64Audio);
+      const float32 = pcm16ToFloat32(pcm16);
+
+      const buffer = playbackContext.createBuffer(1, float32.length, SAMPLE_RATE);
+      buffer.getChannelData(0).set(float32);
+
+      const source = playbackContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(playbackContext.destination);
+
+      // Schedule chunks sequentially to avoid gaps
+      const currentTime = playbackContext.currentTime;
+      if (nextPlaybackTime < currentTime) {
+        nextPlaybackTime = currentTime;
+      }
+      source.start(nextPlaybackTime);
+      nextPlaybackTime += buffer.duration;
+      activeSources.push(source);
+      source.onended = () => {
+        activeSources = activeSources.filter(s => s !== source);
+      };
+    }
+
+    /** Stops all queued/playing audio immediately. */
+    function stopPlayback() {
+      activeSources.forEach(s => { try { s.stop(); } catch {} });
+      activeSources = [];
+      nextPlaybackTime = 0;
+    }
+
+    // ========================================================================
+    // HELPER FUNCTIONS -- AUDIO CONVERSION
+    // ========================================================================
+
+    /** Converts Float32 audio samples to PCM16 Int16Array. */
+    function float32ToPcm16(float32Array) {
+      const pcm16 = new Int16Array(float32Array.length);
+      for (let i = 0; i < float32Array.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32Array[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return pcm16;
+    }
+
+    /** Converts PCM16 Int16Array to Float32 audio samples. */
+    function pcm16ToFloat32(pcm16Array) {
+      const float32 = new Float32Array(pcm16Array.length);
+      for (let i = 0; i < pcm16Array.length; i++) {
+        float32[i] = pcm16Array[i] / (pcm16Array[i] < 0 ? 0x8000 : 0x7FFF);
+      }
+      return float32;
+    }
+
+    /** Converts an ArrayBuffer to a base64 string. */
+    function arrayBufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    }
+
+    /** Converts a base64 string to an Int16Array. */
+    function base64ToInt16Array(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new Int16Array(bytes.buffer);
+    }
+
+    // ========================================================================
+    // HELPER FUNCTIONS -- TRANSCRIPT
+    // ========================================================================
+
+    function appendTranscript(text, className) {
+      const line = document.createElement("div");
+      line.className = className;
+      line.textContent = text;
+      transcriptEl.appendChild(line);
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+
+    function flushAssistantTranscript() {
+      if (currentAssistantTranscript.trim()) {
+        appendTranscript("Assistant: " + currentAssistantTranscript, "assistant-line");
+        currentAssistantTranscript = "";
+      }
+    }
+  </script>
+</body>
+</html>

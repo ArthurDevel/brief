@@ -1,0 +1,15 @@
+{
+  "name": "@dublin/email",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@dublin/tools": "workspace:*",
+    "imapflow": "^1.0.171",
+    "nodemailer": "^6.9.16"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.17"
+  }
+}
