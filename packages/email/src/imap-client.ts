@@ -1,0 +1,394 @@
+/**
+ * IMAP client operations for email management.
+ *
+ * Wraps ImapFlow to provide high-level email operations: listing,
+ * searching, reading, marking, archiving, deleting, and moving emails.
+ * Includes connection management with auto-reconnect.
+ *
+ * Responsibilities:
+ * - Create and close IMAP connections
+ * - List and search inbox emails
+ * - Read full email content by UID
+ * - Mark emails as read
+ * - Archive and delete emails (with undo recipes)
+ * - Move emails between folders (used by undo)
+ * - Auto-reconnect wrapper for connection failures
+ */
+
+import { ImapFlow } from "imapflow";
+import type { ImapConfig, EmailSummary, Email } from "./types";
+import type { UndoRecipe } from "@dublin/tools";
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const ARCHIVE_FOLDER = "[Gmail]/All Mail";
+const TRASH_FOLDER = "[Gmail]/Trash";
+const DRAFTS_FOLDER = "[Gmail]/Drafts";
+const SNIPPET_LENGTH = 100;
+
+// ============================================================================
+// CONNECTION MANAGEMENT
+// ============================================================================
+
+/**
+ * Creates and connects an ImapFlow client with IDLE keepalive.
+ * @param config - IMAP server connection parameters
+ * @returns Connected ImapFlow client instance
+ */
+export async function createImapConnection(config: ImapConfig): Promise<ImapFlow> {
+  const client = new ImapFlow({
+    host: config.host,
+    port: config.port,
+    secure: true,
+    auth: {
+      user: config.user,
+      pass: config.password,
+    },
+    logger: false,
+  });
+
+  await client.connect();
+
+  return client;
+}
+
+/**
+ * Gracefully closes an IMAP connection.
+ * @param client - The ImapFlow client to close
+ */
+export async function closeImapConnection(client: ImapFlow): Promise<void> {
+  await client.logout();
+}
+
+/**
+ * Wraps an IMAP operation with auto-reconnect on connection failure.
+ * Retries once with a fresh connection if the original fails.
+ * @param client - The ImapFlow client to use
+ * @param config - IMAP config for reconnection
+ * @param operation - The async operation to execute
+ * @returns The result of the operation
+ */
+export async function withReconnect<T>(
+  client: ImapFlow,
+  config: ImapConfig,
+  operation: (client: ImapFlow) => Promise<T>
+): Promise<T> {
+  try {
+    return await operation(client);
+  } catch (error) {
+    // Retry once with a fresh connection
+    const freshClient = await createImapConnection(config);
+    return await operation(freshClient);
+  }
+}
+
+// ============================================================================
+// EMAIL OPERATIONS
+// ============================================================================
+
+/**
+ * Lists recent emails in the inbox.
+ * @param client - Connected ImapFlow client
+ * @param limit - Maximum number of emails to return
+ * @returns Array of email summaries
+ */
+export async function listInbox(client: ImapFlow, limit: number): Promise<EmailSummary[]> {
+  const lock = await client.getMailboxLock("INBOX");
+
+  try {
+    const messages: EmailSummary[] = [];
+
+    // Fetch most recent messages by sequence number (descending)
+    const mailbox = client.mailbox;
+    if (!mailbox || mailbox.exists === 0) {
+      return [];
+    }
+
+    const totalMessages = mailbox.exists;
+    const startSeq = Math.max(1, totalMessages - limit + 1);
+    const range = `${startSeq}:*`;
+
+    for await (const message of client.fetch(range, {
+      envelope: true,
+      bodyStructure: true,
+      source: { maxLength: 2000 },
+    })) {
+      const envelope = message.envelope;
+      if (!envelope) continue;
+
+      const sourceText = message.source?.toString("utf-8") ?? "";
+      const snippet = extractSnippet(sourceText);
+
+      messages.push({
+        id: String(message.uid),
+        from: formatAddress(envelope.from),
+        subject: envelope.subject ?? "(no subject)",
+        snippet,
+        date: envelope.date?.toISOString() ?? "",
+      });
+    }
+
+    // Return in reverse chronological order
+    messages.reverse();
+
+    return messages;
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Searches emails by query string (subject, sender, date range).
+ * @param client - Connected ImapFlow client
+ * @param query - Search query string
+ * @returns Array of matching email summaries
+ */
+export async function searchEmails(client: ImapFlow, query: string): Promise<EmailSummary[]> {
+  const lock = await client.getMailboxLock("INBOX");
+
+  try {
+    // Use IMAP OR search across subject and from fields
+    const searchResult = await client.search({
+      or: [{ subject: query }, { from: query }],
+    });
+
+    if (!searchResult || searchResult.length === 0) {
+      return [];
+    }
+
+    const messages: EmailSummary[] = [];
+    const uidSet = searchResult.map(String).join(",");
+
+    for await (const message of client.fetch(uidSet, {
+      envelope: true,
+      uid: true,
+      source: { maxLength: 2000 },
+    })) {
+      const envelope = message.envelope;
+      if (!envelope) continue;
+
+      const sourceText = message.source?.toString("utf-8") ?? "";
+      const snippet = extractSnippet(sourceText);
+
+      messages.push({
+        id: String(message.uid),
+        from: formatAddress(envelope.from),
+        subject: envelope.subject ?? "(no subject)",
+        snippet,
+        date: envelope.date?.toISOString() ?? "",
+      });
+    }
+
+    // Return in reverse chronological order
+    messages.reverse();
+
+    return messages;
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Reads the full content of an email by UID.
+ * @param client - Connected ImapFlow client
+ * @param emailId - The UID of the email to read
+ * @returns Full email content
+ */
+export async function readEmail(client: ImapFlow, emailId: string): Promise<Email> {
+  const lock = await client.getMailboxLock("INBOX");
+
+  try {
+    const uid = Number(emailId);
+    const message = await client.fetchOne(String(uid), {
+      envelope: true,
+      flags: true,
+      source: true,
+    }, { uid: true });
+
+    if (!message) {
+      throw new Error(`Email with UID ${emailId} not found`);
+    }
+
+    if (!message.envelope) {
+      throw new Error(`Email with UID ${emailId} has no envelope data`);
+    }
+
+    const envelope = message.envelope;
+    const sourceText = message.source?.toString("utf-8") ?? "";
+    const body = extractBody(sourceText);
+    const flags = message.flags ?? new Set<string>();
+
+    return {
+      id: String(message.uid),
+      from: formatAddress(envelope.from),
+      to: formatAddress(envelope.to),
+      subject: envelope.subject ?? "(no subject)",
+      body,
+      date: envelope.date?.toISOString() ?? "",
+      isRead: flags.has("\\Seen"),
+    };
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Marks an email as read (sets the \Seen flag).
+ * Not undoable -- returns null.
+ * @param client - Connected ImapFlow client
+ * @param emailId - The UID of the email to mark
+ * @returns null (not undoable)
+ */
+export async function markAsRead(client: ImapFlow, emailId: string): Promise<null> {
+  const lock = await client.getMailboxLock("INBOX");
+
+  try {
+    await client.messageFlagsAdd(emailId, ["\\Seen"], { uid: true });
+    return null;
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Archives an email by moving it to the Archive/All Mail folder.
+ * @param client - Connected ImapFlow client
+ * @param emailId - The UID of the email to archive
+ * @param sourceFolder - The folder the email is currently in (for undo)
+ * @returns UndoRecipe to reverse the archive operation
+ */
+export async function archiveEmail(
+  client: ImapFlow,
+  emailId: string,
+  sourceFolder: string
+): Promise<UndoRecipe> {
+  const lock = await client.getMailboxLock(sourceFolder);
+
+  try {
+    await client.messageMove(emailId, ARCHIVE_FOLDER, { uid: true });
+
+    return {
+      operation: "move_email",
+      params: {
+        emailId,
+        from: ARCHIVE_FOLDER,
+        to: sourceFolder,
+      },
+    };
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Deletes an email by moving it to the Trash folder.
+ * @param client - Connected ImapFlow client
+ * @param emailId - The UID of the email to delete
+ * @param sourceFolder - The folder the email is currently in (for undo)
+ * @returns UndoRecipe to reverse the delete operation
+ */
+export async function deleteEmail(
+  client: ImapFlow,
+  emailId: string,
+  sourceFolder: string
+): Promise<UndoRecipe> {
+  const lock = await client.getMailboxLock(sourceFolder);
+
+  try {
+    await client.messageMove(emailId, TRASH_FOLDER, { uid: true });
+
+    return {
+      operation: "move_email",
+      params: {
+        emailId,
+        from: TRASH_FOLDER,
+        to: sourceFolder,
+      },
+    };
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Moves an email between IMAP folders. Used by undo to reverse archive/delete.
+ * @param client - Connected ImapFlow client
+ * @param emailId - The UID of the email to move
+ * @param from - Source folder
+ * @param to - Destination folder
+ */
+export async function moveEmail(
+  client: ImapFlow,
+  emailId: string,
+  from: string,
+  to: string
+): Promise<void> {
+  const lock = await client.getMailboxLock(from);
+
+  try {
+    await client.messageMove(emailId, to, { uid: true });
+  } finally {
+    lock.release();
+  }
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Formats an IMAP address array into a readable string.
+ * @param addresses - Array of IMAP address objects
+ * @returns Formatted address string (e.g. "John Doe <john@example.com>")
+ */
+function formatAddress(addresses: Array<{ name?: string; address?: string }> | undefined): string {
+  if (!addresses || addresses.length === 0) {
+    return "(unknown)";
+  }
+
+  const addr = addresses[0];
+  if (addr.name) {
+    return `${addr.name} <${addr.address ?? ""}>`;
+  }
+  return addr.address ?? "(unknown)";
+}
+
+/**
+ * Extracts a plain-text snippet from a raw email source.
+ * @param source - Raw email source text
+ * @returns Short snippet of the email body
+ */
+function extractSnippet(source: string): string {
+  const body = extractBody(source);
+  if (!body) {
+    return "";
+  }
+
+  return body.substring(0, SNIPPET_LENGTH).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Extracts the plain-text body from a raw email source.
+ * Looks for the body after the header/body separator (double newline).
+ * @param source - Raw email source text
+ * @returns Plain text body content
+ */
+function extractBody(source: string): string {
+  if (!source) {
+    return "";
+  }
+
+  // Find the header/body separator (double CRLF or double LF)
+  const separatorIndex = source.indexOf("\r\n\r\n");
+  if (separatorIndex === -1) {
+    const lfSeparator = source.indexOf("\n\n");
+    if (lfSeparator === -1) {
+      return source;
+    }
+    return source.substring(lfSeparator + 2).trim();
+  }
+
+  return source.substring(separatorIndex + 4).trim();
+}
