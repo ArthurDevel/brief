@@ -62,6 +62,7 @@ cp apps/web/.env.example apps/web/.env.local
 |----------|-------------|
 | `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/public key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server-side only, used for Vault secret storage) |
 
 ### 3. Run the database migration
 
@@ -117,6 +118,8 @@ PUBLIC_URL=https://your-ngrok-url
 
 ## Call Flow
 
+### Phone (Twilio)
+
 1. User calls Twilio number
 2. Twilio hits `/twilio/voice` -- looks up caller ID, prompts for PIN
 3. PIN verified via `/twilio/verify-pin` -- checks usage limits, starts media stream
@@ -125,11 +128,21 @@ PUBLIC_URL=https://your-ngrok-url
 6. Tool calls route through the action queue (auto-execute, queue for approval, or read-only)
 7. On disconnect: session saved, IMAP connection closed
 
+### Browser (localhost debugging)
+
+1. User clicks "Start Call" on `/dashboard/call`
+2. Browser captures mic audio via AudioWorklet, resamples 48kHz -> 24kHz PCM16
+3. WebSocket connects at `/browser-stream?token=<supabase-jwt>`
+4. Gateway authenticates the JWT, loads user context, and opens an OpenAI Realtime session
+5. PCM16 24kHz audio is relayed directly to OpenAI (no transcoding needed)
+6. Response audio streams back to the browser and plays via a playback AudioWorklet
+
 ## Dashboard Pages
 
 | Page | Description |
 |------|-------------|
 | `/dashboard` | Overview: recent calls, pending approvals, usage |
+| `/dashboard/call` | Browser-based voice call (for localhost debugging without Twilio) |
 | `/dashboard/settings` | IMAP/SMTP config, phone, PIN, voice preference, tool approval toggles, memory |
 | `/dashboard/actions` | Pending actions (approve/reject), executed actions (undo) |
 | `/dashboard/history` | Past call sessions with transcripts |
