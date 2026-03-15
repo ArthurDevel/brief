@@ -4,3 +4,4 @@ dist
 .env.local
 .next
 package-lock.json
+.claude

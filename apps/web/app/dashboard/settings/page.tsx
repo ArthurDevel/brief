@@ -228,7 +228,10 @@ export default function SettingsPage() {
       }
 
       setSuccess("Settings saved successfully.");
-      // Clear password fields after save
+      // Update "has" flags if new passwords were provided, then clear fields
+      if (imapPassword) setHasImapPassword(true);
+      if (smtpPassword) setHasSmtpPassword(true);
+      if (pin) setHasPin(true);
       setImapPassword("");
       setSmtpPassword("");
       setPin("");

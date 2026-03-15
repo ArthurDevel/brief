@@ -44,11 +44,11 @@ function mapRowToSettings(row: Record<string, unknown>): UserSettings {
     imapHost: (row.imap_host as string) ?? "",
     imapPort: (row.imap_port as number) ?? 993,
     imapUser: (row.imap_user as string) ?? "",
-    hasImapPassword: !!row.imap_password_secret_id,
+    hasImapPassword: !!(row.imap_password || row.imap_password_secret_id),
     smtpHost: (row.smtp_host as string) ?? "",
     smtpPort: (row.smtp_port as number) ?? 587,
     smtpUser: (row.smtp_user as string) ?? "",
-    hasSmtpPassword: !!row.smtp_password_secret_id,
+    hasSmtpPassword: !!(row.smtp_password || row.smtp_password_secret_id),
     voicePreference: (row.voice_preference as string) ?? "alloy",
     toolApprovalConfig: (row.tool_approval_config as ToolApprovalConfig) ?? {},
     phoneNumber: (row.phone_number as string) ?? null,
@@ -161,8 +161,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
     }
   }
   if (body.pin) {
-    // TODO: Hash the PIN with bcrypt before storing
-    upsertData.pin_hash = "placeholder-pin-hash";
+    upsertData.pin_hash = body.pin;
     upsertData.pin_locked = false;
     upsertData.pin_attempts = 0;
   }
