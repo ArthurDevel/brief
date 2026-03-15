@@ -5,6 +5,7 @@
   "type": "module",
   "main": "src/index.ts",
   "dependencies": {
+    "@dublin/tools": "workspace:*",
     "imapflow": "^1.0.171",
     "nodemailer": "^6.9.16"
   },

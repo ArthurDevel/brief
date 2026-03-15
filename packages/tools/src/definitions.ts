@@ -166,14 +166,13 @@ export const toolDefinitions: ToolDefinition[] = [
     type: "function",
     name: "save_memory",
     description:
-      "Save a key-value pair to the user's persistent memory. Use this to remember preferences, names, or any info the user wants persisted across calls.",
+      "Save a memory entry about the user. Use this to remember preferences, names, or any info the user wants persisted across calls.",
     parameters: {
       type: "object",
       properties: {
-        key: { type: "string", description: "The memory key (e.g. 'preferred_name', 'boss_email')." },
-        value: { type: "string", description: "The value to store." },
+        content: { type: "string", description: "Markdown content to remember about the user." },
       },
-      required: ["key", "value"],
+      required: ["content"],
     },
   },
 

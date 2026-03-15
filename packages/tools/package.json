@@ -5,6 +5,8 @@
   "type": "module",
   "main": "src/index.ts",
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.1"
+    "@dublin/email": "workspace:*",
+    "@supabase/supabase-js": "^2.49.1",
+    "imapflow": "^1.0.171"
   }
 }

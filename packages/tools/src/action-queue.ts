@@ -24,7 +24,13 @@ import type {
   UndoRecipe,
   UndoResult,
 } from "./types";
-import type { SmtpConfig } from "@dublin/email";
+/** SMTP server connection configuration. Duplicated here to avoid circular dependency with @dublin/email. */
+interface SmtpConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+}
 import { getDefaultClassification } from "./classification";
 
 // ============================================================================
@@ -149,7 +155,7 @@ export async function executeAction(
 /**
  * Undoes an executed action using its stored undo recipe.
  * Reads the recipe from the action row, checks the deadline, and dispatches
- * the reverse operation (move_email, delete_draft, restore_memory, etc.).
+ * the reverse operation (move_email, delete_draft, delete_memory, etc.).
  * @param actionId - The action row ID to undo
  * @param supabase - Supabase client for DB operations
  * @param imapClient - Connected ImapFlow client for email operations
@@ -372,7 +378,7 @@ async function dispatchTool(
     }
 
     case "save_memory": {
-      return await handleSaveMemory(supabase, userId, args.key as string, args.value as string);
+      return await handleSaveMemory(supabase, userId, args.content as string);
     }
 
     case "submit_feature_request": {
@@ -385,42 +391,31 @@ async function dispatchTool(
 }
 
 /**
- * Handles the save_memory tool -- upserts into user_memory table.
+ * Handles the save_memory tool -- inserts a new row into user_memory.
  * @param supabase - Supabase client
  * @param userId - The user ID
- * @param key - Memory key
- * @param value - Memory value
+ * @param content - Markdown content to remember
  * @returns Result and undo recipe
  */
 async function handleSaveMemory(
   supabase: SupabaseClient,
   userId: string,
-  key: string,
-  value: string
+  content: string
 ): Promise<{ result: Record<string, unknown>; undoRecipe: UndoRecipe | null }> {
-  // Check if key already exists to determine undo recipe
-  const { data: existing } = await supabase
+  const { data, error } = await supabase
     .from("user_memory")
-    .select("value")
-    .eq("user_id", userId)
-    .eq("key", key)
+    .insert({ user_id: userId, content })
+    .select("id")
     .single();
 
-  // Upsert the memory entry
-  const { error } = await supabase
-    .from("user_memory")
-    .upsert({ user_id: userId, key, value }, { onConflict: "user_id,key" });
-
-  if (error) {
-    throw new Error(`Failed to save memory "${key}": ${error.message}`);
+  if (error || !data) {
+    throw new Error(`Failed to save memory: ${error?.message ?? "no data"}`);
   }
 
-  // Build undo recipe based on whether the key existed before
-  const undoRecipe: UndoRecipe = existing
-    ? { operation: "restore_memory", params: { key, previousValue: existing.value } }
-    : { operation: "delete_memory", params: { key } };
-
-  return { result: { saved: true, key, value }, undoRecipe };
+  return {
+    result: { saved: true, id: data.id },
+    undoRecipe: { operation: "delete_memory", params: { id: data.id } },
+  };
 }
 
 /**
@@ -480,23 +475,11 @@ async function dispatchUndo(
       break;
     }
 
-    case "restore_memory": {
-      const { error } = await supabase
-        .from("user_memory")
-        .update({ value: recipe.params.previousValue as string })
-        .eq("key", recipe.params.key as string);
-
-      if (error) {
-        throw new Error(`Failed to restore memory: ${error.message}`);
-      }
-      break;
-    }
-
     case "delete_memory": {
       const { error } = await supabase
         .from("user_memory")
         .delete()
-        .eq("key", recipe.params.key as string);
+        .eq("id", recipe.params.id as string);
 
       if (error) {
         throw new Error(`Failed to delete memory: ${error.message}`);

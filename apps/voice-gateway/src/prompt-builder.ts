@@ -31,19 +31,19 @@ Always confirm before destructive actions like deleting or sending emails.`;
 
 /**
  * Builds the full system prompt with user-specific context injected.
- * @param memoryEntries - User's persistent memory key-value pairs
+ * @param memoryEntries - User's persistent memory entries
  * @param toolApprovalConfig - User's per-tool approval overrides
  * @returns The assembled system prompt string
  */
 export function buildSystemPrompt(
-  memoryEntries: { key: string; value: string }[],
+  memoryEntries: { id: string; content: string }[],
   toolApprovalConfig: ToolApprovalConfig
 ): string {
   const sections: string[] = [BASE_INSTRUCTIONS];
 
   // Add user memory section if there are entries
   if (memoryEntries.length > 0) {
-    const memoryLines = memoryEntries.map((entry) => `- ${entry.key}: ${entry.value}`).join("\n");
+    const memoryLines = memoryEntries.map((entry) => `- ${entry.content}`).join("\n");
     sections.push(`You remember the following about this user:\n${memoryLines}`);
   }
 

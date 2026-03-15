@@ -21,6 +21,7 @@ A voice-powered email assistant. Users call a phone number, authenticate via cal
 ## Prerequisites
 
 - Node.js >= 18
+- [pnpm](https://pnpm.io) >= 9
 - A [Supabase](https://supabase.com) project (for auth + database)
 - An [OpenAI](https://platform.openai.com) API key with Realtime API access
 - A [Twilio](https://twilio.com) account with a phone number (for voice calls)
@@ -31,28 +32,36 @@ A voice-powered email assistant. Users call a phone number, authenticate via cal
 ### 1. Install dependencies
 
 ```bash
-npm install
+pnpm install
 ```
+
+Run this from the project root. This is a monorepo -- a single `pnpm install` at the root installs dependencies for all packages and apps at once, and links the local packages (`@dublin/tools`, `@dublin/email`) so they can import each other. You do not need to run install inside individual apps.
 
 ### 2. Configure environment variables
 
-**Voice Gateway** -- create `apps/voice-gateway/.env`:
+Copy the example files and fill in your values:
 
-```env
-OPENAI_API_KEY=sk-...
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-WS_HOST=localhost:3001
-WS_SECURE=false
-PORT=3001
+```bash
+cp apps/voice-gateway/.env.example apps/voice-gateway/.env
+cp apps/web/.env.example apps/web/.env.local
 ```
 
-**Web Dashboard** -- create `apps/web/.env.local`:
+**Voice Gateway** (`apps/voice-gateway/.env`):
 
-```env
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-```
+| Variable | Description |
+|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI API key with Realtime API access |
+| `SUPABASE_URL` | Your Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (bypasses RLS) |
+| `PUBLIC_URL` | Public URL where this server is reachable (default: `http://localhost:3001`). Used to build the WebSocket URL that Twilio connects back to. Set to your ngrok/deployed URL in production. |
+| `PORT` | Server port (default: `3001`) |
+
+**Web Dashboard** (`apps/web/.env.local`):
+
+| Variable | Description |
+|----------|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/public key |
 
 ### 3. Run the database migration
 
@@ -67,12 +76,21 @@ This creates the 7 tables: `user_settings`, `user_memory`, `sessions`, `actions`
 
 ### 4. Start the apps
 
+From the project root:
+
 ```bash
 # Terminal 1 -- voice gateway (port 3001)
-npm run dev:gateway
+pnpm dev:gateway
 
 # Terminal 2 -- web dashboard (port 3000)
-npm run dev:web
+pnpm dev:web
+```
+
+Or run them individually from their directories:
+
+```bash
+cd apps/voice-gateway && pnpm dev
+cd apps/web && pnpm dev
 ```
 
 - Dashboard: http://localhost:3000
@@ -91,11 +109,10 @@ Then configure your Twilio phone number:
 1. Go to your Twilio Console > Phone Numbers > Active Numbers
 2. Set the Voice webhook to `https://your-ngrok-url/twilio/voice` (HTTP POST)
 
-Update your `.env` to match:
+Update `apps/voice-gateway/.env` to match:
 
 ```env
-WS_HOST=your-ngrok-url
-WS_SECURE=true
+PUBLIC_URL=https://your-ngrok-url
 ```
 
 ## Call Flow

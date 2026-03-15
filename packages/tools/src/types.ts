@@ -79,7 +79,7 @@ export interface ActionResult {
  * Stored in the actions table as JSONB.
  */
 export interface UndoRecipe {
-  operation: "move_email" | "delete_draft" | "restore_memory" | "delete_memory" | "delete_feature_request";
+  operation: "move_email" | "delete_draft" | "delete_memory" | "delete_feature_request";
   params: Record<string, unknown>;
 }
 

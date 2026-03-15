@@ -102,18 +102,36 @@ async function savePhoneNumber(phoneNumber: string): Promise<void> {
 }
 
 /**
- * Saves memory entries to the API.
- * @param entries - The memory entries to save
+ * Creates a new memory entry via the API.
+ * @param content - The markdown content to save
+ * @returns The created memory entry
  */
-async function saveMemory(entries: MemoryEntry[]): Promise<void> {
+async function createMemoryEntry(content: string): Promise<MemoryEntry> {
   const res = await fetch("/api/memory", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ entries }),
+    body: JSON.stringify({ content }),
   });
   if (!res.ok) {
     const body = await res.json();
-    throw new Error(body.error || "Failed to save memory");
+    throw new Error(body.error || "Failed to create memory entry");
+  }
+  return res.json();
+}
+
+/**
+ * Deletes a memory entry by id via the API.
+ * @param id - The memory entry id to delete
+ */
+async function deleteMemoryEntry(id: string): Promise<void> {
+  const res = await fetch("/api/memory", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) {
+    const body = await res.json();
+    throw new Error(body.error || "Failed to delete memory entry");
   }
 }
 
@@ -136,6 +154,7 @@ export default function SettingsPage() {
   const [voicePreference, setVoicePreference] = useState("alloy");
   const [toolApprovalConfig, setToolApprovalConfig] = useState<ToolApprovalConfig>({});
   const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([]);
+  const [newMemoryContent, setNewMemoryContent] = useState("");
   const [hasImapPassword, setHasImapPassword] = useState(false);
   const [hasSmtpPassword, setHasSmtpPassword] = useState(false);
   const [hasPin, setHasPin] = useState(false);
@@ -208,10 +227,6 @@ export default function SettingsPage() {
         await savePhoneNumber(phoneNumber);
       }
 
-      // Save memory entries (filter out empty entries)
-      const validEntries = memoryEntries.filter((e) => e.key.trim() !== "");
-      await saveMemory(validEntries);
-
       setSuccess("Settings saved successfully.");
       // Clear password fields after save
       setImapPassword("");
@@ -234,30 +249,33 @@ export default function SettingsPage() {
   }
 
   /**
-   * Adds a new empty memory entry to the list.
+   * Creates a new memory entry and adds it to the list.
    */
-  function handleAddMemoryEntry() {
-    setMemoryEntries((prev) => [...prev, { key: "", value: "" }]);
+  async function handleAddMemoryEntry() {
+    if (!newMemoryContent.trim()) return;
+
+    try {
+      setError(null);
+      const entry = await createMemoryEntry(newMemoryContent.trim());
+      setMemoryEntries((prev) => [entry, ...prev]);
+      setNewMemoryContent("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create memory entry");
+    }
   }
 
   /**
-   * Updates a memory entry at the given index.
-   * @param index - The index to update
-   * @param field - Which field to update
-   * @param value - The new value
+   * Deletes a memory entry by id and removes it from the list.
+   * @param id - The memory entry id to delete
    */
-  function handleMemoryChange(index: number, field: "key" | "value", value: string) {
-    setMemoryEntries((prev) =>
-      prev.map((entry, i) => (i === index ? { ...entry, [field]: value } : entry))
-    );
-  }
-
-  /**
-   * Removes a memory entry at the given index.
-   * @param index - The index to remove
-   */
-  function handleRemoveMemoryEntry(index: number) {
-    setMemoryEntries((prev) => prev.filter((_, i) => i !== index));
+  async function handleDeleteMemoryEntry(id: string) {
+    try {
+      setError(null);
+      await deleteMemoryEntry(id);
+      setMemoryEntries((prev) => prev.filter((entry) => entry.id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete memory entry");
+    }
   }
 
   // ============================================================================
@@ -399,42 +417,45 @@ export default function SettingsPage() {
         <section className="rounded-lg border border-gray-200 bg-white p-6">
           <h2 className="mb-4 text-lg font-semibold text-gray-900">Memory Entries</h2>
           <p className="mb-4 text-sm text-gray-500">
-            Key-value pairs the assistant remembers across calls.
+            Things the assistant remembers about you across calls.
           </p>
+
+          {/* New entry form */}
+          <div className="mb-4 flex gap-2">
+            <textarea
+              value={newMemoryContent}
+              onChange={(e) => setNewMemoryContent(e.target.value)}
+              placeholder="Add something for the assistant to remember..."
+              rows={2}
+              className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <button
+              type="button"
+              onClick={handleAddMemoryEntry}
+              className="self-end rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              Add
+            </button>
+          </div>
+
+          {/* Existing entries */}
           <div className="space-y-3">
-            {memoryEntries.map((entry, index) => (
-              <div key={index} className="flex gap-2">
-                <input
-                  type="text"
-                  value={entry.key}
-                  onChange={(e) => handleMemoryChange(index, "key", e.target.value)}
-                  placeholder="Key"
-                  className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-                <input
-                  type="text"
-                  value={entry.value}
-                  onChange={(e) => handleMemoryChange(index, "value", e.target.value)}
-                  placeholder="Value"
-                  className="flex-2 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
+            {memoryEntries.map((entry) => (
+              <div key={entry.id} className="flex items-start gap-2 rounded-md border border-gray-200 p-3">
+                <p className="flex-1 whitespace-pre-wrap text-sm text-gray-700">{entry.content}</p>
                 <button
                   type="button"
-                  onClick={() => handleRemoveMemoryEntry(index)}
-                  className="rounded-md border border-red-300 px-3 py-2 text-sm text-red-700 hover:bg-red-50"
+                  onClick={() => handleDeleteMemoryEntry(entry.id)}
+                  className="shrink-0 rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 hover:bg-red-50"
                 >
-                  Remove
+                  Delete
                 </button>
               </div>
             ))}
+            {memoryEntries.length === 0 && (
+              <p className="text-sm text-gray-400">No memory entries yet.</p>
+            )}
           </div>
-          <button
-            type="button"
-            onClick={handleAddMemoryEntry}
-            className="mt-3 rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-          >
-            Add Entry
-          </button>
         </section>
 
         {/* Save Button */}

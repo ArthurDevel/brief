@@ -43,10 +43,9 @@ if (!apiKey || apiKey === "your-api-key-here") {
 
 const supabase = createServiceClient();
 
-// Determine the WebSocket base URL for media streams
-const wsHost = process.env.WS_HOST ?? `localhost:${PORT}`;
-const wsProtocol = process.env.WS_SECURE === "true" ? "wss" : "ws";
-const streamBaseUrl = `${wsProtocol}://${wsHost}`;
+// Derive the WebSocket URL for Twilio media streams from PUBLIC_URL
+const publicUrl = process.env.PUBLIC_URL ?? `http://localhost:${PORT}`;
+const streamBaseUrl = publicUrl.replace(/^http/, "ws");
 
 const app = express();
 
@@ -186,5 +185,5 @@ wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
 server.listen(PORT, () => {
   console.log(`[server] Voice email assistant running on port ${PORT}`);
   console.log(`[server] Twilio webhook: POST /twilio/voice`);
-  console.log(`[server] Media stream:   ws://${wsHost}/media-stream`);
+  console.log(`[server] Media stream:   ${streamBaseUrl}/media-stream`);
 });

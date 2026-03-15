@@ -51,10 +51,17 @@ export async function GET(request: NextRequest) {
     }
   );
 
-  const { error } = await supabase.auth.exchangeCodeForSession(code);
+  const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error) {
     return NextResponse.redirect(`${origin}/login`);
+  }
+
+  // Ensure the user has a subscription row (created on first login)
+  if (data.user) {
+    await supabase
+      .from("subscriptions")
+      .upsert({ user_id: data.user.id, plan: "free" }, { onConflict: "user_id" });
   }
 
   return NextResponse.redirect(`${origin}/dashboard`);

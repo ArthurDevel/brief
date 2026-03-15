@@ -3,10 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
-    "dev:gateway": "npm run dev --workspace=apps/voice-gateway",
-    "dev:web": "npm run dev --workspace=apps/web"
+    "dev:gateway": "pnpm --filter @dublin/voice-gateway dev",
+    "dev:web": "pnpm --filter @dublin/web dev"
   },
   "devDependencies": {
     "typescript": "^5.7.3"

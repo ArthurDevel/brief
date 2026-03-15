@@ -95,10 +95,11 @@ export interface UsageInfo {
 // MEMORY + FEATURE REQUESTS
 // ============================================================================
 
-/** A key-value memory entry stored by the assistant. */
+/** A memory entry stored by the assistant. */
 export interface MemoryEntry {
-  key: string;
-  value: string;
+  id: string;
+  content: string;
+  createdAt: string;
 }
 
 /** A user-submitted feature request. */

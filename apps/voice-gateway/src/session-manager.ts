@@ -59,7 +59,7 @@ export interface UserContext {
   smtpConfig: SmtpConfig;
   voicePreference: string;
   toolApprovalConfig: ToolApprovalConfig;
-  memoryEntries: { key: string; value: string }[];
+  memoryEntries: { id: string; content: string }[];
 }
 
 // ============================================================================
@@ -188,7 +188,7 @@ export async function loadUserContext(userId: string, supabase: SupabaseClient):
   // Load user memory entries
   const { data: memoryRows, error: memoryError } = await supabase
     .from("user_memory")
-    .select("key, value")
+    .select("id, content")
     .eq("user_id", userId);
 
   if (memoryError) {
