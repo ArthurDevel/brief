@@ -14,7 +14,8 @@
 
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase/client";
+import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
+import { storeSecret, updateSecret } from "@dublin/tools";
 import type { UserSettings } from "@/lib/types";
 import type { ToolApprovalConfig } from "@dublin/tools/src/types";
 
@@ -131,15 +132,33 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
     tool_approval_config: body.toolApprovalConfig,
   };
 
-  // TODO: Phase 3 -- Store passwords in Supabase Vault instead of directly.
-  // For now, store password secret IDs as placeholders when passwords are provided.
+  // Fetch existing settings to check for pre-existing secret IDs
+  const { data: existing } = await supabase
+    .from("user_settings")
+    .select("imap_password_secret_id, smtp_password_secret_id")
+    .eq("user_id", user.id)
+    .single();
+
+  // Store passwords in Supabase Vault using a service role client
+  const serviceClient = createServiceRoleClient();
+
   if (body.imapPassword) {
-    // TODO: Call vault.create_secret() and store the returned UUID
-    upsertData.imap_password_secret_id = "placeholder-imap-secret";
+    if (existing?.imap_password_secret_id && existing.imap_password_secret_id !== "placeholder-imap-secret") {
+      await updateSecret(serviceClient, existing.imap_password_secret_id, body.imapPassword);
+      upsertData.imap_password_secret_id = existing.imap_password_secret_id;
+    } else {
+      const secretId = await storeSecret(serviceClient, body.imapPassword, `imap-password-${user.id}`);
+      upsertData.imap_password_secret_id = secretId;
+    }
   }
   if (body.smtpPassword) {
-    // TODO: Call vault.create_secret() and store the returned UUID
-    upsertData.smtp_password_secret_id = "placeholder-smtp-secret";
+    if (existing?.smtp_password_secret_id && existing.smtp_password_secret_id !== "placeholder-smtp-secret") {
+      await updateSecret(serviceClient, existing.smtp_password_secret_id, body.smtpPassword);
+      upsertData.smtp_password_secret_id = existing.smtp_password_secret_id;
+    } else {
+      const secretId = await storeSecret(serviceClient, body.smtpPassword, `smtp-password-${user.id}`);
+      upsertData.smtp_password_secret_id = secretId;
+    }
   }
   if (body.pin) {
     // TODO: Hash the PIN with bcrypt before storing
@@ -147,8 +166,6 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
     upsertData.pin_locked = false;
     upsertData.pin_attempts = 0;
   }
-
-  // TODO: Phase 3 -- Validate IMAP connection before saving
 
   const { data, error } = await supabase
     .from("user_settings")
