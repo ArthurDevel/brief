@@ -24,6 +24,11 @@ import { createBrowserClient } from "@/lib/supabase/client";
 const VOICE_GATEWAY_WS_URL =
   process.env.NEXT_PUBLIC_VOICE_GATEWAY_WS_URL ?? "ws://localhost:3001";
 
+const VOICE_PIPELINE_URL =
+  process.env.NEXT_PUBLIC_VOICE_PIPELINE_URL ?? "http://localhost:7860";
+
+type CallBackend = "classic" | "pipeline";
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -110,9 +115,45 @@ export default function CallPage() {
   const [callActive, setCallActive] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
+  const [backend, setBackend] = useState<CallBackend>("classic");
+  const [pipelineIframeUrl, setPipelineIframeUrl] = useState<string | null>(null);
 
   const sessionRef = useRef<CallSession | null>(null);
   const cleanupAudioRef = useRef<(() => void) | null>(null);
+
+  /**
+   * Starts a pipeline call by building the iframe URL with the user's JWT.
+   * The Pipecat server serves a WebRTC client at /client.
+   */
+  const startPipelineCall = useCallback(async () => {
+    setError(null);
+    setStatus("Connecting to pipeline...");
+
+    try {
+      const supabase = createBrowserClient();
+      const { data: sessionData, error: authError } = await supabase.auth.getSession();
+      if (authError || !sessionData.session) {
+        throw new Error("Not authenticated. Please sign in first.");
+      }
+      const token = sessionData.session.access_token;
+
+      const url = `${VOICE_PIPELINE_URL}/client?token=${encodeURIComponent(token)}`;
+      setPipelineIframeUrl(url);
+      setCallActive(true);
+      setStatus("Pipeline call active");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to start pipeline call";
+      setError(msg);
+      setStatus("Ready");
+    }
+  }, []);
+
+  /** Stops the pipeline call by removing the iframe. */
+  const endPipelineCall = useCallback(() => {
+    setPipelineIframeUrl(null);
+    setCallActive(false);
+    setStatus("Ready");
+  }, []);
 
   const startCall = useCallback(async () => {
     setError(null);
@@ -199,9 +240,40 @@ export default function CallPage() {
   // RENDER
   // ============================================================================
 
+  /** Dispatches start/end based on the selected backend. */
+  const handleStart = backend === "pipeline" ? startPipelineCall : startCall;
+  const handleEnd = backend === "pipeline" ? endPipelineCall : endCall;
+
   return (
     <div>
       <h1 className="mb-8 text-2xl font-bold text-gray-900">Browser Call</h1>
+
+      {/* Backend toggle -- disabled while a call is active */}
+      <div className="mb-4 flex items-center gap-3">
+        <span className="text-sm font-medium text-gray-700">Backend:</span>
+        <button
+          onClick={() => setBackend("classic")}
+          disabled={callActive}
+          className={`rounded-md px-4 py-1.5 text-sm font-medium ${
+            backend === "classic"
+              ? "bg-gray-900 text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          } disabled:opacity-50`}
+        >
+          Classic
+        </button>
+        <button
+          onClick={() => setBackend("pipeline")}
+          disabled={callActive}
+          className={`rounded-md px-4 py-1.5 text-sm font-medium ${
+            backend === "pipeline"
+              ? "bg-gray-900 text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          } disabled:opacity-50`}
+        >
+          Pipeline
+        </button>
+      </div>
 
       {error && (
         <div className="mb-6 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -211,8 +283,9 @@ export default function CallPage() {
 
       <section className="rounded-lg border border-gray-200 bg-white p-6">
         <p className="mb-4 text-sm text-gray-500">
-          Direct voice connection to the assistant via your browser microphone.
-          For localhost debugging -- bypasses Twilio.
+          {backend === "classic"
+            ? "Direct voice connection to the assistant via your browser microphone. For localhost debugging -- bypasses Twilio."
+            : "Voice connection via the Pipecat pipeline (Deepgram STT + OpenRouter LLM + Deepgram TTS). Uses WebRTC."}
         </p>
 
         <div className="flex items-center gap-4">
@@ -220,20 +293,29 @@ export default function CallPage() {
 
           {!callActive ? (
             <button
-              onClick={startCall}
+              onClick={handleStart}
               className="rounded-md bg-green-600 px-6 py-2 text-sm font-medium text-white hover:bg-green-700"
             >
               Start Call
             </button>
           ) : (
             <button
-              onClick={endCall}
+              onClick={handleEnd}
               className="rounded-md bg-red-600 px-6 py-2 text-sm font-medium text-white hover:bg-red-700"
             >
               End Call
             </button>
           )}
         </div>
+
+        {/* Pipeline iframe -- a proper WebRTC client component can replace this later */}
+        {backend === "pipeline" && pipelineIframeUrl && (
+          <iframe
+            src={pipelineIframeUrl}
+            allow="microphone"
+            className="mt-4 h-[500px] w-full rounded-md border border-gray-200"
+          />
+        )}
       </section>
     </div>
   );
