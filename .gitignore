@@ -5,3 +5,4 @@ dist
 .next
 package-lock.json
 .claude
+*.pyc
