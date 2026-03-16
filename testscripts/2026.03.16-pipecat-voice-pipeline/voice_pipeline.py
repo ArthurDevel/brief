@@ -65,7 +65,6 @@ TTS_SPEED = 1.5
 # Shared config dict — updated live by the control UI sliders.
 _audio_config = {
     "speed": TTS_SPEED,
-    "highpass_cutoff": 0,
 }
 
 # Pricing (USD)
@@ -155,7 +154,7 @@ class SoundTouchStreamer:
 class AudioSpeedProcessor(FrameProcessor):
     """Pipecat processor that adjusts TTS playback speed without changing pitch.
 
-    Reads speed and highpass_cutoff live from a shared config dict.
+    Reads speed live from a shared config dict.
     """
 
     def __init__(self, config: dict, **kwargs):
@@ -175,17 +174,6 @@ class AudioSpeedProcessor(FrameProcessor):
         else:
             self._streamer.set_tempo(self._config["speed"])
 
-    def _highpass(self, samples: np.ndarray) -> np.ndarray:
-        cutoff = self._config["highpass_cutoff"]
-        if cutoff <= 0:
-            return samples
-        from scipy.signal import butter, sosfilt
-        nyq = self._sample_rate / 2.0
-        if cutoff >= nyq:
-            return samples
-        sos = butter(4, cutoff / nyq, btype="high", output="sos")
-        return sosfilt(sos, samples)
-
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
@@ -193,10 +181,6 @@ class AudioSpeedProcessor(FrameProcessor):
             self._ensure_streamer(frame.sample_rate, frame.num_channels)
             out_bytes = self._streamer.process(frame.audio)
             if out_bytes:
-                if self._config["highpass_cutoff"] > 0:
-                    samples = np.frombuffer(out_bytes, dtype=np.int16).astype(np.float64)
-                    samples = self._highpass(samples)
-                    out_bytes = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
                 frame = TTSAudioRawFrame(
                     audio=out_bytes,
                     sample_rate=frame.sample_rate,

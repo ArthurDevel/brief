@@ -1,4 +1,4 @@
-"""Control UI — injects speed/low-cut sliders above the pipecat dashboard."""
+"""Control UI — injects a speed slider above the pipecat dashboard."""
 
 import json
 
@@ -34,21 +34,14 @@ CONTROL_HTML = """<!DOCTYPE html>
   <div class="controls">
     <div class="control-group">
       <label>Speed</label>
-      <input type="range" id="speed" min="1.0" max="2.5" step="0.1" value="SPEED_PLACEHOLDER">
+      <input type="range" id="speed" min="1.0" max="1.5" step="0.1" value="SPEED_PLACEHOLDER">
       <span class="value" id="speed-val">SPEED_PLACEHOLDERx</span>
-    </div>
-    <div class="control-group">
-      <label>Low-cut Hz</label>
-      <input type="range" id="lowcut" min="0" max="500" step="10" value="LOWCUT_PLACEHOLDER">
-      <span class="value" id="lowcut-val">LOWCUT_PLACEHOLDER Hz</span>
     </div>
   </div>
   <iframe src="/client/"></iframe>
 <script>
   const speedEl = document.getElementById('speed');
-  const lowcutEl = document.getElementById('lowcut');
   const speedVal = document.getElementById('speed-val');
-  const lowcutVal = document.getElementById('lowcut-val');
 
   async function update(key, value) {
     await fetch('/api/audio-config', {
@@ -61,10 +54,6 @@ CONTROL_HTML = """<!DOCTYPE html>
   speedEl.addEventListener('input', e => {
     speedVal.textContent = parseFloat(e.target.value).toFixed(1) + 'x';
     update('speed', e.target.value);
-  });
-  lowcutEl.addEventListener('input', e => {
-    lowcutVal.textContent = e.target.value + ' Hz';
-    update('highpass_cutoff', e.target.value);
   });
 </script>
 </body>
@@ -91,8 +80,6 @@ def patch_server_app(audio_config: dict):
         async def control_page():
             html = CONTROL_HTML.replace(
                 "SPEED_PLACEHOLDER", str(audio_config["speed"])
-            ).replace(
-                "LOWCUT_PLACEHOLDER", str(int(audio_config["highpass_cutoff"]))
             )
             return HTMLResponse(html)
 
@@ -103,9 +90,8 @@ def patch_server_app(audio_config: dict):
         @app.post("/api/audio-config")
         async def set_audio_config(request: Request):
             body = json.loads(await request.body())
-            for key in ("speed", "highpass_cutoff"):
-                if key in body:
-                    audio_config[key] = float(body[key])
+            if "speed" in body:
+                audio_config["speed"] = float(body["speed"])
             logger.info(f"Audio config updated: {audio_config}")
             return JSONResponse(audio_config)
 
