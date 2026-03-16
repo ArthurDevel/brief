@@ -4,7 +4,7 @@ Voice conversation pipeline using Pipecat with Deepgram STT/TTS over WebRTC.
 Opens a browser UI at http://localhost:7860/client. The browser handles
 echo cancellation natively via WebRTC, so interruptions work cleanly.
 
-Pipeline: browser mic -> VAD -> STT -> LLM -> TTS -> browser speaker
+Pipeline: browser mic -> VAD -> STT -> LLM -> TTS -> speed adjust -> browser speaker
 """
 
 import atexit
@@ -51,82 +51,109 @@ load_dotenv()
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 LLM_MODEL = "google/gemini-3-flash-preview"
 
-# Deepgram Aura 2 TTS voice -- "helena" is a natural conversational voice
-# Other Aura 2 options: aura-2-andromeda-en, aura-2-aurora-en, aura-2-luna-en,
-# aura-2-stella-en, aura-2-athena-en, aura-2-hera-en, aura-2-orion-en, aura-2-perseus-en
 DEEPGRAM_TTS_VOICE = "aura-2-helena-en"
 
 SYSTEM_PROMPT = """You are a helpful voice assistant. Keep your responses concise
 and conversational -- aim for 1-3 sentences unless the user asks for detail.
 You are having a real-time voice conversation, so be natural and responsive."""
 
-# Smart Turn requires VAD stop_secs=0.2 to work properly
 VAD_STOP_SECS = 0.2
 VAD_CONFIDENCE = 0.7
-
-# Minimum words required before an interruption is triggered.
 MIN_INTERRUPT_WORDS = 3
-
-# TTS playback speed multiplier (1.0 = normal, 1.5 = 50% faster, 2.0 = double speed)
 TTS_SPEED = 1.5
 
-# Shared config dict — updated live by the control UI API endpoints.
+# Shared config dict — updated live by the control UI sliders.
 _audio_config = {
     "speed": TTS_SPEED,
     "highpass_cutoff": 0,
 }
 
-# ============================================================================
-# PRICING (USD) — update these when prices change
-# ============================================================================
-
-# OpenRouter: google/gemini-3-flash-preview
-LLM_COST_PER_INPUT_TOKEN = 0.15 / 1_000_000   # $0.15/M input tokens
-LLM_COST_PER_OUTPUT_TOKEN = 0.60 / 1_000_000   # $0.60/M output tokens
-
-# Deepgram TTS: ~$0.015/1K chars
+# Pricing (USD)
+LLM_COST_PER_INPUT_TOKEN = 0.15 / 1_000_000
+LLM_COST_PER_OUTPUT_TOKEN = 0.60 / 1_000_000
 TTS_COST_PER_CHAR = 0.015 / 1_000
-
-# Deepgram STT Nova-2: ~$0.0043/min (pay-as-you-go)
 STT_COST_PER_MINUTE = 0.0043
 
 
 # ============================================================================
-# SOUNDTOUCH CTYPES BINDINGS
+# SOUNDTOUCH STREAMER — pitch-preserving tempo change via libSoundTouch
 # ============================================================================
 
-def _load_soundtouch():
-    """Load libSoundTouchDll and set up function signatures."""
-    lib = ctypes.cdll.LoadLibrary("/opt/homebrew/lib/libSoundTouchDll.dylib")
+class SoundTouchStreamer:
+    """Streaming tempo changer using libSoundTouch via ctypes.
 
-    lib.soundtouch_createInstance.restype = ctypes.c_void_p
-    lib.soundtouch_destroyInstance.argtypes = [ctypes.c_void_p]
-    lib.soundtouch_setChannels.argtypes = [ctypes.c_void_p, ctypes.c_uint]
-    lib.soundtouch_setSampleRate.argtypes = [ctypes.c_void_p, ctypes.c_uint]
-    lib.soundtouch_setTempo.argtypes = [ctypes.c_void_p, ctypes.c_float]
-    lib.soundtouch_putSamples_i16.argtypes = [
-        ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_uint,
-    ]
-    lib.soundtouch_receiveSamples_i16.argtypes = [
-        ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_uint,
-    ]
-    lib.soundtouch_receiveSamples_i16.restype = ctypes.c_uint
-    lib.soundtouch_numSamples.argtypes = [ctypes.c_void_p]
-    lib.soundtouch_numSamples.restype = ctypes.c_uint
-    lib.soundtouch_flush.argtypes = [ctypes.c_void_p]
-    lib.soundtouch_clear.argtypes = [ctypes.c_void_p]
-    return lib
+    Maintains internal state across calls so consecutive chunks connect
+    seamlessly (no boundary artifacts).
+    """
 
+    _lib = None
 
-_st_lib = _load_soundtouch()
+    @classmethod
+    def _load_lib(cls):
+        if cls._lib is not None:
+            return cls._lib
+        lib = ctypes.cdll.LoadLibrary("/opt/homebrew/lib/libSoundTouchDll.dylib")
+        lib.soundtouch_createInstance.restype = ctypes.c_void_p
+        lib.soundtouch_destroyInstance.argtypes = [ctypes.c_void_p]
+        lib.soundtouch_setChannels.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        lib.soundtouch_setSampleRate.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        lib.soundtouch_setTempo.argtypes = [ctypes.c_void_p, ctypes.c_float]
+        lib.soundtouch_putSamples_i16.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_uint,
+        ]
+        lib.soundtouch_receiveSamples_i16.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_uint,
+        ]
+        lib.soundtouch_receiveSamples_i16.restype = ctypes.c_uint
+        lib.soundtouch_numSamples.argtypes = [ctypes.c_void_p]
+        lib.soundtouch_numSamples.restype = ctypes.c_uint
+        lib.soundtouch_flush.argtypes = [ctypes.c_void_p]
+        lib.soundtouch_clear.argtypes = [ctypes.c_void_p]
+        cls._lib = lib
+        return lib
+
+    def __init__(self, sample_rate: int, num_channels: int, tempo: float = 1.0):
+        lib = self._load_lib()
+        self._lib = lib
+        self._handle = lib.soundtouch_createInstance()
+        self._tempo = -1.0
+        lib.soundtouch_setSampleRate(self._handle, sample_rate)
+        lib.soundtouch_setChannels(self._handle, num_channels)
+        self._num_channels = num_channels
+        self.set_tempo(tempo)
+
+    def set_tempo(self, tempo: float):
+        if tempo != self._tempo:
+            self._lib.soundtouch_setTempo(self._handle, ctypes.c_float(tempo))
+            self._tempo = tempo
+
+    def process(self, audio: bytes) -> bytes:
+        """Feed int16 PCM in, get tempo-adjusted int16 PCM out."""
+        in_arr = np.frombuffer(audio, dtype=np.int16).copy()
+        num_frames = len(in_arr) // self._num_channels
+        in_ptr = in_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_int16))
+        self._lib.soundtouch_putSamples_i16(self._handle, in_ptr, num_frames)
+
+        max_frames = num_frames * 2
+        out_buf = np.empty(max_frames * self._num_channels, dtype=np.int16)
+        out_ptr = out_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_int16))
+        got = self._lib.soundtouch_receiveSamples_i16(self._handle, out_ptr, max_frames)
+        if got == 0:
+            return b""
+        return out_buf[: got * self._num_channels].tobytes()
+
+    def destroy(self):
+        if self._handle is not None:
+            self._lib.soundtouch_destroyInstance(self._handle)
+            self._handle = None
 
 
 # ============================================================================
-# AUDIO SPEED PROCESSOR
+# AUDIO SPEED PROCESSOR — Pipecat FrameProcessor wrapping SoundTouchStreamer
 # ============================================================================
 
 class AudioSpeedProcessor(FrameProcessor):
-    """Speeds up TTS audio using SoundTouch (tempo change, pitch preserved).
+    """Pipecat processor that adjusts TTS playback speed without changing pitch.
 
     Reads speed and highpass_cutoff live from a shared config dict.
     """
@@ -134,58 +161,26 @@ class AudioSpeedProcessor(FrameProcessor):
     def __init__(self, config: dict, **kwargs):
         super().__init__(**kwargs)
         self._config = config
-        self._st_handle = None
-        self._current_tempo: float = 1.0
+        self._streamer: SoundTouchStreamer | None = None
         self._sample_rate: int = 0
         self._num_channels: int = 0
 
-    @property
-    def _speed(self) -> float:
-        return self._config["speed"]
-
-    @property
-    def _highpass_cutoff(self) -> float:
-        return self._config["highpass_cutoff"]
-
-    def _ensure_instance(self, sample_rate: int, num_channels: int):
-        """Create or reconfigure the SoundTouch instance as needed."""
-        if self._st_handle is None or sample_rate != self._sample_rate or num_channels != self._num_channels:
-            if self._st_handle is not None:
-                _st_lib.soundtouch_destroyInstance(self._st_handle)
-            self._st_handle = _st_lib.soundtouch_createInstance()
+    def _ensure_streamer(self, sample_rate: int, num_channels: int):
+        if self._streamer is None or sample_rate != self._sample_rate or num_channels != self._num_channels:
+            if self._streamer is not None:
+                self._streamer.destroy()
             self._sample_rate = sample_rate
             self._num_channels = num_channels
-            _st_lib.soundtouch_setSampleRate(self._st_handle, sample_rate)
-            _st_lib.soundtouch_setChannels(self._st_handle, num_channels)
-            self._current_tempo = -1  # force update
+            self._streamer = SoundTouchStreamer(sample_rate, num_channels, self._config["speed"])
+        else:
+            self._streamer.set_tempo(self._config["speed"])
 
-        speed = self._speed
-        if speed != self._current_tempo:
-            _st_lib.soundtouch_setTempo(self._st_handle, ctypes.c_float(speed))
-            self._current_tempo = speed
-
-    def _process_samples(self, audio_bytes: bytes) -> bytes:
-        """Feed int16 PCM into SoundTouch and retrieve processed samples."""
-        in_arr = np.frombuffer(audio_bytes, dtype=np.int16).copy()
-        num_frames = len(in_arr) // self._num_channels
-        in_ptr = in_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_int16))
-        _st_lib.soundtouch_putSamples_i16(self._st_handle, in_ptr, num_frames)
-
-        # Collect all available output
-        max_frames = num_frames * 2
-        out_buf = np.empty(max_frames * self._num_channels, dtype=np.int16)
-        out_ptr = out_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_int16))
-        got = _st_lib.soundtouch_receiveSamples_i16(self._st_handle, out_ptr, max_frames)
-        if got == 0:
-            return b""
-        return out_buf[: got * self._num_channels].tobytes()
-
-    def _highpass(self, samples: np.ndarray, sample_rate: int) -> np.ndarray:
-        cutoff = self._highpass_cutoff
+    def _highpass(self, samples: np.ndarray) -> np.ndarray:
+        cutoff = self._config["highpass_cutoff"]
         if cutoff <= 0:
             return samples
         from scipy.signal import butter, sosfilt
-        nyq = sample_rate / 2.0
+        nyq = self._sample_rate / 2.0
         if cutoff >= nyq:
             return samples
         sos = butter(4, cutoff / nyq, btype="high", output="sos")
@@ -194,14 +189,13 @@ class AudioSpeedProcessor(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, TTSAudioRawFrame) and self._speed != 1.0:
-            self._ensure_instance(frame.sample_rate, frame.num_channels)
-            out_bytes = self._process_samples(frame.audio)
+        if isinstance(frame, TTSAudioRawFrame) and self._config["speed"] != 1.0:
+            self._ensure_streamer(frame.sample_rate, frame.num_channels)
+            out_bytes = self._streamer.process(frame.audio)
             if out_bytes:
-                # Apply highpass if configured
-                if self._highpass_cutoff > 0:
+                if self._config["highpass_cutoff"] > 0:
                     samples = np.frombuffer(out_bytes, dtype=np.int16).astype(np.float64)
-                    samples = self._highpass(samples, frame.sample_rate)
+                    samples = self._highpass(samples)
                     out_bytes = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
                 frame = TTSAudioRawFrame(
                     audio=out_bytes,
@@ -234,21 +228,17 @@ class CostTracker(BaseObserver):
     async def on_push_frame(self, data: FramePushed):
         frame = data.frame
 
-        # Count TTS characters from TextFrames going into the TTS processor
         if isinstance(frame, TextFrame) and hasattr(frame, "text") and frame.text:
             dest_name = type(data.destination).__name__
             if "TTS" in dest_name or "Deepgram" in dest_name:
                 self.tts_characters += len(frame.text)
 
-        # Count STT audio duration — only from the transport source to avoid
-        # counting the same frame multiple times as it passes through the pipeline
         if isinstance(frame, InputAudioRawFrame):
             source_name = type(data.source).__name__
             if "Transport" in source_name or "Input" in source_name:
-                num_samples = len(frame.audio) / 2  # 16-bit = 2 bytes per sample
+                num_samples = len(frame.audio) / 2
                 self.stt_audio_seconds += num_samples / frame.sample_rate
 
-        # Count LLM tokens from metrics frames
         if not isinstance(frame, MetricsFrame):
             return
         if frame.id in self._frames_seen:
@@ -302,7 +292,7 @@ class CostTracker(BaseObserver):
 
 
 # ============================================================================
-# BOT LOGIC
+# PIPELINE
 # ============================================================================
 
 async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
@@ -316,23 +306,19 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
         logger.error("OPENROUTER_API_KEY not set in .env")
         sys.exit(1)
 
-    # -- STT: Deepgram Nova-2 (streaming) --
     stt = DeepgramSTTService(api_key=deepgram_key)
 
-    # -- LLM: OpenRouter (OpenAI-compatible) --
     llm = OpenAILLMService(
         api_key=openrouter_key,
         base_url=OPENROUTER_BASE_URL,
         settings=OpenAILLMService.Settings(model=LLM_MODEL),
     )
 
-    # -- TTS: Deepgram Aura (streaming) --
     tts = DeepgramTTSService(
         api_key=deepgram_key,
         settings=DeepgramTTSService.Settings(voice=DEEPGRAM_TTS_VOICE),
     )
 
-    # -- Context + Turn management --
     context = LLMContext(
         messages=[{"role": "system", "content": SYSTEM_PROMPT}],
     )
@@ -360,10 +346,8 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
         ),
     )
 
-    # -- Audio speed adjustment --
     speed_processor = AudioSpeedProcessor(config=_audio_config)
 
-    # -- Pipeline --
     pipeline = Pipeline([
         transport.input(),
         stt,
@@ -415,113 +399,12 @@ async def bot(runner_args: RunnerArguments):
 
 
 # ============================================================================
-# CONTROL PAGE HTML
-# ============================================================================
-
-CONTROL_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Voice Pipeline Control</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; }
-  .controls {
-    display: flex; gap: 32px; align-items: center; justify-content: center;
-    padding: 16px 24px; background: #16213e; border-bottom: 1px solid #0f3460;
-  }
-  .control-group { display: flex; align-items: center; gap: 12px; }
-  label { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #a0a0b8; }
-  input[type=range] { width: 180px; accent-color: #e94560; }
-  .value { font-size: 14px; font-weight: 700; color: #e94560; min-width: 50px; }
-  iframe { width: 100%; height: calc(100vh - 65px); border: none; }
-</style>
-</head>
-<body>
-  <div class="controls">
-    <div class="control-group">
-      <label>Speed</label>
-      <input type="range" id="speed" min="1.0" max="2.5" step="0.1" value="SPEED_PLACEHOLDER">
-      <span class="value" id="speed-val">SPEED_PLACEHOLDERx</span>
-    </div>
-    <div class="control-group">
-      <label>Low-cut Hz</label>
-      <input type="range" id="lowcut" min="0" max="500" step="10" value="LOWCUT_PLACEHOLDER">
-      <span class="value" id="lowcut-val">LOWCUT_PLACEHOLDER Hz</span>
-    </div>
-  </div>
-  <iframe src="/client/"></iframe>
-<script>
-  const speedEl = document.getElementById('speed');
-  const lowcutEl = document.getElementById('lowcut');
-  const speedVal = document.getElementById('speed-val');
-  const lowcutVal = document.getElementById('lowcut-val');
-
-  async function update(key, value) {
-    await fetch('/api/audio-config', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({[key]: parseFloat(value)}),
-    });
-  }
-
-  speedEl.addEventListener('input', e => {
-    speedVal.textContent = parseFloat(e.target.value).toFixed(1) + 'x';
-    update('speed', e.target.value);
-  });
-  lowcutEl.addEventListener('input', e => {
-    lowcutVal.textContent = e.target.value + ' Hz';
-    update('highpass_cutoff', e.target.value);
-  });
-</script>
-</body>
-</html>"""
-
-
-# ============================================================================
-# ENTRY POINT — monkey-patches pipecat runner to add control UI routes
+# ENTRY POINT
 # ============================================================================
 
 if __name__ == "__main__":
-    import json as _json
-    import pipecat.runner.run as _pipecat_run
-    from starlette.requests import Request
-    from fastapi.responses import HTMLResponse, JSONResponse
-
-    _orig_create = _pipecat_run._create_server_app
-
-    def _patched_create_server_app(args):
-        app = _orig_create(args)
-
-        # Remove the default "/" redirect so ours takes priority
-        app.routes[:] = [r for r in app.routes if not (hasattr(r, "path") and r.path == "/")]
-
-        @app.get("/", include_in_schema=False)
-        async def control_page():
-            html = CONTROL_HTML.replace(
-                "SPEED_PLACEHOLDER", str(_audio_config["speed"])
-            ).replace(
-                "LOWCUT_PLACEHOLDER", str(int(_audio_config["highpass_cutoff"]))
-            )
-            return HTMLResponse(html)
-
-        @app.get("/api/audio-config")
-        async def get_audio_config():
-            return JSONResponse(_audio_config)
-
-        @app.post("/api/audio-config")
-        async def set_audio_config(request: Request):
-            body = _json.loads(await request.body())
-            for key in ("speed", "highpass_cutoff"):
-                if key in body:
-                    _audio_config[key] = float(body[key])
-            logger.info(f"Audio config updated: {_audio_config}")
-            return JSONResponse(_audio_config)
-
-        return app
-
-    _pipecat_run._create_server_app = _patched_create_server_app
+    from control_ui import patch_server_app
+    patch_server_app(_audio_config)
 
     from pipecat.runner.run import main
     main()
