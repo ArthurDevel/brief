@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:gateway": "pnpm --filter @dublin/voice-gateway dev",
     "dev:web": "pnpm --filter @dublin/web dev"
   },
   "devDependencies": {
