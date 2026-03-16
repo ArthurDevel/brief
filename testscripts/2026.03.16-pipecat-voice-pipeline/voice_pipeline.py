@@ -12,13 +12,15 @@ import os
 import sys
 import time
 
+import numpy as np
 from dotenv import load_dotenv
 from loguru import logger
 
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import InputAudioRawFrame, LLMRunFrame, MetricsFrame, TextFrame
+from pipecat.frames.frames import Frame, InputAudioRawFrame, LLMRunFrame, MetricsFrame, TTSAudioRawFrame, TTSStoppedFrame, TextFrame
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.metrics.metrics import LLMUsageMetricsData, TTSUsageMetricsData
 from pipecat.observers.base_observer import BaseObserver, FrameProcessed, FramePushed
 from pipecat.pipeline.pipeline import Pipeline
@@ -64,6 +66,9 @@ VAD_CONFIDENCE = 0.7
 # Minimum words required before an interruption is triggered.
 MIN_INTERRUPT_WORDS = 3
 
+# TTS playback speed multiplier (1.0 = normal, 1.5 = 50% faster, 2.0 = double speed)
+TTS_SPEED = 1.5
+
 # ============================================================================
 # PRICING (USD) — update these when prices change
 # ============================================================================
@@ -77,6 +82,35 @@ TTS_COST_PER_CHAR = 0.015 / 1_000
 
 # Deepgram STT Nova-2: ~$0.0043/min (pay-as-you-go)
 STT_COST_PER_MINUTE = 0.0043
+
+
+# ============================================================================
+# AUDIO SPEED PROCESSOR
+# ============================================================================
+
+class AudioSpeedProcessor(FrameProcessor):
+    """Speeds up TTS audio by dropping samples (chipmunk style)."""
+
+    def __init__(self, speed: float = 1.0, **kwargs):
+        super().__init__(**kwargs)
+        self._speed = speed
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, TTSAudioRawFrame) and self._speed != 1.0:
+            samples = np.frombuffer(frame.audio, dtype=np.int16).astype(np.float64)
+            new_len = int(len(samples) / self._speed)
+            if new_len > 0:
+                indices = np.linspace(0, len(samples) - 1, new_len)
+                fast = np.interp(indices, np.arange(len(samples)), samples)
+                new_audio = np.clip(fast, -32768, 32767).astype(np.int16).tobytes()
+                frame = TTSAudioRawFrame(
+                    audio=new_audio,
+                    sample_rate=frame.sample_rate,
+                    num_channels=frame.num_channels,
+                    context_id=frame.context_id,
+                )
+        await self.push_frame(frame, direction)
 
 
 # ============================================================================
@@ -224,6 +258,9 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
         ),
     )
 
+    # -- Audio speed adjustment --
+    speed_processor = AudioSpeedProcessor(speed=TTS_SPEED)
+
     # -- Pipeline --
     pipeline = Pipeline([
         transport.input(),
@@ -231,6 +268,7 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
         user_aggregator,
         llm,
         tts,
+        speed_processor,
         transport.output(),
         assistant_aggregator,
     ])
