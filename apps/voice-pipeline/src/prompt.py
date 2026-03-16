@@ -1,0 +1,135 @@
+"""
+System prompt builder for the voice pipeline LLM.
+
+Port of apps/voice-gateway/src/prompt-builder.ts.
+
+Assembles the full system prompt from base instructions, user memory
+entries, and tool behavior classification.
+
+- build_system_prompt: assemble base instructions + user memory + tool behavior
+- _build_tool_behavior_section: categorize tools by approval level
+"""
+
+from __future__ import annotations
+
+from src.session import MemoryEntry
+
+
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+BASE_INSTRUCTIONS = (
+    "You are a helpful voice email assistant. The user is calling you on "
+    "the phone to manage their email inbox.\n"
+    "\n"
+    "IMPORTANT: Always respond in English, regardless of what language you "
+    "think you hear. Never switch to another language.\n"
+    "\n"
+    "You have access to tools to list, read, search, draft, delete, archive, "
+    "and send emails. You can also save things to memory and submit feature "
+    "requests. Use them whenever the user asks about their inbox or wants to "
+    "take action.\n"
+    "\n"
+    "Speak fast and be brief. Use short sentences. No filler words. Get to "
+    "the point immediately. When listing emails, just say the sender and "
+    "subject in quick succession. When reading an email, summarize the key "
+    "points only.\n"
+    "\n"
+    "Always confirm before destructive actions like deleting or sending emails."
+)
+
+ALL_TOOLS: list[dict[str, str]] = [
+    {"name": "list_inbox", "default_class": "read_only"},
+    {"name": "read_email", "default_class": "read_only"},
+    {"name": "search_emails", "default_class": "read_only"},
+    {"name": "mark_as_read", "default_class": "mutating_auto"},
+    {"name": "archive_email", "default_class": "mutating_auto"},
+    {"name": "draft_email", "default_class": "mutating_auto"},
+    {"name": "delete_email", "default_class": "mutating_queued"},
+    {"name": "send_email", "default_class": "mutating_queued"},
+    {"name": "save_memory", "default_class": "read_only"},
+    {"name": "submit_feature_request", "default_class": "read_only"},
+]
+
+
+# ============================================================================
+# MAIN ENTRYPOINT
+# ============================================================================
+
+def build_system_prompt(
+    memory_entries: list[MemoryEntry],
+    tool_approval_config: dict[str, str],
+) -> str:
+    """Assemble BASE_INSTRUCTIONS + user memory section + tool behavior section.
+
+    Args:
+        memory_entries: User's persistent memory entries from the database.
+        tool_approval_config: User's per-tool approval overrides
+            (tool_name -> classification string).
+
+    Returns:
+        The full system prompt string.
+    """
+    sections: list[str] = [BASE_INSTRUCTIONS]
+
+    # Add user memory section if there are entries
+    if memory_entries:
+        memory_lines = "\n".join(f"- {entry.content}" for entry in memory_entries)
+        sections.append(f"You remember the following about this user:\n{memory_lines}")
+
+    # Add tool behavior section
+    sections.append(_build_tool_behavior_section(tool_approval_config))
+
+    return "\n\n".join(sections)
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def _build_tool_behavior_section(config: dict[str, str]) -> str:
+    """Categorize all 10 tools into read_only/auto_execute/requires_approval.
+
+    send_email is always queued regardless of user config. Other tools
+    check user overrides first, then fall back to their defaults.
+
+    Args:
+        config: User's per-tool approval overrides (tool_name -> classification).
+
+    Returns:
+        Tool behavior description string for the system prompt.
+    """
+    read_only: list[str] = []
+    auto_execute: list[str] = []
+    requires_approval: list[str] = []
+
+    for tool in ALL_TOOLS:
+        name = tool["name"]
+
+        # send_email is always queued regardless of config
+        if name == "send_email":
+            effective = "mutating_queued"
+        else:
+            effective = config.get(name, tool["default_class"])
+
+        if effective == "read_only":
+            read_only.append(name)
+        elif effective == "mutating_auto":
+            auto_execute.append(name)
+        elif effective == "mutating_queued":
+            requires_approval.append(name)
+
+    lines: list[str] = ["Tool behavior:"]
+
+    if read_only:
+        lines.append(f"- Read-only (instant, no side effects): {', '.join(read_only)}")
+    if auto_execute:
+        lines.append(f"- Auto-execute (runs immediately): {', '.join(auto_execute)}")
+    if requires_approval:
+        lines.append(
+            f"- Requires dashboard approval (queued, tell the user to approve it "
+            f"from the dashboard): {', '.join(requires_approval)}"
+        )
+
+    return "\n".join(lines)

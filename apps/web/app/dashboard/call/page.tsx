@@ -1,15 +1,17 @@
 /**
  * Browser-based voice call page for debugging on localhost.
  *
- * Opens a direct WebSocket to the voice-gateway (no Twilio), captures mic
- * audio via AudioWorklet, and plays back assistant audio. Sends/receives
- * PCM16 24kHz audio as base64 JSON messages.
+ * Supports two backends:
+ * - "Classic": direct WebSocket to the voice-gateway with AudioWorklet-based
+ *   PCM16 capture/playback.
+ * - "Pipeline": WebRTC connection to the Pipecat voice-pipeline server
+ *   (Deepgram STT + OpenRouter LLM + Deepgram TTS).
  *
  * Responsibilities:
- * - Authenticate with Supabase and pass JWT to voice-gateway
- * - Capture microphone audio using an AudioWorklet (capture-processor)
- * - Play assistant audio using an AudioWorklet (playback-processor)
- * - Manage WebSocket connection lifecycle
+ * - Authenticate with Supabase and pass JWT to the selected backend
+ * - Classic: capture/play PCM16 audio via AudioWorklets over WebSocket
+ * - Pipeline: establish WebRTC peer connection with the Pipecat server
+ * - Manage connection lifecycle for both modes
  */
 
 "use client";
@@ -24,19 +26,42 @@ import { createBrowserClient } from "@/lib/supabase/client";
 const VOICE_GATEWAY_WS_URL =
   process.env.NEXT_PUBLIC_VOICE_GATEWAY_WS_URL ?? "ws://localhost:3001";
 
+const VOICE_PIPELINE_URL =
+  process.env.NEXT_PUBLIC_VOICE_PIPELINE_URL ?? "http://localhost:7860";
+
+type CallBackend = "classic" | "pipeline";
+
 // ============================================================================
 // TYPES
 // ============================================================================
 
-/** Refs held during an active call session. */
-interface CallSession {
+/** Refs held during an active classic (WebSocket) call session. */
+interface ClassicCallSession {
   ws: WebSocket;
   audioContext: AudioContext;
   micStream: MediaStream;
 }
 
+/** Refs held during an active pipeline (WebRTC) call session. */
+interface PipelineCallSession {
+  peerConnection: RTCPeerConnection;
+  micStream: MediaStream;
+}
+
+/** Response from POST /start on the Pipecat server. */
+interface StartResponse {
+  sessionId: string;
+  iceServers?: RTCIceServer[];
+}
+
+/** Response from POST /sessions/{sessionId}/api/offer on the Pipecat server. */
+interface OfferResponse {
+  sdp: string;
+  type: RTCSdpType;
+}
+
 // ============================================================================
-// EVENT HANDLERS
+// EVENT HANDLERS -- CLASSIC (WEBSOCKET)
 // ============================================================================
 
 /**
@@ -103,6 +128,94 @@ async function setupAudio(
 }
 
 // ============================================================================
+// EVENT HANDLERS -- PIPELINE (WEBRTC)
+// ============================================================================
+
+/**
+ * Starts a WebRTC session with the Pipecat voice-pipeline server.
+ *
+ * Steps:
+ * 1. POST /start to get sessionId and ICE servers
+ * 2. Create RTCPeerConnection with the returned ICE config
+ * 3. Add mic track and set up remote audio playback
+ * 4. Create and send SDP offer with the JWT in requestData
+ * 5. Apply the SDP answer from the server
+ *
+ * @param token - Supabase JWT for authentication
+ * @param micStream - The microphone MediaStream
+ * @returns The pipeline call session with peer connection and mic stream
+ */
+async function startWebRTCSession(
+  token: string,
+  micStream: MediaStream
+): Promise<PipelineCallSession> {
+  // Step 1: POST /start to get session ID and ICE config
+  const startRes = await fetch(`${VOICE_PIPELINE_URL}/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!startRes.ok) {
+    throw new Error(`Failed to start pipeline session: ${startRes.status} ${startRes.statusText}`);
+  }
+
+  const startData: StartResponse = await startRes.json();
+  const { sessionId, iceServers } = startData;
+
+  // Step 2: Create RTCPeerConnection with ICE config from server
+  const peerConnection = new RTCPeerConnection({
+    iceServers: iceServers ?? [],
+  });
+
+  // Step 3: Add mic audio track to the peer connection
+  const micTrack = micStream.getAudioTracks()[0];
+  if (!micTrack) {
+    throw new Error("No audio track found on microphone stream");
+  }
+  peerConnection.addTrack(micTrack, micStream);
+
+  // Set up remote audio playback: when the server sends audio, play it
+  const remoteAudio = new Audio();
+  remoteAudio.autoplay = true;
+  const remoteStream = new MediaStream();
+  remoteAudio.srcObject = remoteStream;
+
+  peerConnection.ontrack = (event: RTCTrackEvent) => {
+    remoteStream.addTrack(event.track);
+  };
+
+  // Step 4: Create SDP offer and send to server
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+
+  const offerRes = await fetch(
+    `${VOICE_PIPELINE_URL}/sessions/${sessionId}/api/offer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sdp: offer.sdp,
+        type: offer.type,
+        requestData: { token },
+      }),
+    }
+  );
+
+  if (!offerRes.ok) {
+    peerConnection.close();
+    throw new Error(`Failed to send SDP offer: ${offerRes.status} ${offerRes.statusText}`);
+  }
+
+  // Step 5: Set the remote SDP answer
+  const answerData: OfferResponse = await offerRes.json();
+  await peerConnection.setRemoteDescription(
+    new RTCSessionDescription({ sdp: answerData.sdp, type: answerData.type })
+  );
+
+  return { peerConnection, micStream };
+}
+
+// ============================================================================
 // COMPONENT
 // ============================================================================
 
@@ -110,9 +223,111 @@ export default function CallPage() {
   const [callActive, setCallActive] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
+  const [backend, setBackend] = useState<CallBackend>("classic");
 
-  const sessionRef = useRef<CallSession | null>(null);
+  // Classic mode refs
+  const classicSessionRef = useRef<ClassicCallSession | null>(null);
   const cleanupAudioRef = useRef<(() => void) | null>(null);
+
+  // Pipeline mode refs
+  const pipelineSessionRef = useRef<PipelineCallSession | null>(null);
+
+  // Speed control
+  const [speed, setSpeed] = useState(1.5);
+
+  // --------------------------------------------------------------------------
+  // Speed control
+  // --------------------------------------------------------------------------
+
+  /** Updates the TTS playback speed on the pipeline server. */
+  const updateSpeed = useCallback(async (newSpeed: number) => {
+    setSpeed(newSpeed);
+    try {
+      await fetch(`${VOICE_PIPELINE_URL}/api/speed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ speed: newSpeed }),
+      });
+    } catch {
+      // Non-critical -- slider still reflects local state
+    }
+  }, []);
+
+  // --------------------------------------------------------------------------
+  // Pipeline call handlers
+  // --------------------------------------------------------------------------
+
+  /**
+   * Starts a pipeline call via WebRTC to the Pipecat server.
+   * Gets JWT, mic stream, and establishes the WebRTC connection.
+   */
+  const startPipelineCall = useCallback(async () => {
+    setError(null);
+    setStatus("Connecting to pipeline...");
+
+    try {
+      // Get JWT from Supabase
+      const supabase = createBrowserClient();
+      const { data: sessionData, error: authError } = await supabase.auth.getSession();
+      if (authError || !sessionData.session) {
+        throw new Error("Not authenticated. Please sign in first.");
+      }
+      const token = sessionData.session.access_token;
+
+      // Request microphone access
+      setStatus("Requesting microphone...");
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Establish WebRTC connection
+      setStatus("Establishing WebRTC connection...");
+      const pipelineSession = await startWebRTCSession(token, micStream);
+      pipelineSessionRef.current = pipelineSession;
+
+      // Monitor connection state
+      pipelineSession.peerConnection.onconnectionstatechange = () => {
+        const state = pipelineSession.peerConnection.connectionState;
+        if (state === "connected") {
+          setStatus("Pipeline call active");
+        } else if (state === "disconnected" || state === "failed" || state === "closed") {
+          endPipelineCall();
+        }
+      };
+
+      setCallActive(true);
+      setStatus("Pipeline call active");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to start pipeline call";
+      setError(msg);
+      setStatus("Ready");
+      // Clean up mic if it was acquired before the error
+      if (pipelineSessionRef.current) {
+        cleanupPipelineSession();
+      }
+    }
+  }, []);
+
+  /** Stops the pipeline call by closing the peer connection and mic. */
+  const endPipelineCall = useCallback(() => {
+    cleanupPipelineSession();
+    setCallActive(false);
+    setStatus("Ready");
+  }, []);
+
+  /** Tears down WebRTC peer connection and mic stream for pipeline mode. */
+  function cleanupPipelineSession(): void {
+    const session = pipelineSessionRef.current;
+    if (!session) return;
+
+    session.peerConnection.onconnectionstatechange = null;
+    session.peerConnection.ontrack = null;
+    session.peerConnection.close();
+    session.micStream.getTracks().forEach((track) => track.stop());
+    pipelineSessionRef.current = null;
+  }
+
+  // --------------------------------------------------------------------------
+  // Classic call handlers
+  // --------------------------------------------------------------------------
 
   const startCall = useCallback(async () => {
     setError(null);
@@ -159,10 +374,10 @@ export default function CallPage() {
       ws.onclose = () => {
         setCallActive(false);
         setStatus("Ready");
-        cleanup();
+        cleanupClassicSession();
       };
 
-      sessionRef.current = { ws, audioContext, micStream };
+      classicSessionRef.current = { ws, audioContext, micStream };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to start call";
       setError(msg);
@@ -171,19 +386,19 @@ export default function CallPage() {
   }, []);
 
   const endCall = useCallback(() => {
-    cleanup();
+    cleanupClassicSession();
     setCallActive(false);
     setStatus("Ready");
   }, []);
 
-  /** Tears down WebSocket, audio context, and mic stream. */
-  function cleanup() {
+  /** Tears down WebSocket, audio context, and mic stream for classic mode. */
+  function cleanupClassicSession(): void {
     if (cleanupAudioRef.current) {
       cleanupAudioRef.current();
       cleanupAudioRef.current = null;
     }
 
-    const session = sessionRef.current;
+    const session = classicSessionRef.current;
     if (!session) return;
 
     if (session.ws.readyState === WebSocket.OPEN || session.ws.readyState === WebSocket.CONNECTING) {
@@ -192,16 +407,47 @@ export default function CallPage() {
 
     session.audioContext.close();
     session.micStream.getTracks().forEach((track) => track.stop());
-    sessionRef.current = null;
+    classicSessionRef.current = null;
   }
 
   // ============================================================================
   // RENDER
   // ============================================================================
 
+  /** Dispatches start/end based on the selected backend. */
+  const handleStart = backend === "pipeline" ? startPipelineCall : startCall;
+  const handleEnd = backend === "pipeline" ? endPipelineCall : endCall;
+
   return (
     <div>
       <h1 className="mb-8 text-2xl font-bold text-gray-900">Browser Call</h1>
+
+      {/* Backend toggle -- disabled while a call is active */}
+      <div className="mb-4 flex items-center gap-3">
+        <span className="text-sm font-medium text-gray-700">Backend:</span>
+        <button
+          onClick={() => setBackend("classic")}
+          disabled={callActive}
+          className={`rounded-md px-4 py-1.5 text-sm font-medium ${
+            backend === "classic"
+              ? "bg-gray-900 text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          } disabled:opacity-50`}
+        >
+          Classic
+        </button>
+        <button
+          onClick={() => setBackend("pipeline")}
+          disabled={callActive}
+          className={`rounded-md px-4 py-1.5 text-sm font-medium ${
+            backend === "pipeline"
+              ? "bg-gray-900 text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          } disabled:opacity-50`}
+        >
+          Pipeline
+        </button>
+      </div>
 
       {error && (
         <div className="mb-6 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -211,23 +457,43 @@ export default function CallPage() {
 
       <section className="rounded-lg border border-gray-200 bg-white p-6">
         <p className="mb-4 text-sm text-gray-500">
-          Direct voice connection to the assistant via your browser microphone.
-          For localhost debugging -- bypasses Twilio.
+          {backend === "classic"
+            ? "Direct voice connection to the assistant via your browser microphone. For localhost debugging -- bypasses Twilio."
+            : "Voice connection via the Pipecat pipeline (Deepgram STT + OpenRouter LLM + Deepgram TTS). Uses WebRTC."}
         </p>
+
+        {/* Speed slider -- only visible in pipeline mode */}
+        {backend === "pipeline" && (
+          <div className="mb-4 flex items-center gap-3">
+            <span className="text-sm font-medium text-gray-700">Speed</span>
+            <input
+              type="range"
+              min="1.0"
+              max="2.0"
+              step="0.1"
+              value={speed}
+              onChange={(e) => updateSpeed(parseFloat(e.target.value))}
+              className="w-44"
+            />
+            <span className="text-sm font-semibold text-gray-900 w-10">
+              {speed.toFixed(1)}x
+            </span>
+          </div>
+        )}
 
         <div className="flex items-center gap-4">
           <span className="text-sm font-medium text-gray-700">{status}</span>
 
           {!callActive ? (
             <button
-              onClick={startCall}
+              onClick={handleStart}
               className="rounded-md bg-green-600 px-6 py-2 text-sm font-medium text-white hover:bg-green-700"
             >
               Start Call
             </button>
           ) : (
             <button
-              onClick={endCall}
+              onClick={handleEnd}
               className="rounded-md bg-red-600 px-6 py-2 text-sm font-medium text-white hover:bg-red-700"
             >
               End Call
