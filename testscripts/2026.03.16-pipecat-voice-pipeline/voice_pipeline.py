@@ -7,11 +7,9 @@ echo cancellation natively via WebRTC, so interruptions work cleanly.
 Pipeline: browser mic -> VAD -> STT -> LLM -> TTS -> speed adjust -> browser speaker
 """
 
-import atexit
 import ctypes
 import os
 import sys
-import time
 
 import numpy as np
 from dotenv import load_dotenv
@@ -20,10 +18,8 @@ from loguru import logger
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import Frame, InputAudioRawFrame, LLMRunFrame, MetricsFrame, TTSAudioRawFrame, TextFrame
+from pipecat.frames.frames import Frame, LLMRunFrame, TTSAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.metrics.metrics import LLMUsageMetricsData, TTSUsageMetricsData
-from pipecat.observers.base_observer import BaseObserver, FrameProcessed, FramePushed
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -31,10 +27,16 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.llm_service import LLMContext
-from pipecat.services.openai.llm import OpenAILLMService
+
+from cost_tracking import (
+    UsageTracker,
+    TrackedDeepgramSTTService,
+    TrackedDeepgramTTSService,
+    TrackedOpenAILLMService,
+    fetch_actual_costs,
+    print_cost_summary,
+)
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.turns.user_start import MinWordsUserTurnStartStrategy, VADUserTurnStartStrategy
@@ -62,16 +64,11 @@ VAD_CONFIDENCE = 0.7
 MIN_INTERRUPT_WORDS = 3
 TTS_SPEED = 1.5
 
-# Shared config dict — updated live by the control UI sliders.
-_audio_config = {
-    "speed": TTS_SPEED,
+# Shared state — updated live by the control UI and cost tracking.
+_shared_state = {
+    "audio_config": {"speed": TTS_SPEED},
+    "session_costs": None,  # populated after disconnect
 }
-
-# Pricing (USD)
-LLM_COST_PER_INPUT_TOKEN = 0.15 / 1_000_000
-LLM_COST_PER_OUTPUT_TOKEN = 0.60 / 1_000_000
-TTS_COST_PER_CHAR = 0.015 / 1_000
-STT_COST_PER_MINUTE = 0.0043
 
 
 # ============================================================================
@@ -194,92 +191,10 @@ class AudioSpeedProcessor(FrameProcessor):
 
 
 # ============================================================================
-# COST TRACKER
-# ============================================================================
-
-class CostTracker(BaseObserver):
-    """Observes pipeline metrics and accumulates cost estimates."""
-
-    def __init__(self):
-        super().__init__()
-        self.llm_input_tokens = 0
-        self.llm_output_tokens = 0
-        self.tts_characters = 0
-        self.stt_audio_seconds = 0.0
-        self.start_time = time.time()
-        self._frames_seen = set()
-
-    async def on_push_frame(self, data: FramePushed):
-        frame = data.frame
-
-        if isinstance(frame, TextFrame) and hasattr(frame, "text") and frame.text:
-            dest_name = type(data.destination).__name__
-            if "TTS" in dest_name or "Deepgram" in dest_name:
-                self.tts_characters += len(frame.text)
-
-        if isinstance(frame, InputAudioRawFrame):
-            source_name = type(data.source).__name__
-            if "Transport" in source_name or "Input" in source_name:
-                num_samples = len(frame.audio) / 2
-                self.stt_audio_seconds += num_samples / frame.sample_rate
-
-        if not isinstance(frame, MetricsFrame):
-            return
-        if frame.id in self._frames_seen:
-            return
-        self._frames_seen.add(frame.id)
-
-        for m in frame.data:
-            if isinstance(m, LLMUsageMetricsData):
-                self.llm_input_tokens += m.value.prompt_tokens
-                self.llm_output_tokens += m.value.completion_tokens
-            elif isinstance(m, TTSUsageMetricsData):
-                self.tts_characters += m.value
-
-    def get_summary(self) -> dict:
-        duration_min = (time.time() - self.start_time) / 60.0
-        stt_min = self.stt_audio_seconds / 60.0
-        llm_cost = (
-            self.llm_input_tokens * LLM_COST_PER_INPUT_TOKEN
-            + self.llm_output_tokens * LLM_COST_PER_OUTPUT_TOKEN
-        )
-        tts_cost = self.tts_characters * TTS_COST_PER_CHAR
-        stt_cost = stt_min * STT_COST_PER_MINUTE
-        total = llm_cost + tts_cost + stt_cost
-        cost_per_min = total / duration_min if duration_min > 0 else 0
-        return {
-            "duration_min": round(duration_min, 2),
-            "llm_input_tokens": self.llm_input_tokens,
-            "llm_output_tokens": self.llm_output_tokens,
-            "llm_cost": round(llm_cost, 6),
-            "tts_characters": self.tts_characters,
-            "tts_cost": round(tts_cost, 6),
-            "stt_minutes": round(stt_min, 2),
-            "stt_cost": round(stt_cost, 6),
-            "total_cost": round(total, 6),
-            "cost_per_min": round(cost_per_min, 6),
-        }
-
-    def print_summary(self):
-        s = self.get_summary()
-        print("\n" + "=" * 50)
-        print("CONVERSATION COST SUMMARY")
-        print("=" * 50)
-        print(f"Duration:        {s['duration_min']} min")
-        print(f"LLM tokens:      {s['llm_input_tokens']} in / {s['llm_output_tokens']} out  →  ${s['llm_cost']:.4f}")
-        print(f"TTS characters:  {s['tts_characters']}  →  ${s['tts_cost']:.4f}")
-        print(f"STT audio:       {s['stt_minutes']} min  →  ${s['stt_cost']:.4f}")
-        print("-" * 50)
-        print(f"TOTAL:           ${s['total_cost']:.4f}")
-        print(f"COST/MIN:        ${s['cost_per_min']:.4f}")
-        print("=" * 50 + "\n")
-
-
-# ============================================================================
 # PIPELINE
 # ============================================================================
 
-async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
+async def run_bot(transport: BaseTransport, usage_tracker: UsageTracker):
     deepgram_key = os.getenv("DEEPGRAM_API_KEY")
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
 
@@ -290,17 +205,21 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
         logger.error("OPENROUTER_API_KEY not set in .env")
         sys.exit(1)
 
-    stt = DeepgramSTTService(api_key=deepgram_key)
-
-    llm = OpenAILLMService(
-        api_key=openrouter_key,
-        base_url=OPENROUTER_BASE_URL,
-        settings=OpenAILLMService.Settings(model=LLM_MODEL),
+    stt = TrackedDeepgramSTTService(
+        api_key=deepgram_key,
     )
 
-    tts = DeepgramTTSService(
+    llm = TrackedOpenAILLMService(
+        usage_tracker=usage_tracker,
+        api_key=openrouter_key,
+        base_url=OPENROUTER_BASE_URL,
+        settings=TrackedOpenAILLMService.Settings(model=LLM_MODEL),
+    )
+
+    tts = TrackedDeepgramTTSService(
+        usage_tracker=usage_tracker,
         api_key=deepgram_key,
-        settings=DeepgramTTSService.Settings(voice=DEEPGRAM_TTS_VOICE),
+        settings=TrackedDeepgramTTSService.Settings(voice=DEEPGRAM_TTS_VOICE),
     )
 
     context = LLMContext(
@@ -330,7 +249,7 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
         ),
     )
 
-    speed_processor = AudioSpeedProcessor(config=_audio_config)
+    speed_processor = AudioSpeedProcessor(config=_shared_state["audio_config"])
 
     pipeline = Pipeline([
         transport.input(),
@@ -346,12 +265,12 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
-        observers=[cost_tracker],
     )
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Client connected — starting conversation")
+        _shared_state["session_costs"] = None
         context.add_message(
             {"role": "user", "content": "Say hello and briefly introduce yourself."}
         )
@@ -359,8 +278,10 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info("Client disconnected")
-        cost_tracker.print_summary()
+        logger.info("Client disconnected — fetching actual costs...")
+        costs = await fetch_actual_costs(usage_tracker, openrouter_key)
+        _shared_state["session_costs"] = costs
+        print_cost_summary(costs)
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=False)
@@ -369,8 +290,7 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
 
 async def bot(runner_args: RunnerArguments):
     """Entry point called by pipecat runner."""
-    cost_tracker = CostTracker()
-    atexit.register(cost_tracker.print_summary)
+    usage_tracker = UsageTracker()
 
     transport = SmallWebRTCTransport(
         webrtc_connection=runner_args.webrtc_connection,
@@ -379,7 +299,7 @@ async def bot(runner_args: RunnerArguments):
             audio_out_enabled=True,
         ),
     )
-    await run_bot(transport, cost_tracker)
+    await run_bot(transport, usage_tracker)
 
 
 # ============================================================================
@@ -388,7 +308,7 @@ async def bot(runner_args: RunnerArguments):
 
 if __name__ == "__main__":
     from control_ui import patch_server_app
-    patch_server_app(_audio_config)
+    patch_server_app(_shared_state)
 
     from pipecat.runner.run import main
     main()
