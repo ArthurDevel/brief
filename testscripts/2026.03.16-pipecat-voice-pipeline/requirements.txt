@@ -1,0 +1,3 @@
+pipecat-ai[webrtc,openai,deepgram,silero]>=0.0.105
+pipecat-ai-small-webrtc-prebuilt>=2.4.0
+python-dotenv>=1.0.0
