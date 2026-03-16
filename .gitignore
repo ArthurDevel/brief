@@ -1,7 +1,8 @@
 node_modules
 dist
-.env
-.env.local
+**/.env
+**/.env.*
+!**/.env.example
 .next
 package-lock.json
 .claude
