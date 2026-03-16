@@ -8,6 +8,7 @@ Pipeline: browser mic -> VAD -> STT -> LLM -> TTS -> browser speaker
 """
 
 import atexit
+import ctypes
 import os
 import sys
 import time
@@ -19,7 +20,7 @@ from loguru import logger
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import Frame, InputAudioRawFrame, LLMRunFrame, MetricsFrame, TTSAudioRawFrame, TTSStoppedFrame, TextFrame
+from pipecat.frames.frames import Frame, InputAudioRawFrame, LLMRunFrame, MetricsFrame, TTSAudioRawFrame, TextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.metrics.metrics import LLMUsageMetricsData, TTSUsageMetricsData
 from pipecat.observers.base_observer import BaseObserver, FrameProcessed, FramePushed
@@ -91,11 +92,41 @@ STT_COST_PER_MINUTE = 0.0043
 
 
 # ============================================================================
+# SOUNDTOUCH CTYPES BINDINGS
+# ============================================================================
+
+def _load_soundtouch():
+    """Load libSoundTouchDll and set up function signatures."""
+    lib = ctypes.cdll.LoadLibrary("/opt/homebrew/lib/libSoundTouchDll.dylib")
+
+    lib.soundtouch_createInstance.restype = ctypes.c_void_p
+    lib.soundtouch_destroyInstance.argtypes = [ctypes.c_void_p]
+    lib.soundtouch_setChannels.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    lib.soundtouch_setSampleRate.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    lib.soundtouch_setTempo.argtypes = [ctypes.c_void_p, ctypes.c_float]
+    lib.soundtouch_putSamples_i16.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_uint,
+    ]
+    lib.soundtouch_receiveSamples_i16.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_uint,
+    ]
+    lib.soundtouch_receiveSamples_i16.restype = ctypes.c_uint
+    lib.soundtouch_numSamples.argtypes = [ctypes.c_void_p]
+    lib.soundtouch_numSamples.restype = ctypes.c_uint
+    lib.soundtouch_flush.argtypes = [ctypes.c_void_p]
+    lib.soundtouch_clear.argtypes = [ctypes.c_void_p]
+    return lib
+
+
+_st_lib = _load_soundtouch()
+
+
+# ============================================================================
 # AUDIO SPEED PROCESSOR
 # ============================================================================
 
 class AudioSpeedProcessor(FrameProcessor):
-    """Speeds up TTS audio by dropping samples (chipmunk style).
+    """Speeds up TTS audio using SoundTouch (tempo change, pitch preserved).
 
     Reads speed and highpass_cutoff live from a shared config dict.
     """
@@ -103,6 +134,10 @@ class AudioSpeedProcessor(FrameProcessor):
     def __init__(self, config: dict, **kwargs):
         super().__init__(**kwargs)
         self._config = config
+        self._st_handle = None
+        self._current_tempo: float = 1.0
+        self._sample_rate: int = 0
+        self._num_channels: int = 0
 
     @property
     def _speed(self) -> float:
@@ -111,6 +146,39 @@ class AudioSpeedProcessor(FrameProcessor):
     @property
     def _highpass_cutoff(self) -> float:
         return self._config["highpass_cutoff"]
+
+    def _ensure_instance(self, sample_rate: int, num_channels: int):
+        """Create or reconfigure the SoundTouch instance as needed."""
+        if self._st_handle is None or sample_rate != self._sample_rate or num_channels != self._num_channels:
+            if self._st_handle is not None:
+                _st_lib.soundtouch_destroyInstance(self._st_handle)
+            self._st_handle = _st_lib.soundtouch_createInstance()
+            self._sample_rate = sample_rate
+            self._num_channels = num_channels
+            _st_lib.soundtouch_setSampleRate(self._st_handle, sample_rate)
+            _st_lib.soundtouch_setChannels(self._st_handle, num_channels)
+            self._current_tempo = -1  # force update
+
+        speed = self._speed
+        if speed != self._current_tempo:
+            _st_lib.soundtouch_setTempo(self._st_handle, ctypes.c_float(speed))
+            self._current_tempo = speed
+
+    def _process_samples(self, audio_bytes: bytes) -> bytes:
+        """Feed int16 PCM into SoundTouch and retrieve processed samples."""
+        in_arr = np.frombuffer(audio_bytes, dtype=np.int16).copy()
+        num_frames = len(in_arr) // self._num_channels
+        in_ptr = in_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_int16))
+        _st_lib.soundtouch_putSamples_i16(self._st_handle, in_ptr, num_frames)
+
+        # Collect all available output
+        max_frames = num_frames * 2
+        out_buf = np.empty(max_frames * self._num_channels, dtype=np.int16)
+        out_ptr = out_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_int16))
+        got = _st_lib.soundtouch_receiveSamples_i16(self._st_handle, out_ptr, max_frames)
+        if got == 0:
+            return b""
+        return out_buf[: got * self._num_channels].tobytes()
 
     def _highpass(self, samples: np.ndarray, sample_rate: int) -> np.ndarray:
         cutoff = self._highpass_cutoff
@@ -125,20 +193,25 @@ class AudioSpeedProcessor(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+
         if isinstance(frame, TTSAudioRawFrame) and self._speed != 1.0:
-            samples = np.frombuffer(frame.audio, dtype=np.int16).astype(np.float64)
-            new_len = int(len(samples) / self._speed)
-            if new_len > 0:
-                indices = np.linspace(0, len(samples) - 1, new_len)
-                fast = np.interp(indices, np.arange(len(samples)), samples)
-                fast = self._highpass(fast, frame.sample_rate)
-                new_audio = np.clip(fast, -32768, 32767).astype(np.int16).tobytes()
+            self._ensure_instance(frame.sample_rate, frame.num_channels)
+            out_bytes = self._process_samples(frame.audio)
+            if out_bytes:
+                # Apply highpass if configured
+                if self._highpass_cutoff > 0:
+                    samples = np.frombuffer(out_bytes, dtype=np.int16).astype(np.float64)
+                    samples = self._highpass(samples, frame.sample_rate)
+                    out_bytes = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
                 frame = TTSAudioRawFrame(
-                    audio=new_audio,
+                    audio=out_bytes,
                     sample_rate=frame.sample_rate,
                     num_channels=frame.num_channels,
                     context_id=frame.context_id,
                 )
+                await self.push_frame(frame, direction)
+            return
+
         await self.push_frame(frame, direction)
 
 
