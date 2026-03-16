@@ -1,4 +1,4 @@
-pipecat-ai[deepgram,openai,silero]
+pipecat-ai[deepgram,openai,silero,webrtc]
 supabase
 python-dotenv
 fastapi
@@ -7,4 +7,3 @@ websockets
 aiosmtplib
 imapclient
 bcrypt
-soundtouch

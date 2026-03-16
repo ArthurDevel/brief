@@ -30,7 +30,7 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from supabase import Client
 
 from src.audio.speed import AudioSpeedProcessor
-from src.config import Settings
+from src.config import LLM_MODEL, TTS_VOICE, Settings
 from src.cost_tracker import CostTracker
 from src.prompt import build_system_prompt
 from src.session import ActiveSession, SmtpConfig, UserContext
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # CONSTANTS
 # ============================================================================
 
-DEFAULT_TEMPO = 1.0
+DEFAULT_TEMPO = 1.5
 
 
 # ============================================================================
@@ -94,22 +94,24 @@ def create_pipeline(
     # -- LLM (OpenRouter, OpenAI-compatible) --
     llm = OpenAILLMService(
         api_key=settings.openrouter_api_key,
-        model=settings.llm_model,
+        model=LLM_MODEL,
         base_url="https://openrouter.ai/api/v1",
     )
 
     # -- TTS (Deepgram) --
     tts = DeepgramTTSService(
         api_key=settings.deepgram_api_key,
-        voice=settings.tts_voice,
+        voice=TTS_VOICE,
         sample_rate=sample_rate,
     )
 
-    # -- Speed processor (SoundTouch) --
+    # -- Speed processor (WSOLA) --
+    # Uses the shared speed_config dict so the tempo can be updated live via API
+    speed_config = audio_config.get("speed_config", {"speed": DEFAULT_TEMPO})
     speed_processor = AudioSpeedProcessor(
+        config=speed_config,
         sample_rate=sample_rate,
         num_channels=num_channels,
-        tempo=DEFAULT_TEMPO,
     )
 
     # -- Build system prompt and LLM context --

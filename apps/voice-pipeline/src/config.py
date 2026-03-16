@@ -40,6 +40,10 @@ PRICING = PricingConstants()
 # SETTINGS
 # ============================================================================
 
+LLM_MODEL = "google/gemini-3-flash-preview"
+TTS_VOICE = "aura-2-helena-en"
+
+
 @dataclass
 class Settings:
     """All configuration values for the voice pipeline."""
@@ -48,8 +52,6 @@ class Settings:
     supabase_service_role_key: str = ""
     deepgram_api_key: str = ""
     openrouter_api_key: str = ""
-    llm_model: str = "google/gemini-3-flash-preview"
-    tts_voice: str = "aura-2-helena-en"
     port: int = 7860
     public_url: str = "http://localhost:7860"
 
@@ -81,8 +83,6 @@ def load_settings() -> Settings:
         supabase_service_role_key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
         deepgram_api_key=os.environ["DEEPGRAM_API_KEY"],
         openrouter_api_key=os.environ["OPENROUTER_API_KEY"],
-        llm_model=os.getenv("LLM_MODEL", "google/gemini-3-flash-preview"),
-        tts_voice=os.getenv("TTS_VOICE", "aura-2-helena-en"),
         port=int(os.getenv("PORT", "7860")),
         public_url=os.getenv("PUBLIC_URL", "http://localhost:7860"),
     )

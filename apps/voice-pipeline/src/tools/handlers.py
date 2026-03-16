@@ -290,7 +290,6 @@ def _insert_pending_action(input: ActionInput, supabase: Client) -> ActionResult
             "status": "pending",
             "requires_approval": True,
         })
-        .select("id")
         .execute()
     )
 
@@ -357,7 +356,6 @@ def _execute_and_store(
             "undo_deadline": None,
             "executed_at": datetime.now(timezone.utc).isoformat(),
         })
-        .select("id")
         .execute()
     )
 
@@ -558,7 +556,6 @@ def _handle_save_memory(
     response = (
         supabase.table("user_memory")
         .insert({"user_id": user_id, "content": content})
-        .select("id")
         .execute()
     )
 
@@ -592,7 +589,6 @@ def _handle_feature_request(
     response = (
         supabase.table("feature_requests")
         .insert({"user_id": user_id, "description": description, "source": "voice"})
-        .select("id")
         .execute()
     )
 
