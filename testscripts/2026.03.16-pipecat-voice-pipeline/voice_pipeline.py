@@ -69,6 +69,12 @@ MIN_INTERRUPT_WORDS = 3
 # TTS playback speed multiplier (1.0 = normal, 1.5 = 50% faster, 2.0 = double speed)
 TTS_SPEED = 1.5
 
+# Shared config dict — updated live by the control UI API endpoints.
+_audio_config = {
+    "speed": TTS_SPEED,
+    "highpass_cutoff": 0,
+}
+
 # ============================================================================
 # PRICING (USD) — update these when prices change
 # ============================================================================
@@ -89,11 +95,33 @@ STT_COST_PER_MINUTE = 0.0043
 # ============================================================================
 
 class AudioSpeedProcessor(FrameProcessor):
-    """Speeds up TTS audio by dropping samples (chipmunk style)."""
+    """Speeds up TTS audio by dropping samples (chipmunk style).
 
-    def __init__(self, speed: float = 1.0, **kwargs):
+    Reads speed and highpass_cutoff live from a shared config dict.
+    """
+
+    def __init__(self, config: dict, **kwargs):
         super().__init__(**kwargs)
-        self._speed = speed
+        self._config = config
+
+    @property
+    def _speed(self) -> float:
+        return self._config["speed"]
+
+    @property
+    def _highpass_cutoff(self) -> float:
+        return self._config["highpass_cutoff"]
+
+    def _highpass(self, samples: np.ndarray, sample_rate: int) -> np.ndarray:
+        cutoff = self._highpass_cutoff
+        if cutoff <= 0:
+            return samples
+        from scipy.signal import butter, sosfilt
+        nyq = sample_rate / 2.0
+        if cutoff >= nyq:
+            return samples
+        sos = butter(4, cutoff / nyq, btype="high", output="sos")
+        return sosfilt(sos, samples)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -103,6 +131,7 @@ class AudioSpeedProcessor(FrameProcessor):
             if new_len > 0:
                 indices = np.linspace(0, len(samples) - 1, new_len)
                 fast = np.interp(indices, np.arange(len(samples)), samples)
+                fast = self._highpass(fast, frame.sample_rate)
                 new_audio = np.clip(fast, -32768, 32767).astype(np.int16).tobytes()
                 frame = TTSAudioRawFrame(
                     audio=new_audio,
@@ -259,7 +288,7 @@ async def run_bot(transport: BaseTransport, cost_tracker: CostTracker):
     )
 
     # -- Audio speed adjustment --
-    speed_processor = AudioSpeedProcessor(speed=TTS_SPEED)
+    speed_processor = AudioSpeedProcessor(config=_audio_config)
 
     # -- Pipeline --
     pipeline = Pipeline([
@@ -312,6 +341,114 @@ async def bot(runner_args: RunnerArguments):
     await run_bot(transport, cost_tracker)
 
 
+# ============================================================================
+# CONTROL PAGE HTML
+# ============================================================================
+
+CONTROL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice Pipeline Control</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; }
+  .controls {
+    display: flex; gap: 32px; align-items: center; justify-content: center;
+    padding: 16px 24px; background: #16213e; border-bottom: 1px solid #0f3460;
+  }
+  .control-group { display: flex; align-items: center; gap: 12px; }
+  label { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #a0a0b8; }
+  input[type=range] { width: 180px; accent-color: #e94560; }
+  .value { font-size: 14px; font-weight: 700; color: #e94560; min-width: 50px; }
+  iframe { width: 100%; height: calc(100vh - 65px); border: none; }
+</style>
+</head>
+<body>
+  <div class="controls">
+    <div class="control-group">
+      <label>Speed</label>
+      <input type="range" id="speed" min="1.0" max="2.5" step="0.1" value="SPEED_PLACEHOLDER">
+      <span class="value" id="speed-val">SPEED_PLACEHOLDERx</span>
+    </div>
+    <div class="control-group">
+      <label>Low-cut Hz</label>
+      <input type="range" id="lowcut" min="0" max="500" step="10" value="LOWCUT_PLACEHOLDER">
+      <span class="value" id="lowcut-val">LOWCUT_PLACEHOLDER Hz</span>
+    </div>
+  </div>
+  <iframe src="/client/"></iframe>
+<script>
+  const speedEl = document.getElementById('speed');
+  const lowcutEl = document.getElementById('lowcut');
+  const speedVal = document.getElementById('speed-val');
+  const lowcutVal = document.getElementById('lowcut-val');
+
+  async function update(key, value) {
+    await fetch('/api/audio-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({[key]: parseFloat(value)}),
+    });
+  }
+
+  speedEl.addEventListener('input', e => {
+    speedVal.textContent = parseFloat(e.target.value).toFixed(1) + 'x';
+    update('speed', e.target.value);
+  });
+  lowcutEl.addEventListener('input', e => {
+    lowcutVal.textContent = e.target.value + ' Hz';
+    update('highpass_cutoff', e.target.value);
+  });
+</script>
+</body>
+</html>"""
+
+
+# ============================================================================
+# ENTRY POINT — monkey-patches pipecat runner to add control UI routes
+# ============================================================================
+
 if __name__ == "__main__":
+    import json as _json
+    import pipecat.runner.run as _pipecat_run
+    from starlette.requests import Request
+    from fastapi.responses import HTMLResponse, JSONResponse
+
+    _orig_create = _pipecat_run._create_server_app
+
+    def _patched_create_server_app(args):
+        app = _orig_create(args)
+
+        # Remove the default "/" redirect so ours takes priority
+        app.routes[:] = [r for r in app.routes if not (hasattr(r, "path") and r.path == "/")]
+
+        @app.get("/", include_in_schema=False)
+        async def control_page():
+            html = CONTROL_HTML.replace(
+                "SPEED_PLACEHOLDER", str(_audio_config["speed"])
+            ).replace(
+                "LOWCUT_PLACEHOLDER", str(int(_audio_config["highpass_cutoff"]))
+            )
+            return HTMLResponse(html)
+
+        @app.get("/api/audio-config")
+        async def get_audio_config():
+            return JSONResponse(_audio_config)
+
+        @app.post("/api/audio-config")
+        async def set_audio_config(request: Request):
+            body = _json.loads(await request.body())
+            for key in ("speed", "highpass_cutoff"):
+                if key in body:
+                    _audio_config[key] = float(body[key])
+            logger.info(f"Audio config updated: {_audio_config}")
+            return JSONResponse(_audio_config)
+
+        return app
+
+    _pipecat_run._create_server_app = _patched_create_server_app
+
     from pipecat.runner.run import main
     main()
