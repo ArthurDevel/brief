@@ -20,12 +20,19 @@ from pipecat.frames.frames import LLMMessagesFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.processors.user_idle_processor import UserIdleProcessor
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from supabase import Client
 
@@ -124,7 +131,27 @@ def create_pipeline(
 
     messages = [{"role": "system", "content": system_prompt}]
     context = OpenAILLMContext(messages=messages, tools=tools)
-    context_aggregator = llm.create_context_aggregator(context)
+
+    # SmartTurn v3 requires 16kHz audio (breaks silently at 8kHz/Twilio).
+    # Use it for WebRTC, fall back to basic aggregator for Twilio.
+    if sample_rate >= 16000:
+        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+            context,
+            user_params=LLMUserAggregatorParams(
+                user_turn_strategies=UserTurnStrategies(
+                    stop=[TurnAnalyzerUserTurnStopStrategy(
+                        turn_analyzer=LocalSmartTurnAnalyzerV3()
+                    )]
+                ),
+                vad_analyzer=SileroVADAnalyzer(),
+            ),
+        )
+        logger.info("SmartTurn v3 enabled (16kHz)")
+    else:
+        basic = llm.create_context_aggregator(context)
+        user_aggregator = basic.user()
+        assistant_aggregator = basic.assistant()
+        logger.info("SmartTurn v3 disabled (sample rate < 16kHz, using basic turn detection)")
 
     # -- Register function call handlers --
     # Each handler routes through tools/handlers.py handle_tool_call().
@@ -145,12 +172,12 @@ def create_pipeline(
         [
             transport.input(),
             stt,
-            context_aggregator.user(),
+            user_aggregator,
             llm,
             tts,
             speed_processor,
             transport.output(),
-            context_aggregator.assistant(),
+            assistant_aggregator,
         ]
     )
 
@@ -197,29 +224,36 @@ def _register_tool_handler(
     """
     async def handler(function_name, tool_call_id, args, llm_instance, context, result_callback):
         """Handle a function call from the LLM."""
-        action_input = ActionInput(
-            user_id=user_context.user_id,
-            session_id=session.session_id,
-            tool_name=function_name,
-            arguments=args,
-        )
+        try:
+            action_input = ActionInput(
+                user_id=user_context.user_id,
+                session_id=session.session_id,
+                tool_name=function_name,
+                arguments=args,
+            )
 
-        # Run synchronous IMAP/tool operations in a thread
-        action_result = await asyncio.to_thread(
-            handle_tool_call,
-            action_input,
-            user_context.tool_approval_config,
-            imap_holder,
-            user_context.smtp_config,
-            supabase,
-        )
+            # Run synchronous IMAP/tool operations in a thread
+            action_result = await asyncio.to_thread(
+                handle_tool_call,
+                action_input,
+                user_context.tool_approval_config,
+                imap_holder,
+                user_context.smtp_config,
+                supabase,
+            )
 
-        # Return the result to the LLM as a JSON string
-        result_str = json.dumps({
-            "status": action_result.status,
-            "result": action_result.result,
-            "message": action_result.message,
-        })
+            result_str = json.dumps({
+                "status": action_result.status,
+                "result": action_result.result,
+                "message": action_result.message,
+            })
+        except Exception as e:
+            logger.error(f"Tool call [{function_name}] failed: {e}")
+            result_str = json.dumps({
+                "status": "error",
+                "result": None,
+                "message": str(e),
+            })
 
         await result_callback(result_str)
 
