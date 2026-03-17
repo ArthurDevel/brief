@@ -10,6 +10,8 @@
     "nodemailer": "^6.9.16"
   },
   "devDependencies": {
-    "@types/nodemailer": "^6.4.17"
+    "@types/nodemailer": "^6.4.17",
+    "hoodiecrow-imap": "^2.1.0",
+    "vitest": "^4.1.0"
   }
 }

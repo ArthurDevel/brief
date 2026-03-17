@@ -41,7 +41,7 @@ export async function createImapConnection(config: ImapConfig): Promise<ImapFlow
   const client = new ImapFlow({
     host: config.host,
     port: config.port,
-    secure: true,
+    secure: config.secure ?? true,
     auth: {
       user: config.user,
       pass: config.password,

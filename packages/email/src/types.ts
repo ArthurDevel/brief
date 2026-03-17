@@ -19,6 +19,8 @@ export interface ImapConfig {
   port: number;
   user: string;
   password: string;
+  /** Use TLS. Defaults to true. Set to false for local test servers. */
+  secure?: boolean;
 }
 
 /** SMTP server connection configuration. */
