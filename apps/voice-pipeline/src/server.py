@@ -50,6 +50,7 @@ from src.config import load_settings
 from src.cost_tracker import CostTracker
 from src.langfuse_client import shutdown_langfuse_client
 from src.langfuse_observer import LangfuseObserver
+from src.tracked_services import UsageTracker
 from src.pipeline import create_pipeline
 from src.session import end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
@@ -97,7 +98,8 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
         transport_type: "webrtc" or "twilio".
     """
     session = start_session(user_context.user_id, supabase)
-    cost_tracker = CostTracker()
+    usage_tracker = UsageTracker()
+    cost_tracker = CostTracker(usage_tracker)
     langfuse_observer = LangfuseObserver(session, transport_type, voice=user_context.voice_preference)
     langfuse_observer.start_trace()
 
@@ -121,6 +123,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             session=session,
             cost_tracker=cost_tracker,
             langfuse_observer=langfuse_observer,
+            usage_tracker=usage_tracker,
             audio_config=audio_config,
             supabase=supabase,
             settings=settings,
@@ -137,8 +140,10 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
         raise
 
 
-def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase) -> None:
+async def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase, settings) -> None:
     """Clean up after a pipeline session ends.
+
+    Fetches actual LLM costs from OpenRouter before finalizing the session.
 
     Args:
         imap_holder: Mutable IMAP client holder.
@@ -146,6 +151,7 @@ def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supa
         langfuse_observer: Langfuse observer for the session.
         session: Active session to finalize.
         supabase: Supabase client.
+        settings: App settings (for OpenRouter API key).
     """
     try:
         close_imap_connection(imap_holder["client"])
@@ -153,6 +159,7 @@ def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supa
         logger.warning("[server] Error closing IMAP connection: %s", exc)
 
     try:
+        await cost_tracker.fetch_llm_costs(settings.openrouter_api_key)
         cost_summary = cost_tracker.get_summary()
         langfuse_observer.end_trace(cost_summary)
         end_session(session, cost_summary, supabase)
@@ -216,7 +223,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase)
+        await _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase, settings)
 
 
 # ============================================================================
@@ -496,7 +503,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase)
+        await _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase, settings)
 
 
 # ============================================================================

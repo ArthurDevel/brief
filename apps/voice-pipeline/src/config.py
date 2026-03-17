@@ -32,10 +32,15 @@ class PricingConstants:
     LLM_COST_PER_INPUT_TOKEN: float = 0.15 / 1_000_000
     LLM_COST_PER_OUTPUT_TOKEN: float = 0.60 / 1_000_000
     TTS_COST_PER_CHAR: float = 0.015 / 1_000
-    STT_COST_PER_MINUTE: float = 0.0043
+    STT_COST_PER_MINUTE: float = 0.0059  # Nova-3 pay-as-you-go
 
 
 PRICING = PricingConstants()
+
+# OpenRouter generation API (for post-hoc actual LLM cost fetching)
+OPENROUTER_GENERATION_URL = "https://openrouter.ai/api/v1/generation"
+OPENROUTER_COST_RETRY_DELAY = 2  # seconds
+OPENROUTER_COST_MAX_RETRIES = 3
 
 
 # ============================================================================

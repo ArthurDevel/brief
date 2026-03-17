@@ -27,8 +27,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.user_idle_processor import UserIdleProcessor
 from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.deepgram.tts import DeepgramTTSService
-from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
@@ -41,6 +39,7 @@ from src.audio.speed import AudioSpeedProcessor
 from src.config import LLM_MODEL, Settings
 from src.cost_tracker import CostTracker
 from src.langfuse_observer import LangfuseObserver
+from src.tracked_services import TrackedDeepgramTTSService, TrackedOpenAILLMService, UsageTracker
 from src.prompt import build_system_prompt
 from src.session import ActiveSession, SmtpConfig, UserContext
 from src.tools.definitions import get_tool_definitions
@@ -67,6 +66,7 @@ def create_pipeline(
     session: ActiveSession,
     cost_tracker: CostTracker,
     langfuse_observer: LangfuseObserver,
+    usage_tracker: UsageTracker,
     audio_config: dict[str, Any],
     supabase: Client,
     settings: Settings,
@@ -102,14 +102,16 @@ def create_pipeline(
     )
 
     # -- LLM (OpenRouter, OpenAI-compatible) --
-    llm = OpenAILLMService(
+    llm = TrackedOpenAILLMService(
+        usage_tracker=usage_tracker,
         api_key=settings.openrouter_api_key,
         model=LLM_MODEL,
         base_url="https://openrouter.ai/api/v1",
     )
 
     # -- TTS (Deepgram) --
-    tts = DeepgramTTSService(
+    tts = TrackedDeepgramTTSService(
+        usage_tracker=usage_tracker,
         api_key=settings.deepgram_api_key,
         voice=user_context.voice_preference,
         sample_rate=sample_rate,
@@ -192,6 +194,7 @@ def create_pipeline(
             audio_out_sample_rate=sample_rate,
             allow_interruptions=True,
             enable_metrics=True,
+            enable_usage_metrics=True,
             observers=[cost_tracker, langfuse_observer],
         ),
     )
@@ -204,7 +207,7 @@ def create_pipeline(
 # ============================================================================
 
 def _register_tool_handler(
-    llm: OpenAILLMService,
+    llm: TrackedOpenAILLMService,
     tool_name: str,
     session: ActiveSession,
     user_context: UserContext,

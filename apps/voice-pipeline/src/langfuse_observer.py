@@ -151,20 +151,12 @@ class LangfuseObserver(BaseObserver):
                     )
             return
 
-        # Token usage from MetricsFrame → attach to pending generation
+        # MetricsFrame with LLMUsageMetricsData → end pending generation
+        # (Token counts from streaming are typically 0 for OpenRouter/Gemini;
+        # real totals come from the OpenRouter generation API at session end)
         if isinstance(frame, MetricsFrame):
             for metric in frame.data:
-                metric_class = type(metric).__name__
-                if metric_class == "LLMUsageMetricsData" and self._pending_generation is not None:
-                    prompt_tokens = getattr(metric, "prompt_tokens", 0)
-                    completion_tokens = getattr(metric, "completion_tokens", 0)
-                    if prompt_tokens or completion_tokens:
-                        self._pending_generation.update(
-                            usage_details={
-                                "input": prompt_tokens,
-                                "output": completion_tokens,
-                            },
-                        )
+                if type(metric).__name__ == "LLMUsageMetricsData" and self._pending_generation is not None:
                     self._pending_generation.end()
                     self._pending_generation = None
             return
@@ -206,6 +198,7 @@ class LangfuseObserver(BaseObserver):
                 "llm_input_tokens": cost_summary.llm_input_tokens,
                 "llm_output_tokens": cost_summary.llm_output_tokens,
                 "llm_cost": cost_summary.llm_cost,
+                "llm_actual_cost": cost_summary.llm_actual_cost,
                 "stt_minutes": cost_summary.stt_minutes,
                 "stt_cost": cost_summary.stt_cost,
                 "tts_characters": cost_summary.tts_characters,
