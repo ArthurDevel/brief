@@ -302,7 +302,7 @@ async def webrtc_start(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Invalid token"}, status_code=401)
 
     if not check_usage_limit(user_id, supabase):
-        return JSONResponse({"error": "Monthly call limit reached"}, status_code=403)
+        return JSONResponse({"error": "Monthly call limit reached", "code": "LIMIT_REACHED"}, status_code=403)
 
     session_id = str(uuid.uuid4())
     _active_sessions[session_id] = request_data.get("body", {})

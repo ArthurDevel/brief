@@ -32,4 +32,4 @@ def test_start_returns_403_when_usage_limit_exceeded(client: TestClient):
         )
 
     assert response.status_code == 403
-    assert response.json()["error"] == "Monthly call limit reached"
+    assert response.json()["code"] == "LIMIT_REACHED"

@@ -70,8 +70,10 @@ async function startWebRTCSession(
 
   if (!startRes.ok) {
     const body = await startRes.json().catch(() => null);
-    const detail = body?.error ?? `${startRes.status} ${startRes.statusText}`;
-    throw new Error(detail);
+    if (body?.code === "LIMIT_REACHED") {
+      throw new Error("You've reached your monthly call limit. Please upgrade your plan.");
+    }
+    throw new Error(body?.error ?? `${startRes.status} ${startRes.statusText}`);
   }
 
   const startData: StartResponse = await startRes.json();
