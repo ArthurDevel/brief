@@ -4,6 +4,7 @@
 
 # Symlink root-level .env* files (if any exist)
 for f in "$CONDUCTOR_ROOT_PATH"/.env*(.N); do
+    [[ "$f" == *.example ]] && continue
     ln -sf "$f" .
 done
 
@@ -12,6 +13,7 @@ for dir in apps/voice-pipeline apps/web; do
     if [ -d "$CONDUCTOR_ROOT_PATH/$dir" ]; then
         mkdir -p "$dir"
         for f in "$CONDUCTOR_ROOT_PATH/$dir"/.env*(.N); do
+            [[ "$f" == *.example ]] && continue
             ln -sf "$f" "$dir/"
         done
     fi
