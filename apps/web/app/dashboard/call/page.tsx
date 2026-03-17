@@ -65,6 +65,7 @@ async function startWebRTCSession(
   const startRes = await fetch(`${VOICE_PIPELINE_URL}/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
   });
 
   if (!startRes.ok) {

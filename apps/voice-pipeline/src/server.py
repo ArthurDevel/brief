@@ -281,11 +281,28 @@ async def set_speed(request: Request) -> JSONResponse:
 
 @app.post("/start")
 async def webrtc_start(request: Request) -> JSONResponse:
-    """Create a new WebRTC session. Returns sessionId for the client."""
+    """Create a new WebRTC session. Returns sessionId for the client.
+
+    Verifies the JWT token and checks usage limits before allowing the session.
+    """
     try:
         request_data = await request.json()
     except Exception:
         request_data = {}
+
+    token = request_data.get("token", "")
+    if not token:
+        return JSONResponse({"error": "Missing token"}, status_code=401)
+
+    settings = load_settings()
+    supabase = create_service_client(settings)
+
+    user_id = verify_token(token, supabase)
+    if not user_id:
+        return JSONResponse({"error": "Invalid token"}, status_code=401)
+
+    if not check_usage_limit(user_id, supabase):
+        return JSONResponse({"error": "Monthly call limit reached"}, status_code=403)
 
     session_id = str(uuid.uuid4())
     _active_sessions[session_id] = request_data.get("body", {})

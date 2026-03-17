@@ -94,7 +94,7 @@ def check_usage_limit(user_id: str, supabase: Client) -> bool:
         True if the user can start a new call, False if limit exceeded.
     """
     # Get the user's plan and derive hours limit
-    PLAN_HOURS = {"free": 1, "pro": 10}
+    PLAN_HOURS = {"free": 1, "pro": 5}
 
     sub_response = (
         supabase.table("subscriptions")
