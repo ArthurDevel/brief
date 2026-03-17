@@ -130,26 +130,7 @@ export default function CallPage() {
   const [callActive, setCallActive] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
-  const [speed, setSpeed] = useState(1.5);
-
   const pipelineSessionRef = useRef<PipelineCallSession | null>(null);
-
-  // --------------------------------------------------------------------------
-  // Speed control
-  // --------------------------------------------------------------------------
-
-  const updateSpeed = useCallback(async (newSpeed: number) => {
-    setSpeed(newSpeed);
-    try {
-      await fetch(`${VOICE_PIPELINE_URL}/api/speed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ speed: newSpeed }),
-      });
-    } catch {
-      // Non-critical -- slider still reflects local state
-    }
-  }, []);
 
   // --------------------------------------------------------------------------
   // Call handlers
@@ -230,22 +211,6 @@ export default function CallPage() {
         <p className="mb-4 text-sm text-gray-500">
           Voice connection via the Pipecat pipeline (Deepgram STT + OpenRouter LLM + Deepgram TTS). Uses WebRTC.
         </p>
-
-        <div className="mb-4 flex items-center gap-3">
-          <span className="text-sm font-medium text-gray-700">Speed</span>
-          <input
-            type="range"
-            min="1.0"
-            max="2.0"
-            step="0.1"
-            value={speed}
-            onChange={(e) => updateSpeed(parseFloat(e.target.value))}
-            className="w-44"
-          />
-          <span className="text-sm font-semibold text-gray-900 w-10">
-            {speed.toFixed(1)}x
-          </span>
-        </div>
 
         <div className="flex items-center gap-4">
           <span className="text-sm font-medium text-gray-700">{status}</span>
