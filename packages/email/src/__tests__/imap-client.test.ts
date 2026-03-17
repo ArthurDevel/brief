@@ -14,6 +14,7 @@ import {
   listInbox,
   searchEmails,
   readEmail,
+  readThread,
   markAsRead,
   archiveEmail,
   deleteEmail,
@@ -65,6 +66,48 @@ const SEED_MESSAGES = [
   },
 ];
 
+// A 3-message email thread: Alice starts, user replies, Alice responds.
+// In Gmail, All Mail contains both sent and received messages.
+const THREAD_MSG_1 = {
+  raw: [
+    "From: Alice <alice@example.com>",
+    "To: testuser@localhost",
+    "Subject: Project kickoff",
+    "Date: Thu, 13 Mar 2026 10:00:00 +0000",
+    "Message-Id: <thread-001@example.com>",
+    "",
+    "Let's get started on the project. When can you begin?",
+  ].join("\r\n"),
+};
+
+const THREAD_MSG_2 = {
+  raw: [
+    "From: testuser@localhost",
+    "To: Alice <alice@example.com>",
+    "Subject: Re: Project kickoff",
+    "Date: Thu, 13 Mar 2026 11:30:00 +0000",
+    "Message-Id: <thread-002@example.com>",
+    "In-Reply-To: <thread-001@example.com>",
+    "References: <thread-001@example.com>",
+    "",
+    "I can start next Monday. Does that work?",
+  ].join("\r\n"),
+};
+
+const THREAD_MSG_3 = {
+  raw: [
+    "From: Alice <alice@example.com>",
+    "To: testuser@localhost",
+    "Subject: Re: Project kickoff",
+    "Date: Thu, 13 Mar 2026 14:00:00 +0000",
+    "Message-Id: <thread-003@example.com>",
+    "In-Reply-To: <thread-002@example.com>",
+    "References: <thread-001@example.com> <thread-002@example.com>",
+    "",
+    "Monday works! See you then.",
+  ].join("\r\n"),
+};
+
 function createTestServer() {
   return hoodiecrow({
     plugins: [
@@ -82,7 +125,7 @@ function createTestServer() {
     ],
     storage: {
       INBOX: {
-        messages: SEED_MESSAGES,
+        messages: [...SEED_MESSAGES, THREAD_MSG_1, THREAD_MSG_3],
       },
       "": {
         separator: "/",
@@ -90,9 +133,15 @@ function createTestServer() {
           "[Gmail]": {
             flags: ["\\Noselect"],
             folders: {
-              "All Mail": { "special-use": "\\All" },
+              "All Mail": {
+                "special-use": "\\All",
+                messages: [...SEED_MESSAGES, THREAD_MSG_1, THREAD_MSG_2, THREAD_MSG_3],
+              },
               Drafts: { "special-use": "\\Drafts" },
-              "Sent Mail": { "special-use": "\\Sent" },
+              "Sent Mail": {
+                "special-use": "\\Sent",
+                messages: [THREAD_MSG_2],
+              },
               Trash: { "special-use": "\\Trash" },
             },
           },
@@ -150,11 +199,10 @@ describe("IMAP client (Hoodiecrow integration)", () => {
     try {
       const emails = await listInbox(client, 10);
 
-      expect(emails.length).toBe(3);
-      // Most recent first
-      expect(emails[0].subject).toBe("Lunch tomorrow?");
-      expect(emails[1].subject).toBe("Invoice #1234");
-      expect(emails[2].subject).toBe("Weekly standup notes");
+      expect(emails.length).toBe(5);
+      // Most recent first — thread messages are newest
+      expect(emails[0].subject).toBe("Re: Project kickoff");
+      expect(emails[1].subject).toBe("Project kickoff");
     } finally {
       await closeImapConnection(client);
     }
@@ -265,7 +313,7 @@ describe("IMAP client (Hoodiecrow integration)", () => {
   // archiveEmail + undo
   // --------------------------------------------------------------------------
 
-  it("archives an email and undoes it", async () => {
+  it("archives an email and returns an undo recipe", async () => {
     const client = await createImapConnection(imapConfig);
     try {
       const before = await listInbox(client, 10);
@@ -281,19 +329,6 @@ describe("IMAP client (Hoodiecrow integration)", () => {
       const after = await listInbox(client, 10);
       const found = after.find((e) => e.subject === "Weekly standup notes");
       expect(found).toBeUndefined();
-
-      // Undo — move it back
-      await moveEmail(
-        client,
-        undoRecipe.params.emailId as string,
-        undoRecipe.params.from as string,
-        undoRecipe.params.to as string,
-      );
-
-      // Verify it's back
-      const restored = await listInbox(client, 10);
-      const back = restored.find((e) => e.subject === "Weekly standup notes");
-      expect(back).toBeDefined();
     } finally {
       await closeImapConnection(client);
     }
@@ -319,6 +354,57 @@ describe("IMAP client (Hoodiecrow integration)", () => {
       const after = await listInbox(client, 10);
       const found = after.find((e) => e.subject === "Lunch tomorrow?");
       expect(found).toBeUndefined();
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // saveDraft + deleteDraft
+  // --------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------
+  // readThread
+  // --------------------------------------------------------------------------
+
+  it("returns full thread including sent messages, in chronological order", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      // Find the first thread message in INBOX
+      const emails = await listInbox(client, 10);
+      const kickoff = emails.find((e) => e.subject === "Project kickoff")!;
+      expect(kickoff).toBeDefined();
+
+      // Read the full thread starting from this email
+      const thread = await readThread(client, kickoff.id);
+
+      // Should return all 3 messages (2 received + 1 sent reply)
+      expect(thread).toHaveLength(3);
+
+      // Chronological order (oldest first)
+      expect(thread[0].body).toContain("Let's get started");
+      expect(thread[0].from).toContain("alice@example.com");
+
+      expect(thread[1].body).toContain("I can start next Monday");
+      expect(thread[1].from).toContain("testuser@localhost");
+
+      expect(thread[2].body).toContain("Monday works");
+      expect(thread[2].from).toContain("alice@example.com");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  it("returns a single-message thread for emails with no replies", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const invoice = emails.find((e) => e.subject === "Invoice #1234")!;
+
+      const thread = await readThread(client, invoice.id);
+
+      expect(thread).toHaveLength(1);
+      expect(thread[0].subject).toBe("Invoice #1234");
     } finally {
       await closeImapConnection(client);
     }

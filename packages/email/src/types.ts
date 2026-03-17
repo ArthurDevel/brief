@@ -54,3 +54,13 @@ export interface Email {
   date: string;
   isRead: boolean;
 }
+
+/** A single message within a thread, returned in chronological order. */
+export interface ThreadMessage {
+  id: string;
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  date: string;
+}
