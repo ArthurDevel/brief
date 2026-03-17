@@ -3,7 +3,9 @@ supabase
 python-dotenv
 fastapi
 uvicorn
+python-multipart
 websockets
 aiosmtplib
 imapclient
 bcrypt
+pyright

@@ -163,7 +163,8 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
     }
   }
   if (body.pin) {
-    upsertData.pin_hash = body.pin;
+    const bcrypt = await import("bcryptjs");
+    upsertData.pin_hash = await bcrypt.hash(body.pin, 10);
     upsertData.pin_locked = false;
     upsertData.pin_attempts = 0;
   }

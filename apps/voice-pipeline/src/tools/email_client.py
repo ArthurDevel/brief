@@ -25,7 +25,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.message import EmailMessage
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 
 import aiosmtplib
 from imapclient import IMAPClient
@@ -166,7 +166,7 @@ def list_inbox(client: IMAPClient, limit: int) -> list[EmailSummary]:
     client.select_folder("INBOX", readonly=True)
 
     # Get all message UIDs, sorted newest first
-    all_uids = client.search(["ALL"])
+    all_uids = client.search(["ALL"])  # type: ignore[arg-type]
     if not all_uids:
         return []
 
@@ -178,13 +178,13 @@ def list_inbox(client: IMAPClient, limit: int) -> list[EmailSummary]:
 
     messages: list[EmailSummary] = []
     for uid, data in fetch_data.items():
-        envelope = data.get(b"ENVELOPE")
+        envelope: Any = data.get(b"ENVELOPE")
         if not envelope:
             continue
 
         # Extract body snippet from partial fetch
         body_key = _find_body_key(data)
-        raw_body = data.get(body_key, b"") if body_key else b""
+        raw_body: bytes = data.get(body_key, b"") if body_key else b""  # type: ignore[assignment]
         snippet = _extract_snippet(raw_body)
 
         messages.append(EmailSummary(
@@ -215,7 +215,7 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
     client.select_folder("INBOX", readonly=True)
 
     # IMAP OR search on subject + from
-    uids = client.search(["OR", "SUBJECT", query, "FROM", query])
+    uids = client.search(["OR", "SUBJECT", query, "FROM", query])  # type: ignore[arg-type]
     if not uids:
         return []
 
@@ -223,12 +223,12 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
 
     messages: list[EmailSummary] = []
     for uid, data in fetch_data.items():
-        envelope = data.get(b"ENVELOPE")
+        envelope: Any = data.get(b"ENVELOPE")
         if not envelope:
             continue
 
         body_key = _find_body_key(data)
-        raw_body = data.get(body_key, b"") if body_key else b""
+        raw_body: bytes = data.get(body_key, b"") if body_key else b""  # type: ignore[assignment]
         snippet = _extract_snippet(raw_body)
 
         messages.append(EmailSummary(
@@ -266,12 +266,12 @@ def read_email(client: IMAPClient, email_id: str) -> Email:
         raise RuntimeError(f"Email with UID {email_id} not found")
 
     data = fetch_data[uid]
-    envelope = data.get(b"ENVELOPE")
+    envelope: Any = data.get(b"ENVELOPE")
     if not envelope:
         raise RuntimeError(f"Email with UID {email_id} has no envelope data")
 
-    flags = data.get(b"FLAGS", ())
-    raw_source = data.get(b"RFC822", b"")
+    flags: tuple = data.get(b"FLAGS", ())  # type: ignore[assignment]
+    raw_source: bytes = data.get(b"RFC822", b"")  # type: ignore[assignment]
     body = _extract_body(raw_source)
 
     return Email(

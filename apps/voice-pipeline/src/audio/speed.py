@@ -328,6 +328,7 @@ class AudioSpeedProcessor(FrameProcessor):
 
         if isinstance(frame, TTSAudioRawFrame) and self._config.get("speed", 1.0) != 1.0:
             self._ensure_streamer(frame.sample_rate, frame.num_channels)
+            assert self._streamer is not None
             processed_audio = self._streamer.process(frame.audio)
             if processed_audio:
                 new_frame = TTSAudioRawFrame(
