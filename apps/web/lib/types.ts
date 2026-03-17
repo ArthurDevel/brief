@@ -27,6 +27,7 @@ export interface UserSettings {
   smtpUser: string;
   hasSmtpPassword: boolean;
   voicePreference: string;
+  voiceSpeed: number;
   toolApprovalConfig: ToolApprovalConfig;
   phoneNumber: string | null;
   hasPin: boolean;
@@ -43,6 +44,7 @@ export interface UserSettingsUpdate {
   smtpUser: string;
   smtpPassword?: string;
   voicePreference: string;
+  voiceSpeed: number;
   toolApprovalConfig: ToolApprovalConfig;
   pin?: string;
 }

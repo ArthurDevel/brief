@@ -43,7 +43,6 @@ PRICING = PricingConstants()
 # ============================================================================
 
 LLM_MODEL = "google/gemini-3-flash-preview"
-TTS_VOICE = "aura-2-helena-en"
 
 
 @dataclass

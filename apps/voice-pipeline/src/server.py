@@ -68,7 +68,7 @@ TWILIO_PIPELINE_SAMPLE_RATE = 16000
 DEFAULT_SPEED = 1.5
 
 # Shared mutable config -- updated by the speed API, read by AudioSpeedProcessor
-_speed_config: dict[str, float] = {"speed": DEFAULT_SPEED}
+_speed_config: dict[str, float] = {"speed": DEFAULT_SPEED}  # Overridden per-session from user settings
 
 
 # ============================================================================
@@ -108,6 +108,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
     }
 
     try:
+        _speed_config["speed"] = user_context.voice_speed
         audio_config = {
             "sample_rate": 16000,
             "num_channels": 1,
