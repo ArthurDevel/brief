@@ -102,6 +102,7 @@ class TwilioInputTransport(BaseInputTransport):
             frame: The pipeline start frame with audio configuration.
         """
         await super().start(frame)
+        await self.set_transport_ready(frame)
         self._receive_task = self.create_task(self._read_loop())
 
     async def stop(self, frame: EndFrame) -> None:
@@ -227,6 +228,8 @@ class TwilioOutputTransport(BaseOutputTransport):
         await super().start(frame)
         await self.set_transport_ready(frame)
 
+    _audio_log_once = False
+
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
         """Transcode a PCM16 frame to mulaw and send as Twilio JSON.
 
@@ -236,6 +239,13 @@ class TwilioOutputTransport(BaseOutputTransport):
         Returns:
             True if the frame was sent successfully, False otherwise.
         """
+        if not TwilioOutputTransport._audio_log_once:
+            TwilioOutputTransport._audio_log_once = True
+            logger.info(
+                "[twilio] First audio frame: streamSid=%s, sample_rate=%s, audio_len=%d",
+                self._transport.stream_sid, frame.sample_rate, len(frame.audio),
+            )
+
         if self._websocket.client_state != WebSocketState.CONNECTED:
             return False
 

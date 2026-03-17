@@ -11,6 +11,7 @@ Port of apps/voice-gateway/src/twilio-handler.ts.
 
 import logging
 from datetime import datetime, timezone
+from typing import Any, cast
 from urllib.parse import quote
 
 import bcrypt
@@ -55,9 +56,10 @@ def lookup_user_by_phone(phone: str, supabase: Client) -> dict | None:
         logger.info("[twilio_auth] No user found for %s", phone)
         return None
 
+    data = cast(dict[str, Any], response.data)
     return {
-        "user_id": response.data["user_id"],
-        "pin_locked": response.data.get("pin_locked", False),
+        "user_id": data["user_id"],
+        "pin_locked": data.get("pin_locked", False),
     }
 
 
@@ -102,8 +104,9 @@ def check_usage_limit(user_id: str, supabase: Client) -> bool:
     )
 
     plan = "free"
-    if sub_response.data:
-        plan = sub_response.data[0].get("plan", "free")
+    sub_data = cast(list[dict[str, Any]], sub_response.data or [])
+    if sub_data:
+        plan = sub_data[0].get("plan", "free")
     hours_limit = PLAN_HOURS.get(plan, 1)
 
     # Sum session durations for the current calendar month
@@ -119,7 +122,7 @@ def check_usage_limit(user_id: str, supabase: Client) -> bool:
         .execute()
     )
 
-    rows = usage_response.data or []
+    rows = cast(list[dict[str, Any]], usage_response.data or [])
     total_seconds = sum(row.get("duration_seconds", 0) for row in rows)
     hours_used = total_seconds / SECONDS_PER_HOUR
 

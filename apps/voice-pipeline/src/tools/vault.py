@@ -36,7 +36,7 @@ def retrieve_secret(supabase: Client, secret_id: str) -> str:
     if response.data is None:
         raise RuntimeError(f'Secret "{secret_id}" not found or empty')
 
-    return response.data
+    return str(response.data)
 
 
 def store_secret(supabase: Client, secret: str, name: str) -> str:
@@ -61,4 +61,4 @@ def store_secret(supabase: Client, secret: str, name: str) -> str:
     if response.data is None:
         raise RuntimeError(f'Failed to store secret "{name}"')
 
-    return response.data
+    return str(response.data)

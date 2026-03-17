@@ -18,7 +18,7 @@ import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
@@ -280,7 +280,7 @@ async def webrtc_start(request: Request) -> JSONResponse:
 @app.post("/sessions/{session_id}/api/offer")
 async def webrtc_offer(
     session_id: str, request: Request, background_tasks: BackgroundTasks
-) -> dict:
+) -> Response:
     """Handle WebRTC SDP offer, return SDP answer."""
     active_session = _active_sessions.get(session_id)
     if active_session is None:
@@ -302,15 +302,16 @@ async def webrtc_offer(
         body = webrtc_request.request_data or {}
         background_tasks.add_task(_webrtc_bot, connection, body)
 
+    assert _webrtc_handler is not None
     answer = await _webrtc_handler.handle_web_request(
         request=webrtc_request,
         webrtc_connection_callback=connection_callback,
     )
-    return answer
+    return JSONResponse(content=answer)
 
 
 @app.patch("/sessions/{session_id}/api/offer")
-async def webrtc_ice_candidate(session_id: str, request: Request) -> JSONResponse:
+async def webrtc_ice_candidate(session_id: str, request: Request) -> Response:
     """Handle WebRTC ICE candidate."""
     if session_id not in _active_sessions:
         return Response(content="Invalid session_id", status_code=404)
@@ -322,6 +323,7 @@ async def webrtc_ice_candidate(session_id: str, request: Request) -> JSONRespons
         pc_id=request_data["pc_id"],
         candidates=[IceCandidate(**c) for c in request_data.get("candidates", [])],
     )
+    assert _webrtc_handler is not None
     await _webrtc_handler.handle_patch_request(patch_request)
     return JSONResponse({"status": "success"})
 
@@ -338,7 +340,7 @@ async def twilio_voice(request: Request) -> Response:
     returns TwiML Gather for PIN or rejection.
     """
     form = await request.form()
-    caller_phone = form.get("From", "")
+    caller_phone = str(form.get("From", ""))
 
     settings = load_settings()
     supabase = create_service_client(settings)
@@ -371,7 +373,7 @@ async def twilio_voice(request: Request) -> Response:
 async def twilio_verify_pin(request: Request) -> Response:
     """Verify the caller's PIN and connect to the media stream."""
     form = await request.form()
-    digits = form.get("Digits", "")
+    digits = str(form.get("Digits", ""))
     user_id = request.query_params.get("userId", "")
     attempt = int(request.query_params.get("attempt", "1"))
 
@@ -390,11 +392,12 @@ async def twilio_verify_pin(request: Request) -> Response:
         .execute()
     )
 
-    if pin_response.data is None or not pin_response.data.get("pin_hash"):
+    pin_data = cast(dict[str, Any], pin_response.data) if pin_response.data is not None else None
+    if pin_data is None or not pin_data.get("pin_hash"):
         twiml = build_twiml_reject("PIN not configured. Goodbye.")
         return Response(content=twiml, media_type="text/xml")
 
-    pin_hash = pin_response.data["pin_hash"]
+    pin_hash = str(pin_data["pin_hash"])
 
     if verify_pin(digits, pin_hash):
         stream_url = f"wss://{request.url.hostname}/twilio-stream"

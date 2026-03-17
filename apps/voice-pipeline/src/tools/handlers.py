@@ -20,7 +20,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from supabase import Client
 
@@ -142,7 +142,7 @@ def execute_action(
     if response.data is None:
         raise RuntimeError(f"Action {action_id} not found")
 
-    action = response.data
+    action = cast(dict[str, Any], response.data)
 
     if action["status"] not in ("pending", "approved"):
         raise RuntimeError(
@@ -220,7 +220,7 @@ def undo_action(
     if response.data is None:
         return UndoResult(success=False, message=f"Action {action_id} not found")
 
-    action = response.data
+    action = cast(dict[str, Any], response.data)
 
     if action["status"] != "executed":
         return UndoResult(
@@ -228,7 +228,7 @@ def undo_action(
             message=f'Action {action_id} cannot be undone -- status is "{action["status"]}"',
         )
 
-    undo_recipe_data = action.get("undo_recipe")
+    undo_recipe_data = cast(dict[str, Any] | None, action.get("undo_recipe"))
     if not undo_recipe_data:
         return UndoResult(success=False, message=f"Action {action_id} is not undoable")
 
@@ -239,7 +239,7 @@ def undo_action(
 
     # Check undo deadline
     if action.get("undo_deadline"):
-        deadline = datetime.fromisoformat(action["undo_deadline"])
+        deadline = datetime.fromisoformat(str(action["undo_deadline"]))
         if datetime.now(timezone.utc) > deadline:
             return UndoResult(
                 success=False,
@@ -296,7 +296,8 @@ def _insert_pending_action(input: ActionInput, supabase: Client) -> ActionResult
     if not response.data:
         raise RuntimeError("Failed to insert pending action: no data returned")
 
-    action_id = response.data[0]["id"]
+    data = cast(list[dict[str, Any]], response.data)
+    action_id = data[0]["id"]
 
     return ActionResult(
         action_id=action_id,
@@ -362,7 +363,8 @@ def _execute_and_store(
     if not response.data:
         raise RuntimeError("Failed to insert executed action: no data returned")
 
-    action_id = response.data[0]["id"]
+    data = cast(list[dict[str, Any]], response.data)
+    action_id = data[0]["id"]
 
     return ActionResult(
         action_id=action_id,
@@ -562,7 +564,8 @@ def _handle_save_memory(
     if not response.data:
         raise RuntimeError("Failed to save memory: no data returned")
 
-    memory_id = response.data[0]["id"]
+    data = cast(list[dict[str, Any]], response.data)
+    memory_id = data[0]["id"]
 
     return (
         {"saved": True, "id": memory_id},
@@ -595,7 +598,8 @@ def _handle_feature_request(
     if not response.data:
         raise RuntimeError("Failed to submit feature request: no data returned")
 
-    request_id = response.data[0]["id"]
+    data = cast(list[dict[str, Any]], response.data)
+    request_id = data[0]["id"]
 
     return (
         {"submitted": True, "id": request_id},
