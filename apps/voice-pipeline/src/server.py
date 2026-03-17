@@ -48,6 +48,9 @@ from src.auth.twilio_auth import (
 )
 from src.config import load_settings
 from src.cost_tracker import CostTracker
+from src.langfuse_client import shutdown_langfuse_client
+from src.langfuse_observer import LangfuseObserver
+from src.tracked_services import UsageTracker
 from src.pipeline import create_pipeline
 from src.session import end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
@@ -84,7 +87,7 @@ _webrtc_handler: SmallWebRTCRequestHandler | None = None
 # BOT HANDLER (shared by WebRTC and Twilio)
 # ============================================================================
 
-async def _setup_pipeline_session(transport, user_context, settings, supabase):
+async def _setup_pipeline_session(transport, user_context, settings, supabase, transport_type):
     """Set up a pipeline session: create session, IMAP connection, cost tracker, and pipeline task.
 
     Args:
@@ -92,9 +95,13 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase):
         user_context: Loaded user context with IMAP/SMTP config.
         settings: App settings.
         supabase: Supabase client.
+        transport_type: "webrtc" or "twilio".
     """
     session = start_session(user_context.user_id, supabase)
-    cost_tracker = CostTracker()
+    usage_tracker = UsageTracker()
+    cost_tracker = CostTracker(usage_tracker)
+    langfuse_observer = LangfuseObserver(session, transport_type, voice=user_context.voice_preference)
+    langfuse_observer.start_trace()
 
     imap_client = create_imap_connection(user_context.imap_config)
     imap_holder = {
@@ -115,13 +122,15 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase):
             user_context=user_context,
             session=session,
             cost_tracker=cost_tracker,
+            langfuse_observer=langfuse_observer,
+            usage_tracker=usage_tracker,
             audio_config=audio_config,
             supabase=supabase,
             settings=settings,
             imap_holder=imap_holder,
         )
 
-        return task, session, cost_tracker, imap_holder
+        return task, session, cost_tracker, langfuse_observer, imap_holder
 
     except Exception:
         try:
@@ -131,14 +140,18 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase):
         raise
 
 
-def _cleanup_session(imap_holder, cost_tracker, session, supabase) -> None:
+async def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase, settings) -> None:
     """Clean up after a pipeline session ends.
+
+    Fetches actual LLM costs from OpenRouter before finalizing the session.
 
     Args:
         imap_holder: Mutable IMAP client holder.
         cost_tracker: Cost tracker for the session.
+        langfuse_observer: Langfuse observer for the session.
         session: Active session to finalize.
         supabase: Supabase client.
+        settings: App settings (for OpenRouter API key).
     """
     try:
         close_imap_connection(imap_holder["client"])
@@ -146,7 +159,9 @@ def _cleanup_session(imap_holder, cost_tracker, session, supabase) -> None:
         logger.warning("[server] Error closing IMAP connection: %s", exc)
 
     try:
+        await cost_tracker.fetch_llm_costs(settings.openrouter_api_key)
         cost_summary = cost_tracker.get_summary()
+        langfuse_observer.end_trace(cost_summary)
         end_session(session, cost_summary, supabase)
     except Exception as exc:
         logger.error("[server] Error ending session: %s", exc)
@@ -190,8 +205,8 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         ),
     )
 
-    task, session, cost_tracker, imap_holder = await _setup_pipeline_session(
-        transport, user_context, settings, supabase
+    task, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
+        transport, user_context, settings, supabase, transport_type="webrtc"
     )
 
     @transport.event_handler("on_client_connected")
@@ -208,7 +223,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        _cleanup_session(imap_holder, cost_tracker, session, supabase)
+        await _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase, settings)
 
 
 # ============================================================================
@@ -217,11 +232,12 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage app lifecycle: initialize and clean up WebRTC handler."""
+    """Manage app lifecycle: initialize and clean up WebRTC handler and Langfuse."""
     global _webrtc_handler
     _webrtc_handler = SmallWebRTCRequestHandler()
     yield
     await _webrtc_handler.close()
+    shutdown_langfuse_client()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -473,8 +489,8 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         buffered_messages=buffered_messages,
     )
 
-    task, session, cost_tracker, imap_holder = await _setup_pipeline_session(
-        transport, user_context, settings, supabase
+    task, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
+        transport, user_context, settings, supabase, transport_type="twilio"
     )
 
     async def _send_greeting():
@@ -487,7 +503,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        _cleanup_session(imap_holder, cost_tracker, session, supabase)
+        await _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase, settings)
 
 
 # ============================================================================

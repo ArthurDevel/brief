@@ -85,8 +85,7 @@ for i in $(seq 1 30); do
 done
 
 if [[ -z "$TUNNEL_URL" ]]; then
-  echo "ERROR: Could not get tunnel URL after 30s. cloudflared log:" >&2
-  cat "$TUNNEL_LOG" >&2
+  echo "Failed to start Cloudflare tunnel (trycloudflare.com may be down)." >&2
   exit 1
 fi
 
