@@ -18,7 +18,7 @@ import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
@@ -289,7 +289,7 @@ async def webrtc_start(request: Request) -> JSONResponse:
 @app.post("/sessions/{session_id}/api/offer")
 async def webrtc_offer(
     session_id: str, request: Request, background_tasks: BackgroundTasks
-) -> dict:
+) -> Response:
     """Handle WebRTC SDP offer, return SDP answer."""
     active_session = _active_sessions.get(session_id)
     if active_session is None:
@@ -311,15 +311,16 @@ async def webrtc_offer(
         body = webrtc_request.request_data or {}
         background_tasks.add_task(_webrtc_bot, connection, body)
 
+    assert _webrtc_handler is not None
     answer = await _webrtc_handler.handle_web_request(
         request=webrtc_request,
         webrtc_connection_callback=connection_callback,
     )
-    return answer
+    return JSONResponse(content=answer)
 
 
 @app.patch("/sessions/{session_id}/api/offer")
-async def webrtc_ice_candidate(session_id: str, request: Request) -> JSONResponse:
+async def webrtc_ice_candidate(session_id: str, request: Request) -> Response:
     """Handle WebRTC ICE candidate."""
     if session_id not in _active_sessions:
         return Response(content="Invalid session_id", status_code=404)
@@ -331,6 +332,7 @@ async def webrtc_ice_candidate(session_id: str, request: Request) -> JSONRespons
         pc_id=request_data["pc_id"],
         candidates=[IceCandidate(**c) for c in request_data.get("candidates", [])],
     )
+    assert _webrtc_handler is not None
     await _webrtc_handler.handle_patch_request(patch_request)
     return JSONResponse({"status": "success"})
 
@@ -347,7 +349,7 @@ async def twilio_voice(request: Request) -> Response:
     returns TwiML Gather for PIN or rejection.
     """
     form = await request.form()
-    caller_phone = form.get("From", "")
+    caller_phone = str(form.get("From", ""))
 
     settings = load_settings()
     supabase = create_service_client(settings)
@@ -359,33 +361,34 @@ async def twilio_voice(request: Request) -> Response:
     if user_record is None:
         logger.info("[twilio] Unknown caller %s, rejecting", caller_phone)
         twiml = build_twiml_reject("This phone number is not registered. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     if user_record["pin_locked"]:
         logger.info("[twilio] Account locked for user %s", user_record["user_id"])
         twiml = build_twiml_reject("Your account is locked. Please contact support. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     if not check_usage_limit(user_record["user_id"], supabase):
         logger.info("[twilio] Usage limit exceeded for user %s", user_record["user_id"])
         twiml = build_twiml_reject("You have reached your monthly call limit. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     twiml = build_twiml_gather_pin(user_record["user_id"], attempt=1)
-    return Response(content=twiml, media_type="application/xml")
+    logger.info("[twilio] Returning TwiML:\n%s", twiml)
+    return Response(content=twiml, media_type="text/xml")
 
 
 @app.post("/twilio/verify-pin")
 async def twilio_verify_pin(request: Request) -> Response:
     """Verify the caller's PIN and connect to the media stream."""
     form = await request.form()
-    digits = form.get("Digits", "")
+    digits = str(form.get("Digits", ""))
     user_id = request.query_params.get("userId", "")
     attempt = int(request.query_params.get("attempt", "1"))
 
     if not user_id:
         twiml = build_twiml_reject("Authentication error. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     settings = load_settings()
     supabase = create_service_client(settings)
@@ -398,24 +401,25 @@ async def twilio_verify_pin(request: Request) -> Response:
         .execute()
     )
 
-    if pin_response.data is None or not pin_response.data.get("pin_hash"):
+    pin_data = cast(dict[str, Any], pin_response.data) if pin_response.data is not None else None
+    if pin_data is None or not pin_data.get("pin_hash"):
         twiml = build_twiml_reject("PIN not configured. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
-    pin_hash = pin_response.data["pin_hash"]
+    pin_hash = str(pin_data["pin_hash"])
 
     if verify_pin(digits, pin_hash):
-        stream_url = f"wss://{request.url.hostname}/twilio-stream?userId={user_id}"
+        stream_url = f"wss://{request.url.hostname}/twilio-stream"
 
         public_url = settings.public_url
         if public_url and public_url != f"http://localhost:{settings.port}":
             ws_scheme = "wss" if public_url.startswith("https") else "ws"
             host = public_url.split("://", 1)[1].rstrip("/")
-            stream_url = f"{ws_scheme}://{host}/twilio-stream?userId={user_id}"
+            stream_url = f"{ws_scheme}://{host}/twilio-stream"
 
         logger.info("[twilio] PIN verified for user %s, connecting stream", user_id)
-        twiml = build_twiml_connect(stream_url)
-        return Response(content=twiml, media_type="application/xml")
+        twiml = build_twiml_connect(stream_url, user_id)
+        return Response(content=twiml, media_type="text/xml")
 
     next_attempt = attempt + 1
     if next_attempt > MAX_PIN_ATTEMPTS:
@@ -425,21 +429,39 @@ async def twilio_verify_pin(request: Request) -> Response:
 
         logger.info("[twilio] Max PIN attempts reached, locking user %s", user_id)
         twiml = build_twiml_reject("Too many incorrect attempts. Your account has been locked. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     logger.info("[twilio] Incorrect PIN for user %s, attempt %d", user_id, attempt)
     twiml = build_twiml_gather_pin(user_id, attempt=next_attempt)
-    return Response(content=twiml, media_type="application/xml")
+    return Response(content=twiml, media_type="text/xml")
 
 
 @app.websocket("/twilio-stream")
 async def twilio_stream_ws(websocket: WebSocket) -> None:
-    """Handle Twilio media stream WebSocket connections."""
+    """Handle Twilio media stream WebSocket connections.
+
+    userId is passed via <Parameter> in TwiML. Twilio delivers it in
+    the "start" event's customParameters. We intercept the first messages
+    to extract it, then replay them into a queue so the TwilioTransport
+    read loop still sees them.
+    """
     await websocket.accept()
 
-    user_id = websocket.query_params.get("userId", "")
+    # Buffer early messages so the transport can replay them
+    buffered_messages: list[str] = []
+    user_id = ""
+
+    for _ in range(5):
+        raw = await websocket.receive_text()
+        buffered_messages.append(raw)
+        msg = json.loads(raw)
+        if msg.get("event") == "start":
+            custom_params = msg.get("start", {}).get("customParameters", {})
+            user_id = custom_params.get("userId", "")
+            break
+
     if not user_id:
-        logger.error("[twilio] No userId in WebSocket query params")
+        logger.error("[twilio] No userId in stream start message")
         await websocket.close(code=1008, reason="Missing userId")
         return
 
@@ -457,6 +479,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
             audio_out_enabled=True,
         ),
         pipeline_sample_rate=TWILIO_PIPELINE_SAMPLE_RATE,
+        buffered_messages=buffered_messages,
     )
 
     task, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
@@ -470,7 +493,8 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
     asyncio.create_task(_send_greeting())
 
     try:
-        await task.run()
+        runner = PipelineRunner(handle_sigint=False)
+        await runner.run(task)
     finally:
         _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase)
 

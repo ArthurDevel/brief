@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from supabase import Client
 
@@ -126,7 +126,8 @@ def start_session(user_id: str, supabase: Client) -> ActiveSession:
     if not response.data:
         raise RuntimeError("Failed to create session: no data returned")
 
-    session_id = response.data[0]["id"]
+    data = cast(list[dict[str, Any]], response.data)
+    session_id = data[0]["id"]
 
     logger.info("[session] Started session %s for user %s", session_id, user_id)
 
@@ -244,7 +245,7 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
     if settings_response.data is None:
         raise RuntimeError(f"User settings not found for {user_id}")
 
-    settings = settings_response.data
+    settings = cast(dict[str, Any], settings_response.data)
 
     # Validate credential references exist
     if not settings.get("imap_password_secret_id"):
@@ -268,31 +269,34 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
     if memory_response.data is None:
         raise RuntimeError(f"Failed to load memory for {user_id}")
 
+    memory_rows = cast(list[dict[str, Any]], memory_response.data)
     memory_entries = [
-        MemoryEntry(id=row["id"], content=row["content"])
-        for row in memory_response.data
+        MemoryEntry(id=str(row["id"]), content=str(row["content"]))
+        for row in memory_rows
     ]
 
     imap_config = ImapConfig(
-        host=settings["imap_host"],
-        port=settings["imap_port"],
-        user=settings["imap_user"],
+        host=str(settings["imap_host"]),
+        port=int(settings["imap_port"]),
+        user=str(settings["imap_user"]),
         password=imap_password,
     )
 
     smtp_config = SmtpConfig(
-        host=settings["smtp_host"],
-        port=settings["smtp_port"],
-        user=settings["smtp_user"],
+        host=str(settings["smtp_host"]),
+        port=int(settings["smtp_port"]),
+        user=str(settings["smtp_user"]),
         password=smtp_password,
     )
+
+    voice_config = cast(dict[str, Any], settings.get("voice_config") or {})
 
     return UserContext(
         user_id=user_id,
         imap_config=imap_config,
         smtp_config=smtp_config,
-        voice_preference=(settings.get("voice_config") or {}).get("voice", "aura-2-helena-en"),
-        voice_speed=float((settings.get("voice_config") or {}).get("speed", 1.0)),
-        tool_approval_config=settings.get("tool_approval_config") or {},
+        voice_preference=str(voice_config.get("voice", "aura-2-helena-en")),
+        voice_speed=float(voice_config.get("speed", 1.0)),
+        tool_approval_config=cast(dict[str, str], settings.get("tool_approval_config") or {}),
         memory_entries=memory_entries,
     )

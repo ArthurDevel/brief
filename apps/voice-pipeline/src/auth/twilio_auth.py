@@ -11,6 +11,7 @@ Port of apps/voice-gateway/src/twilio-handler.ts.
 
 import logging
 from datetime import datetime, timezone
+from typing import Any, cast
 from urllib.parse import quote
 
 import bcrypt
@@ -55,9 +56,10 @@ def lookup_user_by_phone(phone: str, supabase: Client) -> dict | None:
         logger.info("[twilio_auth] No user found for %s", phone)
         return None
 
+    data = cast(dict[str, Any], response.data)
     return {
-        "user_id": response.data["user_id"],
-        "pin_locked": response.data.get("pin_locked", False),
+        "user_id": data["user_id"],
+        "pin_locked": data.get("pin_locked", False),
     }
 
 
@@ -91,18 +93,21 @@ def check_usage_limit(user_id: str, supabase: Client) -> bool:
     Returns:
         True if the user can start a new call, False if limit exceeded.
     """
-    # Get the user's plan hours limit
+    # Get the user's plan and derive hours limit
+    PLAN_HOURS = {"free": 1, "pro": 10}
+
     sub_response = (
         supabase.table("subscriptions")
-        .select("hours_limit")
+        .select("plan")
         .eq("user_id", user_id)
-        .single()
         .execute()
     )
 
-    hours_limit = 1  # default free plan
-    if sub_response.data is not None:
-        hours_limit = sub_response.data.get("hours_limit", 1)
+    plan = "free"
+    sub_data = cast(list[dict[str, Any]], sub_response.data or [])
+    if sub_data:
+        plan = sub_data[0].get("plan", "free")
+    hours_limit = PLAN_HOURS.get(plan, 1)
 
     # Sum session durations for the current calendar month
     now = datetime.now(timezone.utc)
@@ -117,7 +122,7 @@ def check_usage_limit(user_id: str, supabase: Client) -> bool:
         .execute()
     )
 
-    rows = usage_response.data or []
+    rows = cast(list[dict[str, Any]], usage_response.data or [])
     total_seconds = sum(row.get("duration_seconds", 0) for row in rows)
     hours_used = total_seconds / SECONDS_PER_HOUR
 
@@ -138,8 +143,8 @@ def build_twiml_gather_pin(user_id: str, attempt: int) -> str:
     Returns:
         TwiML XML string.
     """
-    message = "Please enter your pin." if attempt == 1 else "Incorrect pin. Please try again."
-    action_url = f"/twilio/verify-pin?userId={quote(user_id)}&attempt={attempt}"
+    message = "Please enter your pin, then press pound." if attempt == 1 else "Incorrect pin. Please try again."
+    action_url = f"/twilio/verify-pin?userId={quote(user_id)}&amp;attempt={attempt}"
 
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -152,11 +157,12 @@ def build_twiml_gather_pin(user_id: str, attempt: int) -> str:
     )
 
 
-def build_twiml_connect(stream_url: str) -> str:
+def build_twiml_connect(stream_url: str, user_id: str) -> str:
     """Build TwiML XML that starts a bidirectional media stream.
 
     Args:
         stream_url: WebSocket URL for the media stream connection.
+        user_id: User ID to pass as a custom parameter.
 
     Returns:
         TwiML XML string.
@@ -166,7 +172,9 @@ def build_twiml_connect(stream_url: str) -> str:
         "<Response>\n"
         "  <Say>Connected. How can I help you with your email?</Say>\n"
         "  <Connect>\n"
-        f'    <Stream url="{stream_url}" />\n'
+        f'    <Stream url="{stream_url}">\n'
+        f'      <Parameter name="userId" value="{user_id}" />\n'
+        "    </Stream>\n"
         "  </Connect>\n"
         "</Response>"
     )

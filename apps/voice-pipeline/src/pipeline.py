@@ -132,14 +132,14 @@ def create_pipeline(
 
     tools = get_tool_definitions()
 
-    messages = [{"role": "system", "content": system_prompt}]
-    context = OpenAILLMContext(messages=messages, tools=tools)
+    messages: list[Any] = [{"role": "system", "content": system_prompt}]
+    context = OpenAILLMContext(messages=messages, tools=tools)  # type: ignore[arg-type]
 
     # SmartTurn v3 requires 16kHz audio (breaks silently at 8kHz/Twilio).
     # Use it for WebRTC, fall back to basic aggregator for Twilio.
     if sample_rate >= 16000:
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-            context,
+            context,  # type: ignore[arg-type]
             user_params=LLMUserAggregatorParams(
                 user_turn_strategies=UserTurnStrategies(
                     stop=[TurnAnalyzerUserTurnStopStrategy(
@@ -190,8 +190,6 @@ def create_pipeline(
         params=PipelineParams(
             audio_in_sample_rate=sample_rate,
             audio_out_sample_rate=sample_rate,
-            vad_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(),
             allow_interruptions=True,
             enable_metrics=True,
             observers=[cost_tracker, langfuse_observer],

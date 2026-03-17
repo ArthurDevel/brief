@@ -102,6 +102,7 @@ class TwilioInputTransport(BaseInputTransport):
             frame: The pipeline start frame with audio configuration.
         """
         await super().start(frame)
+        await self.set_transport_ready(frame)
         self._receive_task = self.create_task(self._read_loop())
 
     async def stop(self, frame: EndFrame) -> None:
@@ -135,34 +136,15 @@ class TwilioInputTransport(BaseInputTransport):
         - "stop": signals end of the media stream
         """
         try:
+            # Process any buffered messages first (from userId extraction)
+            for raw in self._transport.buffered_messages:
+                await self._handle_message(raw)
+            self._transport.buffered_messages.clear()
+
             while True:
                 raw = await self._websocket.receive_text()
-                message = json.loads(raw)
-                event = message.get("event")
-
-                if event == "start":
-                    stream_sid = message.get("start", {}).get("streamSid", "")
-                    self._transport.stream_sid = stream_sid
-                    logger.info("[twilio] Stream started, streamSid=%s", stream_sid)
-
-                elif event == "media":
-                    payload_b64 = message.get("media", {}).get("payload", "")
-                    if not payload_b64:
-                        continue
-
-                    # Decode base64 -> mulaw bytes -> PCM16 at pipeline rate
-                    mulaw_bytes = base64.b64decode(payload_b64)
-                    pcm16_bytes = mulaw_to_pcm16(mulaw_bytes, self._transport.pipeline_sample_rate)
-
-                    frame = InputAudioRawFrame(
-                        audio=pcm16_bytes,
-                        sample_rate=self._transport.pipeline_sample_rate,
-                        num_channels=1,
-                    )
-                    await self.push_audio_frame(frame)
-
-                elif event == "stop":
-                    logger.info("[twilio] Stream stopped")
+                should_stop = await self._handle_message(raw)
+                if should_stop:
                     break
 
         except asyncio.CancelledError:
@@ -172,6 +154,40 @@ class TwilioInputTransport(BaseInputTransport):
 
         # Signal pipeline to shut down
         await self.push_frame(EndFrame())
+
+    async def _handle_message(self, raw: str) -> bool:
+        """Process a single Twilio WebSocket message.
+
+        Returns True if the stream should stop.
+        """
+        message = json.loads(raw)
+        event = message.get("event")
+
+        if event == "start":
+            stream_sid = message.get("start", {}).get("streamSid", "")
+            self._transport.stream_sid = stream_sid
+            logger.info("[twilio] Stream started, streamSid=%s", stream_sid)
+
+        elif event == "media":
+            payload_b64 = message.get("media", {}).get("payload", "")
+            if not payload_b64:
+                return False
+
+            mulaw_bytes = base64.b64decode(payload_b64)
+            pcm16_bytes = mulaw_to_pcm16(mulaw_bytes, self._transport.pipeline_sample_rate)
+
+            frame = InputAudioRawFrame(
+                audio=pcm16_bytes,
+                sample_rate=self._transport.pipeline_sample_rate,
+                num_channels=1,
+            )
+            await self.push_audio_frame(frame)
+
+        elif event == "stop":
+            logger.info("[twilio] Stream stopped")
+            return True
+
+        return False
 
 
 # ============================================================================
@@ -203,6 +219,17 @@ class TwilioOutputTransport(BaseOutputTransport):
         self._websocket = websocket
         self._transport = transport
 
+    async def start(self, frame: StartFrame) -> None:
+        """Start the output transport and register media senders.
+
+        Args:
+            frame: The pipeline start frame.
+        """
+        await super().start(frame)
+        await self.set_transport_ready(frame)
+
+    _audio_log_once = False
+
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
         """Transcode a PCM16 frame to mulaw and send as Twilio JSON.
 
@@ -212,6 +239,13 @@ class TwilioOutputTransport(BaseOutputTransport):
         Returns:
             True if the frame was sent successfully, False otherwise.
         """
+        if not TwilioOutputTransport._audio_log_once:
+            TwilioOutputTransport._audio_log_once = True
+            logger.info(
+                "[twilio] First audio frame: streamSid=%s, sample_rate=%s, audio_len=%d",
+                self._transport.stream_sid, frame.sample_rate, len(frame.audio),
+            )
+
         if self._websocket.client_state != WebSocketState.CONNECTED:
             return False
 
@@ -275,6 +309,7 @@ class TwilioTransport(BaseTransport):
         websocket: WebSocket,
         params: TransportParams,
         pipeline_sample_rate: int = 16000,
+        buffered_messages: list[str] | None = None,
     ) -> None:
         """Initialize the Twilio transport.
 
@@ -283,12 +318,15 @@ class TwilioTransport(BaseTransport):
             params: Transport parameters for the pipeline.
             pipeline_sample_rate: The sample rate the pipeline operates at.
                 Mulaw 8kHz is transcoded to/from this rate internally.
+            buffered_messages: Pre-read WebSocket messages to replay before
+                reading from the live socket (used for userId extraction).
         """
         super().__init__()
         self._websocket = websocket
         self._params = params
         self.stream_sid: str = ""
         self.pipeline_sample_rate: int = pipeline_sample_rate
+        self.buffered_messages: list[str] = buffered_messages or []
 
         self._input = TwilioInputTransport(
             websocket=websocket,
