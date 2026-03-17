@@ -90,6 +90,7 @@ class UserContext:
     imap_config: ImapConfig
     smtp_config: SmtpConfig
     voice_preference: str
+    voice_speed: float
     tool_approval_config: dict[str, str]
     memory_entries: list[MemoryEntry]
 
@@ -290,7 +291,8 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
         user_id=user_id,
         imap_config=imap_config,
         smtp_config=smtp_config,
-        voice_preference=settings.get("voice_preference", "ash"),
+        voice_preference=(settings.get("voice_config") or {}).get("voice", "aura-2-helena-en"),
+        voice_speed=float((settings.get("voice_config") or {}).get("speed", 1.0)),
         tool_approval_config=settings.get("tool_approval_config") or {},
         memory_entries=memory_entries,
     )

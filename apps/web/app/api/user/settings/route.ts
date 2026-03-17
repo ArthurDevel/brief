@@ -49,7 +49,8 @@ function mapRowToSettings(row: Record<string, unknown>): UserSettings {
     smtpPort: (row.smtp_port as number) ?? 587,
     smtpUser: (row.smtp_user as string) ?? "",
     hasSmtpPassword: !!(row.smtp_password || row.smtp_password_secret_id),
-    voicePreference: (row.voice_preference as string) ?? "alloy",
+    voicePreference: ((row.voice_config as Record<string, unknown>)?.voice as string) ?? "aura-2-helena-en",
+    voiceSpeed: ((row.voice_config as Record<string, unknown>)?.speed as number) ?? 1.0,
     toolApprovalConfig: (row.tool_approval_config as ToolApprovalConfig) ?? {},
     phoneNumber: (row.phone_number as string) ?? null,
     hasPin: !!row.pin_hash,
@@ -94,7 +95,8 @@ export async function GET(_request: NextRequest): Promise<NextResponse<UserSetti
       smtpPort: 587,
       smtpUser: "",
       hasSmtpPassword: false,
-      voicePreference: "alloy",
+      voicePreference: "aura-2-helena-en",
+      voiceSpeed: 1.0,
       toolApprovalConfig: {},
       phoneNumber: null,
       hasPin: false,
@@ -128,7 +130,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
     smtp_host: body.smtpHost,
     smtp_port: body.smtpPort,
     smtp_user: body.smtpUser,
-    voice_preference: body.voicePreference,
+    voice_config: { voice: body.voicePreference, speed: body.voiceSpeed },
     tool_approval_config: body.toolApprovalConfig,
   };
 
