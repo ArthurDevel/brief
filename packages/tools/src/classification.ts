@@ -18,6 +18,7 @@ import type { ToolName, ActionClassification } from "./types";
 const DEFAULT_CLASSIFICATIONS: Record<ToolName, ActionClassification> = {
   list_inbox: "read_only",
   read_email: "read_only",
+  read_thread: "read_only",
   search_emails: "read_only",
   save_memory: "read_only",
   submit_feature_request: "read_only",

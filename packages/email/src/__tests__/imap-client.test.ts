@@ -108,6 +108,11 @@ const THREAD_MSG_3 = {
   ].join("\r\n"),
 };
 
+/**
+ * Creates a Hoodiecrow server with a non-standard folder prefix.
+ * Real Gmail accounts may use "[Google Mail]" or localized names instead of "[Gmail]".
+ * The IMAP client must discover folders via SPECIAL-USE flags, not hardcoded paths.
+ */
 function createTestServer() {
   return hoodiecrow({
     plugins: [
@@ -130,7 +135,7 @@ function createTestServer() {
       "": {
         separator: "/",
         folders: {
-          "[Gmail]": {
+          "[Google Mail]": {
             flags: ["\\Noselect"],
             folders: {
               "All Mail": {
@@ -322,7 +327,8 @@ describe("IMAP client (Hoodiecrow integration)", () => {
       // Archive
       const undoRecipe = await archiveEmail(client, target.id, "INBOX");
       expect(undoRecipe.operation).toBe("move_email");
-      expect(undoRecipe.params.from).toBe("[Gmail]/All Mail");
+      // Should discover the All Mail folder dynamically, not hardcode [Gmail]
+      expect(undoRecipe.params.from).toContain("All Mail");
       expect(undoRecipe.params.to).toBe("INBOX");
 
       // Verify it left the inbox
@@ -347,7 +353,7 @@ describe("IMAP client (Hoodiecrow integration)", () => {
       // Delete
       const undoRecipe = await deleteEmail(client, target.id, "INBOX");
       expect(undoRecipe.operation).toBe("move_email");
-      expect(undoRecipe.params.from).toBe("[Gmail]/Trash");
+      expect(undoRecipe.params.from).toContain("Trash");
       expect(undoRecipe.params.to).toBe("INBOX");
 
       // Verify it left the inbox

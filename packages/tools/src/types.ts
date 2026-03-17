@@ -23,6 +23,7 @@
 export type ToolName =
   | "list_inbox"
   | "read_email"
+  | "read_thread"
   | "search_emails"
   | "mark_as_read"
   | "draft_email"

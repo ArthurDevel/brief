@@ -18,6 +18,7 @@ export {
   archiveEmail,
   deleteEmail,
   moveEmail,
+  resolveSpecialUseFolder,
 } from "./imap-client";
 
 export { sendEmail, saveDraft, deleteDraft } from "./smtp-client";

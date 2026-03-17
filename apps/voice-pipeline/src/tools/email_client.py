@@ -41,10 +41,29 @@ T = TypeVar("T")
 # CONSTANTS
 # ============================================================================
 
-ARCHIVE_FOLDER = "[Gmail]/All Mail"
-TRASH_FOLDER = "[Gmail]/Trash"
-DRAFTS_FOLDER = "[Gmail]/Drafts"
 SNIPPET_LENGTH = 100
+
+
+def resolve_special_use_folder(client: IMAPClient, flag: bytes) -> str:
+    """Discover an IMAP folder path by its SPECIAL-USE flag (RFC 6154).
+
+    Gmail may use "[Gmail]/...", "[Google Mail]/...", or localized names.
+    This resolves the actual path at runtime.
+
+    Args:
+        client: Connected IMAPClient.
+        flag: The special-use flag to look for (e.g. b'\\All', b'\\Trash').
+
+    Returns:
+        The folder path string.
+
+    Raises:
+        RuntimeError: If no folder with the given flag is found.
+    """
+    for flags, _delimiter, name in client.list_folders():
+        if flag in flags:
+            return name
+    raise RuntimeError(f"No mailbox with special-use flag {flag!r} found")
 
 
 # ============================================================================
@@ -73,6 +92,18 @@ class Email:
     body: str
     date: str
     is_read: bool
+
+
+@dataclass
+class ThreadMessage:
+    """A single message within a thread."""
+
+    id: str
+    from_addr: str
+    to: str
+    subject: str
+    body: str
+    date: str
 
 
 # ============================================================================
@@ -285,6 +316,108 @@ def read_email(client: IMAPClient, email_id: str) -> Email:
     )
 
 
+def read_thread(client: IMAPClient, email_id: str) -> list[ThreadMessage]:
+    """Read all messages in a thread.
+
+    On Gmail, uses X-GM-THRID (native thread ID) to find all messages
+    in the thread reliably. On non-Gmail servers, falls back to
+    Message-ID / References header search.
+
+    Searches [Gmail]/All Mail to include both sent and received messages.
+
+    Args:
+        client: Connected IMAPClient.
+        email_id: The UID of any email in the thread (from INBOX).
+
+    Returns:
+        List of ThreadMessage in chronological order (oldest first).
+
+    Raises:
+        RuntimeError: If the email or thread messages are not found.
+    """
+    uid = int(email_id)
+    has_gmail_ext = client.has_capability(b"X-GM-EXT-1")
+
+    # Step 1: Get the thread identifier from the target email in INBOX
+    client.select_folder("INBOX", readonly=True)
+
+    if has_gmail_ext:
+        # Gmail: fetch the native thread ID
+        fetch_data = client.fetch([uid], ["X-GM-THRID", "ENVELOPE"])
+        if uid not in fetch_data:
+            raise RuntimeError(f"Email with UID {email_id} not found")
+        thread_id = fetch_data[uid].get(b"X-GM-THRID")
+        if not thread_id:
+            raise RuntimeError(f"Email with UID {email_id} has no X-GM-THRID")
+    else:
+        # Non-Gmail: collect Message-IDs from headers
+        fetch_data = client.fetch([uid], ["ENVELOPE", "RFC822.HEADER"])
+        if uid not in fetch_data:
+            raise RuntimeError(f"Email with UID {email_id} not found")
+        data = fetch_data[uid]
+        envelope: Any = data.get(b"ENVELOPE")
+        if not envelope:
+            raise RuntimeError(f"Email with UID {email_id} has no envelope data")
+        raw_headers: bytes = data.get(b"RFC822.HEADER", b"")  # type: ignore[assignment]
+        message_id = _decode_bytes(envelope.message_id) if envelope.message_id else None
+        references = _extract_references(raw_headers)
+        thread_ids: set[str] = set()
+        if message_id:
+            thread_ids.add(message_id)
+        thread_ids.update(references)
+
+    # Step 2: Search All Mail for all thread messages
+    all_mail_folder = resolve_special_use_folder(client, b"\\All")
+    client.select_folder(all_mail_folder, readonly=True)
+    matched_uids: set[int] = set()
+
+    if has_gmail_ext:
+        # Gmail: single search by thread ID
+        matched_uids.update(client.search([b"X-GM-THRID", str(thread_id)]))  # type: ignore[arg-type]
+    else:
+        # Non-Gmail: search by Message-ID, References, and In-Reply-To
+        for mid in thread_ids:
+            by_id = client.search(["HEADER", "Message-ID", mid])  # type: ignore[arg-type]
+            matched_uids.update(by_id)
+            by_ref = client.search(["HEADER", "References", mid])  # type: ignore[arg-type]
+            matched_uids.update(by_ref)
+            by_reply = client.search(["HEADER", "In-Reply-To", mid])  # type: ignore[arg-type]
+            matched_uids.update(by_reply)
+
+    if not matched_uids:
+        raise RuntimeError(f"No thread messages found for email {email_id}")
+
+    logger.debug(
+        "[email_client] read_thread: gmail=%s, matched %d messages",
+        has_gmail_ext, len(matched_uids),
+    )
+
+    # Fetch the matched messages
+    fetch_data = client.fetch(list(matched_uids), ["ENVELOPE", "RFC822"])
+    results: list[ThreadMessage] = []
+
+    for msg_uid, msg_data in fetch_data.items():
+        msg_envelope: Any = msg_data.get(b"ENVELOPE")
+        if not msg_envelope:
+            continue
+
+        raw_source: bytes = msg_data.get(b"RFC822", b"")  # type: ignore[assignment]
+        body = _extract_body(raw_source)
+
+        results.append(ThreadMessage(
+            id=str(msg_uid),
+            from_addr=_format_address(msg_envelope.from_),
+            to=_format_address(msg_envelope.to),
+            subject=_decode_header(msg_envelope.subject),
+            body=body,
+            date=_format_date(msg_envelope.date),
+        ))
+
+    # Sort chronologically (oldest first)
+    results.sort(key=lambda m: m.date)
+    return results
+
+
 def mark_as_read(client: IMAPClient, email_id: str) -> None:
     """Mark an email as read by setting the Seen flag.
 
@@ -309,14 +442,15 @@ def archive_email(
     Returns:
         UndoRecipe dict to reverse the archive operation.
     """
+    archive_folder = resolve_special_use_folder(client, b"\\All")
     client.select_folder(source_folder)
-    client.move([int(email_id)], ARCHIVE_FOLDER)
+    client.move([int(email_id)], archive_folder)
 
     return {
         "operation": "move_email",
         "params": {
             "email_id": email_id,
-            "from": ARCHIVE_FOLDER,
+            "from": archive_folder,
             "to": source_folder,
         },
     }
@@ -335,14 +469,15 @@ def delete_email(
     Returns:
         UndoRecipe dict to reverse the delete operation.
     """
+    trash_folder = resolve_special_use_folder(client, b"\\Trash")
     client.select_folder(source_folder)
-    client.move([int(email_id)], TRASH_FOLDER)
+    client.move([int(email_id)], trash_folder)
 
     return {
         "operation": "move_email",
         "params": {
             "email_id": email_id,
-            "from": TRASH_FOLDER,
+            "from": trash_folder,
             "to": source_folder,
         },
     }
@@ -428,16 +563,20 @@ def save_draft(client: IMAPClient, to: str, subject: str, body: str) -> dict:
     raw_message = _build_raw_message(to, subject, body)
 
     # APPEND to Drafts with Draft and Seen flags
-    client.select_folder(DRAFTS_FOLDER)
+    drafts_folder = resolve_special_use_folder(client, b"\\Drafts")
+    client.select_folder(drafts_folder)
     result = client.append(
-        DRAFTS_FOLDER,
+        drafts_folder,
         raw_message.encode("utf-8"),
         flags=[b"\\Draft", b"\\Seen"],
         msg_time=datetime.now(timezone.utc),
     )
 
-    # result is an APPENDUID response: (append_uid_validity, uid)
-    draft_uid = str(result) if result else "unknown"
+    # imapclient.append() returns the raw IMAP response bytes.
+    # Gmail supports UIDPLUS, so the response is: b'[APPENDUID <validity> <uid>] ...'
+    draft_uid = _parse_append_uid(result)
+    if not draft_uid:
+        raise RuntimeError(f"Failed to parse draft UID from APPEND response: {result!r}")
 
     return {
         "operation": "delete_draft",
@@ -452,7 +591,8 @@ def delete_draft(client: IMAPClient, draft_uid: str) -> None:
         client: Connected IMAPClient.
         draft_uid: The UID of the draft to delete.
     """
-    client.select_folder(DRAFTS_FOLDER)
+    drafts_folder = resolve_special_use_folder(client, b"\\Drafts")
+    client.select_folder(drafts_folder)
     uid = int(draft_uid)
     client.add_flags([uid], [b"\\Deleted"])
     client.expunge([uid])
@@ -461,6 +601,20 @@ def delete_draft(client: IMAPClient, draft_uid: str) -> None:
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def _parse_append_uid(result: object) -> str | None:
+    """Parse the UID from an IMAP APPEND response.
+
+    If UIDPLUS is supported, the response contains [APPENDUID <validity> <uid>].
+    Otherwise returns None.
+    """
+    import re
+
+    if result is None:
+        return None
+    text = result.decode("utf-8", errors="replace") if isinstance(result, bytes) else str(result)
+    match = re.search(r"\[APPENDUID\s+\d+\s+(\d+)\]", text)
+    return match.group(1) if match else None
 
 def _format_address(addresses: tuple | None) -> str:
     """Format an IMAP envelope address tuple into a readable string.
@@ -563,6 +717,31 @@ def _extract_snippet(raw_body: bytes | str) -> str:
     # Clean up whitespace and truncate
     cleaned = " ".join(text.split())
     return cleaned[:SNIPPET_LENGTH].strip()
+
+
+def _extract_references(raw_headers: bytes | str) -> list[str]:
+    """Extract Message-IDs from References and In-Reply-To headers.
+
+    Args:
+        raw_headers: Raw email headers as bytes or string.
+
+    Returns:
+        List of unique Message-ID strings (with angle brackets).
+    """
+    import re
+
+    header_text = _decode_bytes(raw_headers) if isinstance(raw_headers, bytes) else raw_headers
+    if not header_text:
+        return []
+
+    ids: list[str] = []
+    for header_name in ("References", "In-Reply-To"):
+        pattern = rf"^{header_name}:\s*(.+(?:\r?\n[ \t]+.+)*)"
+        match = re.search(pattern, header_text, re.MULTILINE | re.IGNORECASE)
+        if match:
+            ids.extend(re.findall(r"<[^>]+>", match.group(1)))
+
+    return list(dict.fromkeys(ids))  # deduplicate preserving order
 
 
 def _extract_body(raw_source: bytes | str) -> str:

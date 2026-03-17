@@ -23,10 +23,29 @@ import type { UndoRecipe } from "@dublin/tools";
 // CONSTANTS
 // ============================================================================
 
-const ARCHIVE_FOLDER = "[Gmail]/All Mail";
-const TRASH_FOLDER = "[Gmail]/Trash";
-const DRAFTS_FOLDER = "[Gmail]/Drafts";
 const SNIPPET_LENGTH = 100;
+
+// ============================================================================
+// FOLDER DISCOVERY
+// ============================================================================
+
+/**
+ * Discovers IMAP folder paths by their SPECIAL-USE flags (RFC 6154).
+ * Gmail may use "[Gmail]/..." or "[Google Mail]/..." or localized names.
+ * This resolves the actual paths at runtime.
+ */
+export async function resolveSpecialUseFolder(
+  client: ImapFlow,
+  flag: "\\All" | "\\Trash" | "\\Drafts" | "\\Sent"
+): Promise<string> {
+  const mailboxes = await client.list();
+  for (const mailbox of mailboxes) {
+    if (mailbox.specialUse === flag) {
+      return mailbox.path;
+    }
+  }
+  throw new Error(`No mailbox with special-use flag ${flag} found`);
+}
 
 // ============================================================================
 // CONNECTION MANAGEMENT
@@ -269,8 +288,9 @@ export async function readThread(client: ImapFlow, emailId: string): Promise<Thr
   if (messageId) threadIds.add(messageId);
   for (const ref of references) threadIds.add(ref);
 
-  // Step 2: Search [Gmail]/All Mail by HEADER for each thread Message-ID
-  const allMailLock = await client.getMailboxLock(ARCHIVE_FOLDER);
+  // Step 2: Search All Mail by HEADER for each thread Message-ID
+  const allMailFolder = await resolveSpecialUseFolder(client, "\\All");
+  const allMailLock = await client.getMailboxLock(allMailFolder);
   try {
     const matchedUids = new Set<number>();
 
@@ -347,16 +367,17 @@ export async function archiveEmail(
   emailId: string,
   sourceFolder: string
 ): Promise<UndoRecipe> {
+  const archiveFolder = await resolveSpecialUseFolder(client, "\\All");
   const lock = await client.getMailboxLock(sourceFolder);
 
   try {
-    await client.messageMove(emailId, ARCHIVE_FOLDER, { uid: true });
+    await client.messageMove(emailId, archiveFolder, { uid: true });
 
     return {
       operation: "move_email",
       params: {
         emailId,
-        from: ARCHIVE_FOLDER,
+        from: archiveFolder,
         to: sourceFolder,
       },
     };
@@ -377,16 +398,17 @@ export async function deleteEmail(
   emailId: string,
   sourceFolder: string
 ): Promise<UndoRecipe> {
+  const trashFolder = await resolveSpecialUseFolder(client, "\\Trash");
   const lock = await client.getMailboxLock(sourceFolder);
 
   try {
-    await client.messageMove(emailId, TRASH_FOLDER, { uid: true });
+    await client.messageMove(emailId, trashFolder, { uid: true });
 
     return {
       operation: "move_email",
       params: {
         emailId,
-        from: TRASH_FOLDER,
+        from: trashFolder,
         to: sourceFolder,
       },
     };

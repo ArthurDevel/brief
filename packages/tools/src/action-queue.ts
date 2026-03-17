@@ -321,7 +321,7 @@ async function dispatchTool(
   userId: string
 ): Promise<{ result: Record<string, unknown>; undoRecipe: UndoRecipe | null }> {
   // Lazy import to avoid circular dependencies
-  const { listInbox, searchEmails, readEmail, markAsRead, archiveEmail, deleteEmail, moveEmail } =
+  const { listInbox, searchEmails, readEmail, readThread, markAsRead, archiveEmail, deleteEmail, moveEmail } =
     await import("@dublin/email");
   const { sendEmail, saveDraft } = await import("@dublin/email");
 
@@ -335,6 +335,11 @@ async function dispatchTool(
     case "read_email": {
       const email = await readEmail(imapClient, args.email_id as string);
       return { result: { email }, undoRecipe: null };
+    }
+
+    case "read_thread": {
+      const messages = await readThread(imapClient, args.email_id as string);
+      return { result: { messages }, undoRecipe: null };
     }
 
     case "search_emails": {

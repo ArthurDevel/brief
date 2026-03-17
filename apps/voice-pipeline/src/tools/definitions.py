@@ -66,6 +66,28 @@ def get_tool_definitions() -> list[dict]:
         {
             "type": "function",
             "function": {
+                "name": "read_thread",
+                "description": (
+                    "Read an entire email thread/conversation by the ID of any email "
+                    "in the thread. Returns all messages including the user's sent "
+                    "replies, in chronological order. Use this when the user asks "
+                    "about a thread, conversation, or their reply to an email."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "email_id": {
+                            "type": "string",
+                            "description": "The ID of any email in the thread.",
+                        },
+                    },
+                    "required": ["email_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "search_emails",
                 "description": "Search emails by query string. Searches subject, sender, and body.",
                 "parameters": {
