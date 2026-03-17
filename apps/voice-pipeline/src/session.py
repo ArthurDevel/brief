@@ -77,6 +77,7 @@ class ActiveSession:
     session_id: str
     user_id: str
     started_at: datetime
+    supabase: Client
     transcript: list[TranscriptEntry] = field(default_factory=list)
     tokens_in: int = 0
     tokens_out: int = 0
@@ -135,11 +136,12 @@ def start_session(user_id: str, supabase: Client) -> ActiveSession:
         session_id=session_id,
         user_id=user_id,
         started_at=started_at,
+        supabase=supabase,
     )
 
 
 def add_transcript_entry(session: ActiveSession, role: Literal["user", "assistant"], text: str) -> None:
-    """Append a transcript entry with an ISO timestamp to the in-memory session.
+    """Append a transcript entry and immediately flush the full transcript to the database.
 
     Args:
         session: The active session to update.
@@ -152,6 +154,8 @@ def add_transcript_entry(session: ActiveSession, role: Literal["user", "assistan
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
     session.transcript.append(entry)
+
+    _flush_transcript(session)
 
 
 def add_token_usage(session: ActiveSession, tokens_in: int, tokens_out: int) -> None:
@@ -219,6 +223,25 @@ def end_session(session: ActiveSession, cost_summary: Any, supabase: Client) -> 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def _flush_transcript(session: ActiveSession) -> None:
+    """Write the current in-memory transcript to the database.
+
+    Args:
+        session: The active session whose transcript to flush.
+    """
+    transcript_data = [
+        {"role": entry.role, "text": entry.text, "timestamp": entry.timestamp}
+        for entry in session.transcript
+    ]
+
+    try:
+        session.supabase.table("sessions").update(
+            {"transcript": transcript_data}
+        ).eq("id", session.session_id).execute()
+    except Exception:
+        logger.exception("[session] Failed to flush transcript for session %s", session.session_id)
+
 
 def load_user_context(user_id: str, supabase: Client) -> UserContext:
     """Load full user context from DB and Vault (settings, memory, credentials).
