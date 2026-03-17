@@ -350,20 +350,21 @@ async def twilio_voice(request: Request) -> Response:
     if user_record is None:
         logger.info("[twilio] Unknown caller %s, rejecting", caller_phone)
         twiml = build_twiml_reject("This phone number is not registered. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     if user_record["pin_locked"]:
         logger.info("[twilio] Account locked for user %s", user_record["user_id"])
         twiml = build_twiml_reject("Your account is locked. Please contact support. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     if not check_usage_limit(user_record["user_id"], supabase):
         logger.info("[twilio] Usage limit exceeded for user %s", user_record["user_id"])
         twiml = build_twiml_reject("You have reached your monthly call limit. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     twiml = build_twiml_gather_pin(user_record["user_id"], attempt=1)
-    return Response(content=twiml, media_type="application/xml")
+    logger.info("[twilio] Returning TwiML:\n%s", twiml)
+    return Response(content=twiml, media_type="text/xml")
 
 
 @app.post("/twilio/verify-pin")
@@ -376,7 +377,7 @@ async def twilio_verify_pin(request: Request) -> Response:
 
     if not user_id:
         twiml = build_twiml_reject("Authentication error. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     settings = load_settings()
     supabase = create_service_client(settings)
@@ -391,22 +392,22 @@ async def twilio_verify_pin(request: Request) -> Response:
 
     if pin_response.data is None or not pin_response.data.get("pin_hash"):
         twiml = build_twiml_reject("PIN not configured. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     pin_hash = pin_response.data["pin_hash"]
 
     if verify_pin(digits, pin_hash):
-        stream_url = f"wss://{request.url.hostname}/twilio-stream?userId={user_id}"
+        stream_url = f"wss://{request.url.hostname}/twilio-stream"
 
         public_url = settings.public_url
         if public_url and public_url != f"http://localhost:{settings.port}":
             ws_scheme = "wss" if public_url.startswith("https") else "ws"
             host = public_url.split("://", 1)[1].rstrip("/")
-            stream_url = f"{ws_scheme}://{host}/twilio-stream?userId={user_id}"
+            stream_url = f"{ws_scheme}://{host}/twilio-stream"
 
         logger.info("[twilio] PIN verified for user %s, connecting stream", user_id)
-        twiml = build_twiml_connect(stream_url)
-        return Response(content=twiml, media_type="application/xml")
+        twiml = build_twiml_connect(stream_url, user_id)
+        return Response(content=twiml, media_type="text/xml")
 
     next_attempt = attempt + 1
     if next_attempt > MAX_PIN_ATTEMPTS:
@@ -416,21 +417,39 @@ async def twilio_verify_pin(request: Request) -> Response:
 
         logger.info("[twilio] Max PIN attempts reached, locking user %s", user_id)
         twiml = build_twiml_reject("Too many incorrect attempts. Your account has been locked. Goodbye.")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="text/xml")
 
     logger.info("[twilio] Incorrect PIN for user %s, attempt %d", user_id, attempt)
     twiml = build_twiml_gather_pin(user_id, attempt=next_attempt)
-    return Response(content=twiml, media_type="application/xml")
+    return Response(content=twiml, media_type="text/xml")
 
 
 @app.websocket("/twilio-stream")
 async def twilio_stream_ws(websocket: WebSocket) -> None:
-    """Handle Twilio media stream WebSocket connections."""
+    """Handle Twilio media stream WebSocket connections.
+
+    userId is passed via <Parameter> in TwiML. Twilio delivers it in
+    the "start" event's customParameters. We intercept the first messages
+    to extract it, then replay them into a queue so the TwilioTransport
+    read loop still sees them.
+    """
     await websocket.accept()
 
-    user_id = websocket.query_params.get("userId", "")
+    # Buffer early messages so the transport can replay them
+    buffered_messages: list[str] = []
+    user_id = ""
+
+    for _ in range(5):
+        raw = await websocket.receive_text()
+        buffered_messages.append(raw)
+        msg = json.loads(raw)
+        if msg.get("event") == "start":
+            custom_params = msg.get("start", {}).get("customParameters", {})
+            user_id = custom_params.get("userId", "")
+            break
+
     if not user_id:
-        logger.error("[twilio] No userId in WebSocket query params")
+        logger.error("[twilio] No userId in stream start message")
         await websocket.close(code=1008, reason="Missing userId")
         return
 
@@ -448,6 +467,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
             audio_out_enabled=True,
         ),
         pipeline_sample_rate=TWILIO_PIPELINE_SAMPLE_RATE,
+        buffered_messages=buffered_messages,
     )
 
     task, session, cost_tracker, imap_holder = await _setup_pipeline_session(
@@ -461,7 +481,8 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
     asyncio.create_task(_send_greeting())
 
     try:
-        await task.run()
+        runner = PipelineRunner(handle_sigint=False)
+        await runner.run(task)
     finally:
         _cleanup_session(imap_holder, cost_tracker, session, supabase)
 
