@@ -69,7 +69,9 @@ async function startWebRTCSession(
   });
 
   if (!startRes.ok) {
-    throw new Error(`Failed to start pipeline session: ${startRes.status} ${startRes.statusText}`);
+    const body = await startRes.json().catch(() => null);
+    const detail = body?.error ?? `${startRes.status} ${startRes.statusText}`;
+    throw new Error(detail);
   }
 
   const startData: StartResponse = await startRes.json();
