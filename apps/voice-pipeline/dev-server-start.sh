@@ -9,9 +9,18 @@
 #   TWILIO_PHONE_NUMBER   - Twilio phone number (E.164, e.g. +15551234567)
 #
 # Usage:
-#   ./dev-server-start.sh
+#   ./dev-server-start.sh              # with Cloudflare tunnel + Twilio webhook
+#   ./dev-server-start.sh --no-tunnel  # local only, no tunnel or Twilio setup
 
 set -euo pipefail
+
+NO_TUNNEL=false
+for arg in "$@"; do
+  case "$arg" in
+    --no-tunnel) NO_TUNNEL=true ;;
+    *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -40,6 +49,14 @@ if ! python3 -m pyright src/; then
   exit 1
 fi
 echo "Type check passed."
+
+if [[ "$NO_TUNNEL" == true ]]; then
+  echo "=== Starting without tunnel (local only) ==="
+  echo "  http://localhost:$PORT"
+  echo ""
+  cd "$SCRIPT_DIR"
+  exec python3 -m uvicorn src.server:app --host 0.0.0.0 --port "$PORT"
+fi
 
 # Validate Twilio credentials
 for var in TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_PHONE_NUMBER; do
