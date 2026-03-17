@@ -31,7 +31,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 
-from src.config import LLM_MODEL, TTS_VOICE
+from src.config import LLM_MODEL
 from src.cost_tracker import CostSummary
 from src.langfuse_client import get_langfuse_client
 from src.session import ActiveSession, add_transcript_entry
@@ -44,10 +44,11 @@ class LangfuseObserver(BaseObserver):
     """Pipecat observer that traces pipeline activity to Langfuse
     and records transcript entries on the ActiveSession."""
 
-    def __init__(self, session: ActiveSession, transport_type: str) -> None:
+    def __init__(self, session: ActiveSession, transport_type: str, voice: str) -> None:
         super().__init__()
         self._session = session
         self._transport_type = transport_type
+        self._voice = voice
 
         # Langfuse trace (created in start_trace)
         self._trace: Any = None
@@ -70,7 +71,7 @@ class LangfuseObserver(BaseObserver):
             metadata={
                 "transport": self._transport_type,
                 "model": LLM_MODEL,
-                "voice": TTS_VOICE,
+                "voice": self._voice,
             },
         )
         logger.info(
@@ -168,7 +169,7 @@ class LangfuseObserver(BaseObserver):
             metadata={
                 "transport": self._transport_type,
                 "model": LLM_MODEL,
-                "voice": TTS_VOICE,
+                "voice": self._voice,
                 "cost_usd": cost_summary.total_cost,
                 "duration_min": cost_summary.duration_min,
                 "llm_input_tokens": cost_summary.llm_input_tokens,

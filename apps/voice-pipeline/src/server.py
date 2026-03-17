@@ -98,7 +98,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
     """
     session = start_session(user_context.user_id, supabase)
     cost_tracker = CostTracker()
-    langfuse_observer = LangfuseObserver(session, transport_type)
+    langfuse_observer = LangfuseObserver(session, transport_type, voice=user_context.voice_preference)
     langfuse_observer.start_trace()
 
     imap_client = create_imap_connection(user_context.imap_config)
