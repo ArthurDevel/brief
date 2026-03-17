@@ -170,7 +170,6 @@ def build_twiml_connect(stream_url: str, user_id: str) -> str:
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
-        "  <Say>Connected. How can I help you with your email?</Say>\n"
         "  <Connect>\n"
         f'    <Stream url="{stream_url}">\n'
         f'      <Parameter name="userId" value="{user_id}" />\n'
