@@ -82,6 +82,9 @@ _active_sessions: dict[str, dict[str, Any]] = {}
 # SmallWebRTC request handler (initialized in lifespan)
 _webrtc_handler: SmallWebRTCRequestHandler | None = None
 
+# Track sessions that are currently in a pipeline so we can finalize them on shutdown
+_live_pipeline_sessions: dict[str, dict[str, Any]] = {}  # db_session_id -> cleanup info
+
 
 # ============================================================================
 # BOT HANDLER (shared by WebRTC and Twilio)
@@ -130,6 +133,16 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             imap_holder=imap_holder,
         )
 
+        # Register so lifespan shutdown can finalize if the process is killed
+        _live_pipeline_sessions[session.session_id] = {
+            "session": session,
+            "cost_tracker": cost_tracker,
+            "langfuse_observer": langfuse_observer,
+            "imap_holder": imap_holder,
+            "supabase": supabase,
+            "settings": settings,
+        }
+
         return task, session, cost_tracker, langfuse_observer, imap_holder
 
     except Exception:
@@ -155,16 +168,27 @@ async def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session
     """
     try:
         close_imap_connection(imap_holder["client"])
-    except Exception as exc:
+    except BaseException as exc:
         logger.warning("[server] Error closing IMAP connection: %s", exc)
 
     try:
         await cost_tracker.fetch_llm_costs(settings.openrouter_api_key)
+    except BaseException as exc:
+        logger.error("[server] Error fetching LLM costs: %s", exc)
+
+    try:
         cost_summary = cost_tracker.get_summary()
         langfuse_observer.end_trace(cost_summary)
+    except BaseException as exc:
+        logger.error("[server] Error ending Langfuse trace: %s", exc)
+
+    try:
+        cost_summary = cost_tracker.get_summary()
         end_session(session, cost_summary, supabase)
-    except Exception as exc:
+    except BaseException as exc:
         logger.error("[server] Error ending session: %s", exc)
+
+    _live_pipeline_sessions.pop(session.session_id, None)
 
 
 # ============================================================================
@@ -236,6 +260,22 @@ async def lifespan(app: FastAPI):
     global _webrtc_handler
     _webrtc_handler = SmallWebRTCRequestHandler()
     yield
+
+    # Finalize any sessions that were still active when the server was killed
+    for sid, info in list(_live_pipeline_sessions.items()):
+        logger.info("[server] Finalizing orphaned session %s on shutdown", sid)
+        try:
+            await _cleanup_session(
+                info["imap_holder"],
+                info["cost_tracker"],
+                info["langfuse_observer"],
+                info["session"],
+                info["supabase"],
+                info["settings"],
+            )
+        except BaseException as exc:
+            logger.error("[server] Failed to finalize session %s: %s", sid, exc)
+
     await _webrtc_handler.close()
     shutdown_langfuse_client()
 
