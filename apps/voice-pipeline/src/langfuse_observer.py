@@ -1,5 +1,5 @@
 """
-Langfuse tracing observer for the Pipecat voice pipeline.
+Langfuse tracing observer for the Pipecat voice pipeline (SDK v4).
 
 A single BaseObserver that handles:
 - Creating a Langfuse trace per call (with user_id, session_id)
@@ -13,14 +13,19 @@ Frame observation strategy:
 - LLMTextFrame               → append to response buffer
 - LLMFullResponseEndFrame    → flush buffer → transcript entry + Langfuse generation
 - MetricsFrame (LLMUsage)    → attach token usage to current generation
+
+Langfuse v4 API:
+- Root span created via start_observation() (non-context-manager, long-lived)
+- Child observations via root.start_observation(as_type=...)
+- user_id/session_id set via propagate_attributes()
 """
 
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
+from langfuse import propagate_attributes
 from pipecat.frames.frames import (
     Frame,
     LLMFullResponseEndFrame,
@@ -50,8 +55,8 @@ class LangfuseObserver(BaseObserver):
         self._transport_type = transport_type
         self._voice = voice
 
-        # Langfuse trace (created in start_trace)
-        self._trace: Any = None
+        # Langfuse root span (created in start_trace)
+        self._root_span: Any = None
 
         # Accumulator for the current LLM response
         self._response_buffer: list[str] = []
@@ -61,11 +66,16 @@ class LangfuseObserver(BaseObserver):
         # Pending generation to attach token usage
         self._pending_generation: Any = None
 
+        # propagate_attributes context manager (kept alive for the call)
+        self._propagation_ctx: Any = None
+
     def start_trace(self) -> None:
         """Create a Langfuse trace for this call. Call after session is created."""
         client = get_langfuse_client()
-        self._trace = client.trace(
-            name="voice-call",
+
+        # Enter propagate_attributes so all child observations inherit user/session
+        self._propagation_ctx = propagate_attributes(
+            trace_name="voice-call",
             user_id=self._session.user_id,
             session_id=self._session.session_id,
             metadata={
@@ -74,35 +84,56 @@ class LangfuseObserver(BaseObserver):
                 "voice": self._voice,
             },
         )
+        self._propagation_ctx.__enter__()
+
+        # Create a long-lived root span for the entire call
+        self._root_span = client.start_observation(
+            name="voice-call",
+            input={"transport": self._transport_type, "model": LLM_MODEL},
+        )
+
         logger.info(
             "[langfuse] Trace started for session %s",
             self._session.session_id,
         )
 
     async def on_push_frame(self, data: FramePushed) -> None:
-        """Observe pipeline frames for transcript and Langfuse logging."""
-        frame: Frame = data.frame
+        """Observe pipeline frames for transcript and Langfuse logging.
 
-        # User speech transcription (final only)
+        Frames fire for every processor-to-processor hop, so we filter by
+        source processor to avoid duplicates. We only observe LLM-related
+        frames from the LLM service, and transcription from the STT service.
+        """
+        frame: Frame = data.frame
+        source_name = type(data.source).__name__
+
+        # User speech transcription — only from the STT service
         if isinstance(frame, TranscriptionFrame):
-            if frame.text and frame.text.strip():
+            if "STT" in source_name and frame.text and frame.text.strip():
                 self._current_user_text = frame.text.strip()
                 add_transcript_entry(self._session, "user", self._current_user_text)
             return
 
-        # LLM response start
+        # LLM frames — only from the LLM service to avoid duplicate hops
         if isinstance(frame, LLMFullResponseStartFrame):
-            self._in_llm_response = True
-            self._response_buffer.clear()
+            if "LLM" in source_name:
+                # End any pending generation from previous turn
+                if self._pending_generation is not None:
+                    self._pending_generation.end()
+                    self._pending_generation = None
+                self._in_llm_response = True
+                self._response_buffer.clear()
             return
 
-        # LLM response text chunk
         if isinstance(frame, LLMTextFrame) and self._in_llm_response:
-            self._response_buffer.append(frame.text)
+            if "LLM" in source_name:
+                self._response_buffer.append(frame.text)
             return
 
         # LLM response end → flush buffer, log transcript + generation
         if isinstance(frame, LLMFullResponseEndFrame):
+            if "LLM" not in source_name:
+                return
             self._in_llm_response = False
             assistant_text = "".join(self._response_buffer).strip()
             self._response_buffer.clear()
@@ -110,11 +141,12 @@ class LangfuseObserver(BaseObserver):
             if assistant_text:
                 add_transcript_entry(self._session, "assistant", assistant_text)
 
-                if self._trace is not None:
-                    self._pending_generation = self._trace.generation(
+                if self._root_span is not None:
+                    self._pending_generation = self._root_span.start_observation(
+                        as_type="generation",
                         name="llm-turn",
                         model=LLM_MODEL,
-                        input=self._current_user_text,
+                        input=self._current_user_text or "(greeting)",
                         output=assistant_text,
                     )
             return
@@ -126,12 +158,13 @@ class LangfuseObserver(BaseObserver):
                 if metric_class == "LLMUsageMetricsData" and self._pending_generation is not None:
                     prompt_tokens = getattr(metric, "prompt_tokens", 0)
                     completion_tokens = getattr(metric, "completion_tokens", 0)
-                    self._pending_generation.update(
-                        usage_details={
-                            "input": prompt_tokens,
-                            "output": completion_tokens,
-                        },
-                    )
+                    if prompt_tokens or completion_tokens:
+                        self._pending_generation.update(
+                            usage_details={
+                                "input": prompt_tokens,
+                                "output": completion_tokens,
+                            },
+                        )
                     self._pending_generation.end()
                     self._pending_generation = None
             return
@@ -143,21 +176,22 @@ class LangfuseObserver(BaseObserver):
         result: dict[str, Any],
         duration_ms: float,
     ) -> None:
-        """Log a tool call as a Langfuse span."""
-        if self._trace is None:
+        """Log a tool call as a Langfuse tool observation."""
+        if self._root_span is None:
             return
 
-        span = self._trace.span(
+        tool_obs = self._root_span.start_observation(
+            as_type="tool",
             name=name,
             input=args,
             output=result,
-            metadata={"duration_ms": round(duration_ms, 1)},
+            metadata={"duration_ms": str(round(duration_ms, 1))},
         )
-        span.end()
+        tool_obs.end()
 
     def end_trace(self, cost_summary: CostSummary) -> None:
-        """Attach final cost metadata and flush. Call at session cleanup."""
-        if self._trace is None:
+        """Attach final cost metadata, end root span, and flush. Call at session cleanup."""
+        if self._root_span is None:
             return
 
         # End any pending generation that never got token metrics
@@ -165,11 +199,8 @@ class LangfuseObserver(BaseObserver):
             self._pending_generation.end()
             self._pending_generation = None
 
-        self._trace.update(
-            metadata={
-                "transport": self._transport_type,
-                "model": LLM_MODEL,
-                "voice": self._voice,
+        self._root_span.update(
+            output={
                 "cost_usd": cost_summary.total_cost,
                 "duration_min": cost_summary.duration_min,
                 "llm_input_tokens": cost_summary.llm_input_tokens,
@@ -181,6 +212,12 @@ class LangfuseObserver(BaseObserver):
                 "tts_cost": cost_summary.tts_cost,
             },
         )
+        self._root_span.end()
+
+        # Exit propagation context
+        if self._propagation_ctx is not None:
+            self._propagation_ctx.__exit__(None, None, None)
+            self._propagation_ctx = None
 
         client = get_langfuse_client()
         client.flush()

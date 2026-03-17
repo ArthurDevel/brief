@@ -1,9 +1,9 @@
 """
 Shared Langfuse client singleton for the voice pipeline.
 
-Initialized once from environment variables at import time.
-The SDK batches events internally (flushes every 5s), so a single
-client safely handles multiple concurrent calls.
+Uses the v4 SDK with get_client() / Langfuse() constructor.
+The SDK batches events internally, so a single client safely
+handles multiple concurrent calls.
 """
 
 from __future__ import annotations
