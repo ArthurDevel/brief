@@ -65,10 +65,15 @@ async function startWebRTCSession(
   const startRes = await fetch(`${VOICE_PIPELINE_URL}/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
   });
 
   if (!startRes.ok) {
-    throw new Error(`Failed to start pipeline session: ${startRes.status} ${startRes.statusText}`);
+    const body = await startRes.json().catch(() => null);
+    if (body?.code === "LIMIT_REACHED") {
+      throw new Error("You've reached your monthly call limit. Please upgrade your plan.");
+    }
+    throw new Error(body?.error ?? `${startRes.status} ${startRes.statusText}`);
   }
 
   const startData: StartResponse = await startRes.json();
