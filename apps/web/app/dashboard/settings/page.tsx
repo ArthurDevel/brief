@@ -224,6 +224,16 @@ export default function SettingsPage() {
     load();
   }, []);
 
+  // Stop audio previews on unmount (e.g. navigating away)
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
+
   // Pending change detection
   const imapDirty = imapHost !== savedImap.host || imapPort !== savedImap.port || imapUser !== savedImap.user || imapPassword !== "";
   const smtpDirty = smtpHost !== savedSmtp.host || smtpPort !== savedSmtp.port || smtpUser !== savedSmtp.user || smtpPassword !== "";
