@@ -4,7 +4,7 @@
  * Re-exports all types, IMAP client functions, and SMTP client functions.
  */
 
-export type { ImapConfig, SmtpConfig, EmailSummary, Email } from "./types";
+export type { ImapConfig, SmtpConfig, EmailSummary, Email, ThreadMessage } from "./types";
 
 export {
   createImapConnection,
@@ -13,10 +13,12 @@ export {
   listInbox,
   searchEmails,
   readEmail,
+  readThread,
   markAsRead,
   archiveEmail,
   deleteEmail,
   moveEmail,
+  resolveSpecialUseFolder,
 } from "./imap-client";
 
 export { sendEmail, saveDraft, deleteDraft } from "./smtp-client";

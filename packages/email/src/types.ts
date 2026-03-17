@@ -19,6 +19,8 @@ export interface ImapConfig {
   port: number;
   user: string;
   password: string;
+  /** Use TLS. Defaults to true. Set to false for local test servers. */
+  secure?: boolean;
 }
 
 /** SMTP server connection configuration. */
@@ -51,4 +53,14 @@ export interface Email {
   body: string;
   date: string;
   isRead: boolean;
+}
+
+/** A single message within a thread, returned in chronological order. */
+export interface ThreadMessage {
+  id: string;
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  date: string;
 }

@@ -16,17 +16,36 @@
  */
 
 import { ImapFlow } from "imapflow";
-import type { ImapConfig, EmailSummary, Email } from "./types";
+import type { ImapConfig, EmailSummary, Email, ThreadMessage } from "./types";
 import type { UndoRecipe } from "@dublin/tools";
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-const ARCHIVE_FOLDER = "[Gmail]/All Mail";
-const TRASH_FOLDER = "[Gmail]/Trash";
-const DRAFTS_FOLDER = "[Gmail]/Drafts";
 const SNIPPET_LENGTH = 100;
+
+// ============================================================================
+// FOLDER DISCOVERY
+// ============================================================================
+
+/**
+ * Discovers IMAP folder paths by their SPECIAL-USE flags (RFC 6154).
+ * Gmail may use "[Gmail]/..." or "[Google Mail]/..." or localized names.
+ * This resolves the actual paths at runtime.
+ */
+export async function resolveSpecialUseFolder(
+  client: ImapFlow,
+  flag: "\\All" | "\\Trash" | "\\Drafts" | "\\Sent"
+): Promise<string> {
+  const mailboxes = await client.list();
+  for (const mailbox of mailboxes) {
+    if (mailbox.specialUse === flag) {
+      return mailbox.path;
+    }
+  }
+  throw new Error(`No mailbox with special-use flag ${flag} found`);
+}
 
 // ============================================================================
 // CONNECTION MANAGEMENT
@@ -41,7 +60,7 @@ export async function createImapConnection(config: ImapConfig): Promise<ImapFlow
   const client = new ImapFlow({
     host: config.host,
     port: config.port,
-    secure: true,
+    secure: config.secure ?? true,
     auth: {
       user: config.user,
       pass: config.password,
@@ -235,6 +254,90 @@ export async function readEmail(client: ImapFlow, emailId: string): Promise<Emai
 }
 
 /**
+ * Reads all messages in a thread by following Message-Id / References headers.
+ * Searches [Gmail]/All Mail to include both sent and received messages.
+ * @param client - Connected ImapFlow client
+ * @param emailId - The UID of any email in the thread (from INBOX)
+ * @returns Array of thread messages in chronological order
+ */
+export async function readThread(client: ImapFlow, emailId: string): Promise<ThreadMessage[]> {
+  // Step 1: Read the target email from INBOX to get its headers
+  const inboxLock = await client.getMailboxLock("INBOX");
+  let messageId: string | undefined;
+  let references: string[] = [];
+
+  try {
+    const message = await client.fetchOne(String(Number(emailId)), {
+      envelope: true,
+      source: true,
+    }, { uid: true });
+
+    if (!message || !message.envelope) {
+      throw new Error(`Email with UID ${emailId} not found`);
+    }
+
+    messageId = message.envelope.messageId;
+    const sourceText = message.source?.toString("utf-8") ?? "";
+    references = extractReferences(sourceText);
+  } finally {
+    inboxLock.release();
+  }
+
+  // Collect all known Message-IDs for this thread
+  const threadIds = new Set<string>();
+  if (messageId) threadIds.add(messageId);
+  for (const ref of references) threadIds.add(ref);
+
+  // Step 2: Search All Mail by HEADER for each thread Message-ID
+  const allMailFolder = await resolveSpecialUseFolder(client, "\\All");
+  const allMailLock = await client.getMailboxLock(allMailFolder);
+  try {
+    const matchedUids = new Set<number>();
+
+    for (const id of threadIds) {
+      // Find messages with this Message-ID
+      const byId = await client.search({ header: { "message-id": id } });
+      for (const uid of byId) matchedUids.add(uid);
+
+      // Find messages that reference this Message-ID
+      const byRef = await client.search({ header: { references: id } });
+      for (const uid of byRef) matchedUids.add(uid);
+    }
+
+    if (matchedUids.size === 0) {
+      throw new Error(`No thread messages found for email ${emailId}`);
+    }
+
+    // Fetch only the matched messages (search returns sequence numbers)
+    const seqSet = [...matchedUids].join(",");
+    const results: ThreadMessage[] = [];
+
+    for await (const msg of client.fetch(seqSet, {
+      envelope: true,
+      source: true,
+    })) {
+      if (!msg.envelope) continue;
+
+      const sourceText = msg.source?.toString("utf-8") ?? "";
+
+      results.push({
+        id: String(msg.uid),
+        from: formatAddress(msg.envelope.from),
+        to: formatAddress(msg.envelope.to),
+        subject: msg.envelope.subject ?? "(no subject)",
+        body: extractBody(sourceText),
+        date: msg.envelope.date?.toISOString() ?? "",
+      });
+    }
+
+    results.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    return results;
+  } finally {
+    allMailLock.release();
+  }
+}
+
+/**
  * Marks an email as read (sets the \Seen flag).
  * Not undoable -- returns null.
  * @param client - Connected ImapFlow client
@@ -264,16 +367,17 @@ export async function archiveEmail(
   emailId: string,
   sourceFolder: string
 ): Promise<UndoRecipe> {
+  const archiveFolder = await resolveSpecialUseFolder(client, "\\All");
   const lock = await client.getMailboxLock(sourceFolder);
 
   try {
-    await client.messageMove(emailId, ARCHIVE_FOLDER, { uid: true });
+    await client.messageMove(emailId, archiveFolder, { uid: true });
 
     return {
       operation: "move_email",
       params: {
         emailId,
-        from: ARCHIVE_FOLDER,
+        from: archiveFolder,
         to: sourceFolder,
       },
     };
@@ -294,16 +398,17 @@ export async function deleteEmail(
   emailId: string,
   sourceFolder: string
 ): Promise<UndoRecipe> {
+  const trashFolder = await resolveSpecialUseFolder(client, "\\Trash");
   const lock = await client.getMailboxLock(sourceFolder);
 
   try {
-    await client.messageMove(emailId, TRASH_FOLDER, { uid: true });
+    await client.messageMove(emailId, trashFolder, { uid: true });
 
     return {
       operation: "move_email",
       params: {
         emailId,
-        from: TRASH_FOLDER,
+        from: trashFolder,
         to: sourceFolder,
       },
     };
@@ -367,6 +472,34 @@ function extractSnippet(source: string): string {
   }
 
   return body.substring(0, SNIPPET_LENGTH).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Extracts Message-IDs from References and In-Reply-To headers.
+ * @param source - Raw email source text
+ * @returns Array of Message-ID strings
+ */
+function extractReferences(source: string): string[] {
+  if (!source) return [];
+
+  const ids: string[] = [];
+  const headerSection = source.split(/\r?\n\r?\n/)[0] ?? "";
+
+  // Match References and In-Reply-To headers (may span multiple lines)
+  for (const headerName of ["References", "In-Reply-To"]) {
+    const regex = new RegExp(`^${headerName}:\\s*(.+(?:\\r?\\n[ \\t]+.+)*)`, "mi");
+    const match = headerSection.match(regex);
+    if (match) {
+      // Extract all <...> Message-IDs from the header value
+      const msgIdRegex = /<[^>]+>/g;
+      let m: RegExpExecArray | null;
+      while ((m = msgIdRegex.exec(match[1])) !== null) {
+        ids.push(m[0]);
+      }
+    }
+  }
+
+  return [...new Set(ids)];
 }
 
 /**

@@ -42,6 +42,7 @@ BASE_INSTRUCTIONS = (
 ALL_TOOLS: list[dict[str, str]] = [
     {"name": "list_inbox", "default_class": "read_only"},
     {"name": "read_email", "default_class": "read_only"},
+    {"name": "read_thread", "default_class": "read_only"},
     {"name": "search_emails", "default_class": "read_only"},
     {"name": "mark_as_read", "default_class": "mutating_auto"},
     {"name": "archive_email", "default_class": "mutating_auto"},

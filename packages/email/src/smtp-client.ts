@@ -14,12 +14,7 @@ import type { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import type { SmtpConfig } from "./types";
 import type { UndoRecipe } from "@dublin/tools";
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const DRAFTS_FOLDER = "[Gmail]/Drafts";
+import { resolveSpecialUseFolder } from "./imap-client";
 
 // ============================================================================
 // MAIN HANDLERS
@@ -68,7 +63,8 @@ export async function saveDraft(
 ): Promise<UndoRecipe> {
   const rawMessage = buildRawMessage(params);
 
-  const result = await client.append(DRAFTS_FOLDER, rawMessage, ["\\Draft", "\\Seen"]);
+  const draftsFolder = await resolveSpecialUseFolder(client, "\\Drafts");
+  const result = await client.append(draftsFolder, rawMessage, ["\\Draft", "\\Seen"]);
 
   if (!result) {
     throw new Error("Failed to append draft -- no response from server");
@@ -88,7 +84,8 @@ export async function saveDraft(
  * @param draftUid - The UID of the draft to delete
  */
 export async function deleteDraft(client: ImapFlow, draftUid: string): Promise<void> {
-  const lock = await client.getMailboxLock(DRAFTS_FOLDER);
+  const draftsFolder = await resolveSpecialUseFolder(client, "\\Drafts");
+  const lock = await client.getMailboxLock(draftsFolder);
 
   try {
     await client.messageFlagsAdd(draftUid, ["\\Deleted"], { uid: true });
