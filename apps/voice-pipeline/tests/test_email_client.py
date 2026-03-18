@@ -28,8 +28,8 @@ from src.tools.email_client import (
 
 class TestListInbox:
     def test_returns_emails_in_reverse_chronological_order(self, imap_client: IMAPClient):
-        emails = list_inbox(imap_client, 10)
-        assert len(emails) == 5
+        emails = list_inbox(imap_client, 20)
+        assert len(emails) == 10
         # Most recent first — thread messages are newest
         assert emails[0].subject == "Re: Project kickoff"
         assert emails[1].subject == "Project kickoff"
@@ -43,6 +43,52 @@ class TestListInbox:
         alice = next(e for e in emails if e.subject == "Weekly standup notes")
         assert "alice@example.com" in alice.from_addr
         assert alice.date != ""
+
+    def test_snippet_strips_css_from_html_emails(self, imap_client: IMAPClient):
+        emails = list_inbox(imap_client, 20)
+        chase = next(e for e in emails if e.subject == "You updated your digital wallet")
+
+        assert "line-height" not in chase.snippet
+        assert "!important" not in chase.snippet
+        assert "{" not in chase.snippet
+        assert "<" not in chase.snippet
+        assert "digital wallet" in chase.snippet
+
+    def test_snippet_strips_empty_table_cells(self, imap_client: IMAPClient):
+        emails = list_inbox(imap_client, 20)
+        proximus = next(e for e in emails if e.subject == "Bevestiging van wijziging")
+
+        # Should not be a wall of pipe characters from empty table cells
+        assert proximus.snippet.count("|") < 3
+        assert "wijziging" in proximus.snippet or "abonnement" in proximus.snippet
+
+    def test_snippet_strips_image_links(self, imap_client: IMAPClient):
+        emails = list_inbox(imap_client, 20)
+        freaks = next(e for e in emails if e.subject == "Laatste rigging cursus")
+
+        assert "![" not in freaks.snippet
+        assert "[Image" not in freaks.snippet
+        assert "<img" not in freaks.snippet
+        assert "rigging" in freaks.snippet
+
+    def test_snippet_strips_zero_width_characters(self, imap_client: IMAPClient):
+        emails = list_inbox(imap_client, 20)
+        dribbble = next(e for e in emails if e.subject == "Protein branding")
+
+        assert "\u200c" not in dribbble.snippet
+        assert "redundancy reframed" in dribbble.snippet
+
+    def test_snippet_no_carriage_returns(self, imap_client: IMAPClient):
+        emails = list_inbox(imap_client, 20)
+        for email in emails:
+            assert "\r" not in email.snippet, f"Snippet for '{email.subject}' contains \\r"
+
+    def test_snippet_prefers_plain_text_in_multipart(self, imap_client: IMAPClient):
+        emails = list_inbox(imap_client, 20)
+        npm = next(e for e in emails if e.subject == "Successfully published voicecc@1.2.10")
+
+        assert "arthurdevel" in npm.snippet
+        assert "<" not in npm.snippet
 
 
 # --------------------------------------------------------------------------

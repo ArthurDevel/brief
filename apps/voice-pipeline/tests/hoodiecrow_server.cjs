@@ -46,6 +46,84 @@ const SEED_MESSAGES = [
       "Hey, want to grab lunch tomorrow at noon?",
     ].join("\r\n"),
   },
+  // HTML email with <style> block and CSS rules (based on real Chase email)
+  {
+    raw: [
+      "From: Chase <no.reply.alerts@chase.com>",
+      "To: testuser@localhost",
+      "Subject: You updated your digital wallet",
+      "Date: Thu, 13 Mar 2026 08:00:00 +0000",
+      "Message-Id: <msg-html-css@example.com>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      '<!DOCTYPE html><html><head><style type="text/css">* { line-height: normal !important; } strong { font-weight: bold !important; } em { font-style: italic !important; }</style></head><body><p>You updated your digital wallet successfully.</p></body></html>',
+    ].join("\r\n"),
+  },
+  // HTML email with heavy table layout (based on real Proximus email)
+  {
+    raw: [
+      "From: Proximus <service@proximus.com>",
+      "To: testuser@localhost",
+      "Subject: Bevestiging van wijziging",
+      "Date: Thu, 13 Mar 2026 08:30:00 +0000",
+      "Message-Id: <msg-html-table@example.com>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      '<html><body><table><tr><td></td><td></td><td></td></tr><tr><td></td><td></td><td></td></tr></table><p>Jouw wijziging is bevestigd. Je nieuwe abonnement gaat in op 1 april.</p></body></html>',
+    ].join("\r\n"),
+  },
+  // HTML email with image links (based on real Stage Freaks email)
+  {
+    raw: [
+      "From: Stage Freaks <info@stagefreaks.nl>",
+      "To: testuser@localhost",
+      "Subject: Laatste rigging cursus",
+      "Date: Thu, 13 Mar 2026 09:00:00 +0000",
+      "Message-Id: <msg-html-img@example.com>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      '<html><body><a href="https://example.com/course"><img src="https://example.com/banner.jpg"></a><p>Hoi Arthur, wil jij je rigging skills verbeteren?</p></body></html>',
+    ].join("\r\n"),
+  },
+  // Plain text email with zero-width characters (based on real Dribbble email)
+  {
+    raw: [
+      "From: Dribbble <no-reply@dribbble.com>",
+      "To: testuser@localhost",
+      "Subject: Protein branding",
+      "Date: Thu, 13 Mar 2026 09:30:00 +0000",
+      "Message-Id: <msg-zwc@example.com>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Plus: redundancy reframed \u200c \u200c \u200c \u200c \u200c \u200c \u200c \u200c \u200c \u200c \u200c and the truth behind calm tech.",
+    ].join("\r\n"),
+  },
+  // Multipart email with text/plain + text/html (common format)
+  {
+    raw: [
+      "From: npm <support@npmjs.com>",
+      "To: testuser@localhost",
+      "Subject: Successfully published voicecc@1.2.10",
+      "Date: Thu, 13 Mar 2026 10:00:00 +0000",
+      "Message-Id: <msg-multipart@example.com>",
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/alternative; boundary="npm-boundary"',
+      "",
+      "--npm-boundary",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Hi arthurdevel! A new version of the package voicecc (1.2.10) was published.",
+      "--npm-boundary",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      "<html><body><p>Hi arthurdevel! A new version of the package <strong>voicecc</strong> (1.2.10) was published.</p></body></html>",
+      "--npm-boundary--",
+    ].join("\r\n"),
+  },
 ];
 
 const THREAD_MSG_1 = {

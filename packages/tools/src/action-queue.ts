@@ -324,27 +324,28 @@ async function dispatchTool(
   const { listInbox, searchEmails, readEmail, readThread, markAsRead, archiveEmail, deleteEmail, moveEmail } =
     await import("@dublin/email");
   const { sendEmail, saveDraft } = await import("@dublin/email");
+  const { formatEmailSummaries, formatEmail, formatThread } = await import("@dublin/email");
 
   switch (toolName) {
     case "list_inbox": {
       const limit = (args.limit as number) ?? 5;
       const emails = await listInbox(imapClient, limit);
-      return { result: { emails }, undoRecipe: null };
+      return { result: { markdown: formatEmailSummaries(emails, "Inbox") }, undoRecipe: null };
     }
 
     case "read_email": {
       const email = await readEmail(imapClient, args.email_id as string);
-      return { result: { email }, undoRecipe: null };
+      return { result: { markdown: formatEmail(email) }, undoRecipe: null };
     }
 
     case "read_thread": {
       const messages = await readThread(imapClient, args.email_id as string);
-      return { result: { messages }, undoRecipe: null };
+      return { result: { markdown: formatThread(messages) }, undoRecipe: null };
     }
 
     case "search_emails": {
       const emails = await searchEmails(imapClient, args.query as string);
-      return { result: { emails }, undoRecipe: null };
+      return { result: { markdown: formatEmailSummaries(emails, "Search Results") }, undoRecipe: null };
     }
 
     case "mark_as_read": {
