@@ -26,7 +26,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.processors.user_idle_processor import UserIdleProcessor
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -37,6 +36,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from supabase import Client
 
 from src.audio.speed import AudioSpeedProcessor
+from src.audio.watchdog import AudioFrameWatchdog
 from src.config import LLM_MODEL, Settings
 from src.cost_tracker import CostTracker
 from src.langfuse_observer import LangfuseObserver
@@ -204,10 +204,14 @@ def create_pipeline(
             narration_http_session=narration_http_session,
         )
 
+    # -- Audio watchdog (cancels pipeline if audio frames stop arriving) --
+    watchdog = AudioFrameWatchdog()
+
     # -- Assemble pipeline --
     pipeline = Pipeline(
         [
             transport.input(),
+            watchdog,
             stt,
             user_aggregator,
             llm,
@@ -229,6 +233,9 @@ def create_pipeline(
             observers=[cost_tracker, langfuse_observer],
         ),
     )
+
+    # Wire the watchdog to the task (created after pipeline, so set via setter)
+    watchdog.set_task(task)
 
     return task
 
