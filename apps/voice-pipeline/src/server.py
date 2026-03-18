@@ -323,14 +323,18 @@ async def lifespan(app: FastAPI):
 
     # Fetch TURN/STUN servers so the server-side peer connection can traverse NAT
     settings = load_settings()
+    logger.info("[server] METERED_API_KEY present: %s", bool(settings.metered_api_key))
     ice_servers = None
     if settings.metered_api_key:
         try:
             ice_servers = await _fetch_ice_servers(settings.metered_api_key)
-            logger.info("[server] Loaded %d ICE servers from Metered", len(ice_servers))
+            logger.info("[server] Loaded %d ICE servers from Metered: %s", len(ice_servers), ice_servers)
         except Exception as exc:
-            logger.error("[server] Failed to fetch ICE servers at startup: %s", exc)
+            logger.error("[server] Failed to fetch ICE servers at startup: %s", exc, exc_info=True)
+    else:
+        logger.warning("[server] No METERED_API_KEY set, skipping TURN server setup")
 
+    logger.info("[server] Creating SmallWebRTCRequestHandler with ice_servers=%s", ice_servers)
     _webrtc_handler = SmallWebRTCRequestHandler(ice_servers=ice_servers)
     yield
 
@@ -414,13 +418,17 @@ async def webrtc_start(request: Request) -> JSONResponse:
                 resp = await client.get(f"{METERED_CREDENTIALS_URL}?apiKey={settings.metered_api_key}")
                 resp.raise_for_status()
                 ice_servers_for_client = resp.json()
+            logger.info("[server] /start fetched %d ICE servers for client: %s", len(ice_servers_for_client), ice_servers_for_client)
 
             # Convert to RTCIceServer objects for the server-side peer connection
             rtc_ice_servers = _to_rtc_ice_servers(ice_servers_for_client)
+            logger.info("[server] /start converted %d RTCIceServer objects, updating handler", len(rtc_ice_servers))
             if _webrtc_handler:
                 _webrtc_handler.update_ice_servers(rtc_ice_servers)
         except Exception as exc:
-            logger.error("[server] Failed to fetch TURN credentials: %s", exc)
+            logger.error("[server] Failed to fetch TURN credentials: %s", exc, exc_info=True)
+    else:
+        logger.warning("[server] /start: No METERED_API_KEY, skipping TURN")
 
     return JSONResponse({"sessionId": session_id, "iceServers": ice_servers_for_client})
 
