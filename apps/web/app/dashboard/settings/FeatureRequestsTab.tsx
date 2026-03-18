@@ -1,5 +1,5 @@
 /**
- * Feature Requests page -- list submitted requests and submit new ones.
+ * Feature Requests tab -- list submitted requests and submit new ones.
  *
  * Shows a table of the user's feature requests with description, source,
  * and date. Includes a form to submit new requests from the dashboard.
@@ -28,10 +28,10 @@ const DATE_FORMAT: Intl.DateTimeFormatOptions = {
 };
 
 // ============================================================================
-// RENDER
+// COMPONENT
 // ============================================================================
 
-export default function FeatureRequestsPage() {
+export default function FeatureRequestsTab() {
   const [requests, setRequests] = useState<FeatureRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -86,19 +86,16 @@ export default function FeatureRequestsPage() {
     }
   };
 
+  // ============================================================================
+  // RENDER
+  // ============================================================================
+
   if (loading) {
-    return (
-      <div>
-        <h1 className="mb-8 text-2xl font-bold text-gray-900">Feature Requests</h1>
-        <p className="text-gray-500">Loading...</p>
-      </div>
-    );
+    return <p className="text-gray-500">Loading...</p>;
   }
 
   return (
     <div>
-      <h1 className="mb-8 text-2xl font-bold text-gray-900">Feature Requests</h1>
-
       {error && (
         <div className="mb-6 rounded-md bg-red-50 p-4 text-sm text-red-700">
           {error}

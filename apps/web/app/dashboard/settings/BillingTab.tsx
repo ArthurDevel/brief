@@ -1,5 +1,5 @@
 /**
- * Billing page -- plan info, usage progress, and plan comparison.
+ * Billing tab -- plan info, usage progress, and plan comparison.
  *
  * Shows the user's current plan, usage progress bar, hours remaining,
  * billing period dates, a plan comparison table, and a disabled
@@ -27,10 +27,10 @@ const PLANS = [
 ];
 
 // ============================================================================
-// RENDER
+// COMPONENT
 // ============================================================================
 
-export default function BillingPage() {
+export default function BillingTab() {
   const [usage, setUsage] = useState<UsageInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,22 +51,18 @@ export default function BillingPage() {
     load();
   }, []);
 
+  // ============================================================================
+  // RENDER
+  // ============================================================================
+
   if (loading) {
-    return (
-      <div>
-        <h1 className="mb-8 text-2xl font-bold text-gray-900">Billing</h1>
-        <p className="text-gray-500">Loading...</p>
-      </div>
-    );
+    return <p className="text-gray-500">Loading...</p>;
   }
 
   if (error || !usage) {
     return (
-      <div>
-        <h1 className="mb-8 text-2xl font-bold text-gray-900">Billing</h1>
-        <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
-          {error ?? "Failed to load billing info"}
-        </div>
+      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+        {error ?? "Failed to load billing info"}
       </div>
     );
   }
@@ -77,8 +73,6 @@ export default function BillingPage() {
 
   return (
     <div>
-      <h1 className="mb-8 text-2xl font-bold text-gray-900">Billing</h1>
-
       {/* Current plan + usage */}
       <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6">
         <h2 className="mb-4 text-lg font-semibold text-gray-800">Current Plan</h2>

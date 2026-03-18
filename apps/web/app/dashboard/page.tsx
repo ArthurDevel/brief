@@ -153,7 +153,7 @@ export default function DashboardOverviewPage() {
         <div className="rounded-lg border border-gray-200 bg-white p-6">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-gray-800">Recent Sessions</h2>
-            <Link href="/dashboard/history" className="text-sm text-blue-600 hover:underline">
+            <Link href="/dashboard/sessions" className="text-sm text-blue-600 hover:underline">
               View all
             </Link>
           </div>
@@ -170,7 +170,7 @@ export default function DashboardOverviewPage() {
                 <tr key={session.id} className="border-b border-gray-100">
                   <td className="py-3">
                     <Link
-                      href={`/dashboard/history/${session.id}`}
+                      href={`/dashboard/sessions/${session.id}`}
                       className="text-blue-600 hover:underline"
                     >
                       {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
