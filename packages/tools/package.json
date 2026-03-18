@@ -8,5 +8,9 @@
     "@dublin/email": "workspace:*",
     "@supabase/supabase-js": "^2.49.1",
     "imapflow": "^1.0.171"
+  },
+  "devDependencies": {
+    "hoodiecrow-imap": "^2.1.0",
+    "vitest": "^4.1.0"
   }
 }

@@ -371,12 +371,17 @@ export async function archiveEmail(
   const lock = await client.getMailboxLock(sourceFolder);
 
   try {
+    // Fetch the stable Message-ID before moving (UIDs change across folders)
+    const msg = await client.fetchOne(emailId, { envelope: true }, { uid: true });
+    const messageId = msg.envelope.messageId;
+    if (!messageId) throw new Error("Email has no Message-ID header");
+
     await client.messageMove(emailId, archiveFolder, { uid: true });
 
     return {
       operation: "move_email",
       params: {
-        emailId,
+        messageId,
         from: archiveFolder,
         to: sourceFolder,
       },
@@ -402,12 +407,17 @@ export async function deleteEmail(
   const lock = await client.getMailboxLock(sourceFolder);
 
   try {
+    // Fetch the stable Message-ID before moving (UIDs change across folders)
+    const msg = await client.fetchOne(emailId, { envelope: true }, { uid: true });
+    const messageId = msg.envelope.messageId;
+    if (!messageId) throw new Error("Email has no Message-ID header");
+
     await client.messageMove(emailId, trashFolder, { uid: true });
 
     return {
       operation: "move_email",
       params: {
-        emailId,
+        messageId,
         from: trashFolder,
         to: sourceFolder,
       },
@@ -419,21 +429,28 @@ export async function deleteEmail(
 
 /**
  * Moves an email between IMAP folders. Used by undo to reverse archive/delete.
+ * Looks up the email by Message-ID header (stable across folders) instead of UID.
  * @param client - Connected ImapFlow client
- * @param emailId - The UID of the email to move
+ * @param messageId - The Message-ID header value
  * @param from - Source folder
  * @param to - Destination folder
  */
 export async function moveEmail(
   client: ImapFlow,
-  emailId: string,
+  messageId: string,
   from: string,
   to: string
 ): Promise<void> {
   const lock = await client.getMailboxLock(from);
 
   try {
-    await client.messageMove(emailId, to, { uid: true });
+    // Find the current UID by searching for the Message-ID header
+    const uids = await client.search({ header: { "message-id": messageId } }, { uid: true });
+    if (uids.length === 0) {
+      throw new Error(`Email with Message-ID ${messageId} not found in ${from}`);
+    }
+
+    await client.messageMove(String(uids[0]), to, { uid: true });
   } finally {
     lock.release();
   }
