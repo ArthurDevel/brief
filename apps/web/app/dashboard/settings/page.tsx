@@ -161,7 +161,7 @@ export default function SettingsPage() {
   };
 
   // Auto-save: fire a settings PUT with current form values, flash "Saved"
-  const savedTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const autoSave = useCallback(async (overrides?: Record<string, unknown>, section?: string) => {
     const f = formRef.current;
     const payload: Record<string, unknown> = {
@@ -311,7 +311,7 @@ export default function SettingsPage() {
     autoSave({ voicePreference: canonicalName }, "voice");
   }
 
-  const speedDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const speedDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   function handleSpeedChange(speed: number) {
     setVoiceSpeed(speed);
     clearTimeout(speedDebounceRef.current);
