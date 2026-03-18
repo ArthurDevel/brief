@@ -17,7 +17,8 @@ import logging
 import time
 from typing import Any
 
-from pipecat.frames.frames import LLMMessagesFrame
+import aiohttp
+from pipecat.frames.frames import LLMMessagesFrame, TTSAudioRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
@@ -57,6 +58,21 @@ DEFAULT_TEMPO = 1.5
 # Must be shorter than pipecat's 10s function_call_timeout_secs so that
 # our handler returns a proper error before pipecat sends "COMPLETED".
 TOOL_CALL_TIMEOUT_SECS = 8.0
+
+DEEPGRAM_HTTP_TTS_URL = "https://api.deepgram.com/v1/speak"
+
+# Short phrases spoken via TTS before a tool executes, so the user isn't
+# waiting in silence. Tools not listed here are executed silently.
+TOOL_NARRATIONS: dict[str, str] = {
+    "list_inbox": "Checking your inbox.",
+    "read_email": "Reading that email.",
+    "read_thread": "Pulling up the thread.",
+    "search_emails": "Searching your emails.",
+    "draft_email": "Drafting that email.",
+    "send_email": "Sending that email.",
+    "archive_email": "Archiving that email.",
+    "delete_email": "Deleting that email.",
+}
 
 
 # ============================================================================
@@ -167,6 +183,11 @@ def create_pipeline(
     # A shared asyncio.Lock serializes IMAP access -- imapclient is not thread-safe.
     imap_lock = asyncio.Lock()
     tool_names = [t["function"]["name"] for t in tools]
+
+    # Shared HTTP session for narration TTS calls (Deepgram REST API).
+    # Created lazily on first use, closed when the pipeline ends.
+    narration_http_session: dict[str, aiohttp.ClientSession | None] = {"session": None}
+
     for tool_name in tool_names:
         _register_tool_handler(
             llm=llm,
@@ -177,6 +198,10 @@ def create_pipeline(
             imap_lock=imap_lock,
             supabase=supabase,
             langfuse_observer=langfuse_observer,
+            deepgram_api_key=settings.deepgram_api_key,
+            tts_sample_rate=sample_rate,
+            tts_voice=user_context.voice_preference,
+            narration_http_session=narration_http_session,
         )
 
     # -- Assemble pipeline --
@@ -212,6 +237,51 @@ def create_pipeline(
 # HELPER FUNCTIONS
 # ============================================================================
 
+async def _synthesize_narration(
+    text: str,
+    api_key: str,
+    sample_rate: int,
+    voice: str,
+    http_session: dict[str, aiohttp.ClientSession | None],
+) -> bytes:
+    """Synthesize a short phrase using Deepgram's HTTP TTS API.
+
+    Uses the REST endpoint instead of the websocket TTS service to avoid
+    a race condition where pipecat's websocket TTS cleans up the audio
+    context before all audio chunks arrive.
+
+    Args:
+        text: The phrase to synthesize.
+        api_key: Deepgram API key.
+        sample_rate: Audio sample rate in Hz.
+        voice: Deepgram voice model name.
+        http_session: Mutable dict holding a shared aiohttp session (lazy-created).
+
+    Returns:
+        Raw PCM linear16 audio bytes.
+    """
+    # Lazy-create the shared HTTP session
+    if http_session["session"] is None:
+        http_session["session"] = aiohttp.ClientSession()
+
+    session = http_session["session"]
+    headers = {"Authorization": f"Token {api_key}", "Content-Type": "application/json"}
+    params = {
+        "model": voice,
+        "encoding": "linear16",
+        "sample_rate": sample_rate,
+        "container": "none",
+    }
+
+    async with session.post(
+        DEEPGRAM_HTTP_TTS_URL, headers=headers, json={"text": text}, params=params
+    ) as resp:
+        if resp.status != 200:
+            error_text = await resp.text()
+            raise RuntimeError(f"Deepgram HTTP TTS failed ({resp.status}): {error_text}")
+        return await resp.read()
+
+
 def _register_tool_handler(
     llm: TrackedOpenAILLMService,
     tool_name: str,
@@ -221,6 +291,10 @@ def _register_tool_handler(
     imap_lock: asyncio.Lock,
     supabase: Client,
     langfuse_observer: LangfuseObserver,
+    deepgram_api_key: str,
+    tts_sample_rate: int,
+    tts_voice: str,
+    narration_http_session: dict[str, aiohttp.ClientSession | None],
 ) -> None:
     """Register a single function call handler on the LLM service.
 
@@ -228,6 +302,12 @@ def _register_tool_handler(
     IMAP operations are synchronous. An asyncio.Lock serializes IMAP
     access (imapclient is not thread-safe). A timeout ensures the handler
     returns an error before pipecat's hardcoded "COMPLETED" fires.
+
+    If a narration phrase is configured in TOOL_NARRATIONS for this tool,
+    the handler synthesizes it via Deepgram's HTTP TTS API and pushes
+    raw audio frames through the pipeline. This bypasses pipecat's
+    websocket TTS service which has a race condition with short phrases
+    (audio context gets cleaned up before all chunks arrive).
 
     Args:
         llm: The LLM service to register the handler on.
@@ -238,9 +318,30 @@ def _register_tool_handler(
         imap_lock: Shared asyncio.Lock to serialize IMAP access.
         supabase: Supabase client.
         langfuse_observer: Observer for Langfuse tracing.
+        deepgram_api_key: Deepgram API key for HTTP TTS narration.
+        tts_sample_rate: Audio sample rate for narration synthesis.
+        tts_voice: Deepgram voice model for narration synthesis.
+        narration_http_session: Shared mutable dict holding the aiohttp session.
     """
     async def handler(function_name, tool_call_id, args, llm_instance, context, result_callback):
         """Handle a function call from the LLM."""
+        # Speak a short narration so the user knows something is happening.
+        # Uses Deepgram HTTP TTS (not websocket) to avoid audio context race condition.
+        narration = TOOL_NARRATIONS.get(function_name)
+        if narration:
+            try:
+                audio_bytes = await _synthesize_narration(
+                    narration, deepgram_api_key, tts_sample_rate, tts_voice,
+                    narration_http_session,
+                )
+                await llm.push_frame(TTSAudioRawFrame(
+                    audio=audio_bytes,
+                    sample_rate=tts_sample_rate,
+                    num_channels=1,
+                ))
+            except Exception as e:
+                logger.warning(f"Narration failed for [{function_name}]: {e}")
+
         start_ms = time.time() * 1000
         try:
             action_input = ActionInput(
