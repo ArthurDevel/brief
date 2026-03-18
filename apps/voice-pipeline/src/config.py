@@ -22,6 +22,8 @@ REQUIRED_ENV_VARS = [
     "OPENROUTER_API_KEY",
     "LANGFUSE_PUBLIC_KEY",
     "LANGFUSE_SECRET_KEY",
+    "WEB_APP_URL",
+    "INTERNAL_API_KEY",
 ]
 
 
@@ -58,6 +60,8 @@ class Settings:
     supabase_service_role_key: str = ""
     deepgram_api_key: str = ""
     openrouter_api_key: str = ""
+    web_app_url: str = ""
+    internal_api_key: str = ""
     port: int = 7860
     public_url: str = "http://localhost:7860"
 
@@ -89,6 +93,8 @@ def load_settings() -> Settings:
         supabase_service_role_key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
         deepgram_api_key=os.environ["DEEPGRAM_API_KEY"],
         openrouter_api_key=os.environ["OPENROUTER_API_KEY"],
+        web_app_url=os.environ["WEB_APP_URL"],
+        internal_api_key=os.environ["INTERNAL_API_KEY"],
         port=int(os.getenv("PORT", "7860")),
         public_url=os.getenv("PUBLIC_URL", "http://localhost:7860"),
     )

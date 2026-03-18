@@ -20,6 +20,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
+import httpx
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -182,11 +183,27 @@ async def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session
     except BaseException as exc:
         logger.error("[server] Error ending Langfuse trace: %s", exc)
 
+    session_ended = False
     try:
         cost_summary = cost_tracker.get_summary()
         end_session(session, cost_summary, supabase)
+        session_ended = True
     except BaseException as exc:
         logger.error("[server] Error ending session: %s", exc)
+
+    # Trigger end-of-session processing (e.g. summary email) on the web app
+    if session_ended:
+        try:
+            url = f"{settings.web_app_url}/api/sessions/{session.session_id}/end-of-session"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {settings.internal_api_key}"},
+                )
+                response.raise_for_status()
+                logger.info("[server] End-of-session hook completed for session %s", session.session_id)
+        except BaseException as exc:
+            logger.warning("[server] End-of-session hook failed for session %s: %s", session.session_id, exc)
 
     _live_pipeline_sessions.pop(session.session_id, None)
 
