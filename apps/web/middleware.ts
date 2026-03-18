@@ -30,7 +30,8 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow public routes through without auth check
-  const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
+  const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route))
+    || pathname.match(/^\/api\/sessions\/[^/]+\/end-of-session$/) !== null;
 
   // Create a response to pass through (we may modify cookies on it)
   let response = NextResponse.next({ request: { headers: request.headers } });
