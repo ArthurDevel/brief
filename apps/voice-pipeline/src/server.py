@@ -357,17 +357,26 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("[server] No METERED_API_KEY set, skipping TURN server setup")
 
-    # Test connectivity to the TURN server from inside the container
-    import socket
-    import ssl
-    try:
-        sock = socket.create_connection(("global.relay.metered.ca", 443), timeout=5)
-        ctx = ssl.create_default_context()
-        ssock = ctx.wrap_socket(sock, server_hostname="global.relay.metered.ca")
-        logger.info("[server] TURN TLS connectivity OK: {}", ssock.getpeername())
-        ssock.close()
-    except Exception as exc:
-        logger.error("[server] TURN TLS connectivity FAILED: {}", exc)
+    # Test actual TURN allocation from inside the container
+    if ice_servers:
+        try:
+            from aioice import Connection as AioIceConnection
+            from aiortc.rtcicetransport import connection_kwargs
+            ice_kwargs = connection_kwargs(ice_servers)
+            logger.info("[server] TURN test: aioice kwargs = {}", ice_kwargs)
+            test_conn = AioIceConnection(ice_controlling=True, **ice_kwargs)
+            await test_conn.gather_candidates()
+            candidates = test_conn.local_candidates
+            for c in candidates:
+                logger.info("[server] TURN test candidate: type={} host={}:{} transport={}", c.type, c.host, c.port, c.transport)
+            relay_count = sum(1 for c in candidates if c.type == "relay")
+            if relay_count == 0:
+                logger.error("[server] TURN test: NO relay candidates -- TURN relay will NOT work")
+            else:
+                logger.info("[server] TURN test: {} relay candidate(s) -- TURN is working", relay_count)
+            await test_conn.close()
+        except Exception as exc:
+            logger.exception("[server] TURN allocation test FAILED: {}", exc)
 
     logger.info("[server] Creating SmallWebRTCRequestHandler with ice_servers={}", ice_servers)
     _webrtc_handler = SmallWebRTCRequestHandler(ice_servers=ice_servers)
