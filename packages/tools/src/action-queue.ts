@@ -468,7 +468,7 @@ async function dispatchUndo(
       const { moveEmail } = await import("@dublin/email");
       await moveEmail(
         imapClient,
-        recipe.params.emailId as string,
+        recipe.params.messageId as string,
         recipe.params.from as string,
         recipe.params.to as string
       );
