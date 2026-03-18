@@ -349,7 +349,20 @@ async def webrtc_start(request: Request) -> JSONResponse:
     session_id = str(uuid.uuid4())
     _active_sessions[session_id] = request_data.get("body", {})
 
-    return JSONResponse({"sessionId": session_id})
+    # Fetch TURN/STUN credentials from Metered for WebRTC connectivity
+    ice_servers = []
+    if settings.metered_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"https://0x41.metered.live/api/v1/turn/credentials?apiKey={settings.metered_api_key}"
+                )
+                resp.raise_for_status()
+                ice_servers = resp.json()
+        except Exception as exc:
+            logger.error("[server] Failed to fetch TURN credentials: %s", exc)
+
+    return JSONResponse({"sessionId": session_id, "iceServers": ice_servers})
 
 
 @app.post("/sessions/{session_id}/api/offer")
