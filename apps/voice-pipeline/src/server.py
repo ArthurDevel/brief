@@ -30,6 +30,7 @@ from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
+from aiortc import RTCIceServer
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCPatchRequest,
@@ -92,19 +93,43 @@ _live_pipeline_sessions: dict[str, dict[str, Any]] = {}  # db_session_id -> clea
 # HELPER FUNCTIONS
 # ============================================================================
 
-async def _fetch_ice_servers(api_key: str) -> list[dict]:
+def _to_rtc_ice_servers(raw_servers: list[dict]) -> list[RTCIceServer]:
+    """Convert Metered API response dicts to RTCIceServer objects.
+
+    Args:
+        raw_servers: List of dicts with urls/username/credential from Metered API.
+
+    Returns:
+        List of RTCIceServer objects for use with aiortc peer connections.
+    """
+    ice_servers = []
+    for server in raw_servers:
+        urls = server.get("urls") or server.get("url")
+        if not urls:
+            continue
+        if isinstance(urls, str):
+            urls = [urls]
+        ice_servers.append(RTCIceServer(
+            urls=urls,
+            username=server.get("username", ""),
+            credential=server.get("credential", ""),
+        ))
+    return ice_servers
+
+
+async def _fetch_ice_servers(api_key: str) -> list[RTCIceServer]:
     """Fetch TURN/STUN credentials from the Metered API.
 
     Args:
         api_key: Metered API key.
 
     Returns:
-        List of ICE server dicts (urls, username, credential).
+        List of RTCIceServer objects for use with aiortc peer connections.
     """
     async with httpx.AsyncClient(timeout=5.0) as client:
         resp = await client.get(f"{METERED_CREDENTIALS_URL}?apiKey={api_key}")
         resp.raise_for_status()
-        return resp.json()
+        return _to_rtc_ice_servers(resp.json())
 
 
 # ============================================================================
@@ -382,16 +407,22 @@ async def webrtc_start(request: Request) -> JSONResponse:
 
     # Fetch fresh TURN/STUN credentials from Metered for the client,
     # and update the server-side handler so both sides can traverse NAT
-    ice_servers = []
+    ice_servers_for_client: list[dict] = []
     if settings.metered_api_key:
         try:
-            ice_servers = await _fetch_ice_servers(settings.metered_api_key)
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{METERED_CREDENTIALS_URL}?apiKey={settings.metered_api_key}")
+                resp.raise_for_status()
+                ice_servers_for_client = resp.json()
+
+            # Convert to RTCIceServer objects for the server-side peer connection
+            rtc_ice_servers = _to_rtc_ice_servers(ice_servers_for_client)
             if _webrtc_handler:
-                _webrtc_handler.update_ice_servers(ice_servers)
+                _webrtc_handler.update_ice_servers(rtc_ice_servers)
         except Exception as exc:
             logger.error("[server] Failed to fetch TURN credentials: %s", exc)
 
-    return JSONResponse({"sessionId": session_id, "iceServers": ice_servers})
+    return JSONResponse({"sessionId": session_id, "iceServers": ice_servers_for_client})
 
 
 @app.post("/sessions/{session_id}/api/offer")

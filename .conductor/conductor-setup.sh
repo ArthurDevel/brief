@@ -18,3 +18,13 @@ for dir in apps/voice-pipeline apps/web; do
         done
     fi
 done
+
+# Install Python venv for voice-pipeline
+if [ -d "apps/voice-pipeline" ]; then
+    cd apps/voice-pipeline
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install -r requirements.txt
+    deactivate
+    cd ../..
+fi
