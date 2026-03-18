@@ -16,6 +16,8 @@
  */
 
 import { ImapFlow } from "imapflow";
+import { simpleParser } from "mailparser";
+import TurndownService from "turndown";
 import type { ImapConfig, EmailSummary, Email, ThreadMessage } from "./types";
 import type { UndoRecipe } from "@dublin/tools";
 
@@ -117,9 +119,6 @@ export async function listInbox(client: ImapFlow, limit: number): Promise<EmailS
   const lock = await client.getMailboxLock("INBOX");
 
   try {
-    const messages: EmailSummary[] = [];
-
-    // Fetch most recent messages by sequence number (descending)
     const mailbox = client.mailbox;
     if (!mailbox || mailbox.exists === 0) {
       return [];
@@ -129,19 +128,27 @@ export async function listInbox(client: ImapFlow, limit: number): Promise<EmailS
     const startSeq = Math.max(1, totalMessages - limit + 1);
     const range = `${startSeq}:*`;
 
+    // Collect metadata first (cannot run other IMAP commands inside fetch loop)
+    const pending: Array<{ uid: number; envelope: any; bodyStructure: any }> = [];
     for await (const message of client.fetch(range, {
       envelope: true,
       bodyStructure: true,
-      source: { maxLength: 2000 },
     })) {
-      const envelope = message.envelope;
-      if (!envelope) continue;
+      if (message.envelope) {
+        pending.push({
+          uid: message.uid,
+          envelope: message.envelope,
+          bodyStructure: message.bodyStructure,
+        });
+      }
+    }
 
-      const sourceText = message.source?.toString("utf-8") ?? "";
-      const snippet = extractSnippet(sourceText);
-
+    // Fetch text parts and build summaries
+    const messages: EmailSummary[] = [];
+    for (const { uid, envelope, bodyStructure } of pending) {
+      const snippet = await extractSnippetFromStructure(client, uid, bodyStructure);
       messages.push({
-        id: String(message.uid),
+        id: String(uid),
         from: formatAddress(envelope.from),
         subject: envelope.subject ?? "(no subject)",
         snippet,
@@ -149,9 +156,7 @@ export async function listInbox(client: ImapFlow, limit: number): Promise<EmailS
       });
     }
 
-    // Return in reverse chronological order
     messages.reverse();
-
     return messages;
   } finally {
     lock.release();
@@ -168,7 +173,6 @@ export async function searchEmails(client: ImapFlow, query: string): Promise<Ema
   const lock = await client.getMailboxLock("INBOX");
 
   try {
-    // Use IMAP OR search across subject and from fields
     const searchResult = await client.search({
       or: [{ subject: query }, { from: query }],
     });
@@ -177,22 +181,30 @@ export async function searchEmails(client: ImapFlow, query: string): Promise<Ema
       return [];
     }
 
-    const messages: EmailSummary[] = [];
+    // Collect metadata first (cannot run other IMAP commands inside fetch loop)
+    const pending: Array<{ uid: number; envelope: any; bodyStructure: any }> = [];
     const uidSet = searchResult.map(String).join(",");
 
     for await (const message of client.fetch(uidSet, {
       envelope: true,
       uid: true,
-      source: { maxLength: 2000 },
+      bodyStructure: true,
     })) {
-      const envelope = message.envelope;
-      if (!envelope) continue;
+      if (message.envelope) {
+        pending.push({
+          uid: message.uid,
+          envelope: message.envelope,
+          bodyStructure: message.bodyStructure,
+        });
+      }
+    }
 
-      const sourceText = message.source?.toString("utf-8") ?? "";
-      const snippet = extractSnippet(sourceText);
-
+    // Fetch text parts and build summaries
+    const messages: EmailSummary[] = [];
+    for (const { uid, envelope, bodyStructure } of pending) {
+      const snippet = await extractSnippetFromStructure(client, uid, bodyStructure);
       messages.push({
-        id: String(message.uid),
+        id: String(uid),
         from: formatAddress(envelope.from),
         subject: envelope.subject ?? "(no subject)",
         snippet,
@@ -200,9 +212,7 @@ export async function searchEmails(client: ImapFlow, query: string): Promise<Ema
       });
     }
 
-    // Return in reverse chronological order
     messages.reverse();
-
     return messages;
   } finally {
     lock.release();
@@ -235,8 +245,8 @@ export async function readEmail(client: ImapFlow, emailId: string): Promise<Emai
     }
 
     const envelope = message.envelope;
-    const sourceText = message.source?.toString("utf-8") ?? "";
-    const body = extractBody(sourceText);
+    const sourceBuffer = message.source ?? Buffer.from("");
+    const body = await extractBodyFromMime(sourceBuffer);
     const flags = message.flags ?? new Set<string>();
 
     return {
@@ -318,14 +328,15 @@ export async function readThread(client: ImapFlow, emailId: string): Promise<Thr
     })) {
       if (!msg.envelope) continue;
 
-      const sourceText = msg.source?.toString("utf-8") ?? "";
+      const sourceBuffer = msg.source ?? Buffer.from("");
+      const body = await extractBodyFromMime(sourceBuffer);
 
       results.push({
         id: String(msg.uid),
         from: formatAddress(msg.envelope.from),
         to: formatAddress(msg.envelope.to),
         subject: msg.envelope.subject ?? "(no subject)",
-        body: extractBody(sourceText),
+        body,
         date: msg.envelope.date?.toISOString() ?? "",
       });
     }
@@ -478,17 +489,84 @@ function formatAddress(addresses: Array<{ name?: string; address?: string }> | u
 }
 
 /**
- * Extracts a plain-text snippet from a raw email source.
- * @param source - Raw email source text
- * @returns Short snippet of the email body
+ * Extracts a plain-text snippet using BODYSTRUCTURE to fetch only the text part.
+ * Walks the bodyStructure to find text/plain (or text/html), downloads that
+ * part via client.download(), decodes it, and truncates to SNIPPET_LENGTH.
+ * @param client - Connected ImapFlow client
+ * @param uid - UID of the email
+ * @param bodyStructure - Parsed bodyStructure from ImapFlow fetch
+ * @returns Clean text snippet
  */
-function extractSnippet(source: string): string {
-  const body = extractBody(source);
-  if (!body) {
-    return "";
+async function extractSnippetFromStructure(
+  client: ImapFlow,
+  uid: number,
+  bodyStructure: any
+): Promise<string> {
+  if (!bodyStructure) return "";
+
+  const textPart = findTextPart(bodyStructure);
+  if (!textPart) return "";
+
+  // Download just the text part
+  const { meta, content } = await client.download(String(uid), textPart.part, { uid: true });
+
+  // Collect the stream into a buffer
+  const chunks: Buffer[] = [];
+  for await (const chunk of content) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const buffer = Buffer.concat(chunks);
+
+  // ImapFlow's download() already decodes content-transfer-encoding,
+  // so we just need to decode the charset
+  const charset = meta.charset ?? "utf-8";
+  let text: string;
+  try {
+    const decoder = new TextDecoder(charset);
+    text = decoder.decode(buffer);
+  } catch {
+    text = buffer.toString("utf-8");
   }
 
-  return body.substring(0, SNIPPET_LENGTH).replace(/\s+/g, " ").trim();
+  // Convert HTML to markdown if needed
+  if (textPart.type === "text/html") {
+    const turndown = new TurndownService();
+    text = turndown.turndown(text);
+  }
+
+  return text.substring(0, SNIPPET_LENGTH).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Walks a bodyStructure tree to find the best text part.
+ * Prefers text/plain over text/html.
+ * @param node - bodyStructure node from ImapFlow
+ * @returns Object with part number and type, or null
+ */
+function findTextPart(node: any): { part: string; type: string } | null {
+  if (!node) return null;
+
+  // Multipart node: has childNodes array
+  if (node.childNodes) {
+    let plain: { part: string; type: string } | null = null;
+    let html: { part: string; type: string } | null = null;
+    for (const child of node.childNodes) {
+      const result = findTextPart(child);
+      if (result) {
+        if (result.type === "text/plain" && !plain) plain = result;
+        if (result.type === "text/html" && !html) html = result;
+      }
+    }
+    return plain ?? html;
+  }
+
+  // Leaf node: check type
+  const type = node.type?.toLowerCase() ?? "";
+  if (type === "text/plain" || type === "text/html") {
+    return { part: node.part ?? "1", type };
+  }
+
+  return null;
 }
 
 /**
@@ -520,25 +598,42 @@ function extractReferences(source: string): string[] {
 }
 
 /**
- * Extracts the plain-text body from a raw email source.
- * Looks for the body after the header/body separator (double newline).
- * @param source - Raw email source text
+ * Parses a full MIME email source and extracts the body as plain text.
+ * Prefers the text/plain part. If only HTML exists, converts to markdown
+ * via turndown. Used for full-body reads (readEmail, readThread).
+ * @param source - Full raw email source as Buffer or string
  * @returns Plain text body content
  */
-function extractBody(source: string): string {
-  if (!source) {
+async function extractBodyFromMime(source: Buffer | string): Promise<string> {
+  if (!source || (Buffer.isBuffer(source) && source.length === 0)) {
     return "";
   }
 
-  // Find the header/body separator (double CRLF or double LF)
-  const separatorIndex = source.indexOf("\r\n\r\n");
-  if (separatorIndex === -1) {
-    const lfSeparator = source.indexOf("\n\n");
-    if (lfSeparator === -1) {
-      return source;
-    }
-    return source.substring(lfSeparator + 2).trim();
+  const parsed = await simpleParser(source);
+
+  let body = "";
+
+  // Prefer plain text
+  if (parsed.text) {
+    body = parsed.text.trim();
+  } else if (parsed.html) {
+    // Fall back to HTML-to-markdown conversion (strip images and empty links)
+    const turndown = new TurndownService();
+    turndown.addRule("removeImages", { filter: "img", replacement: () => "" });
+    turndown.addRule("removeEmptyLinks", {
+      filter: (node: HTMLElement) => node.nodeName === "A" && !node.textContent?.trim(),
+      replacement: () => "",
+    });
+    body = turndown.turndown(parsed.html).trim();
   }
 
-  return source.substring(separatorIndex + 4).trim();
+  // Normalize CRLF line endings (RFC 5322 uses \r\n)
+  body = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  // Strip zero-width characters (marketers stuff these into emails)
+  body = body.replace(/[\u200b\u200c\u200d\ufeff\u00ad]/g, "");
+  // Collapse multiple spaces
+  body = body.replace(/ {2,}/g, " ");
+
+  return body.trim();
 }
+

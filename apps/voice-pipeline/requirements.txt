@@ -10,4 +10,5 @@ imapclient
 bcrypt
 httpx
 langfuse
+markdownify
 pyright

@@ -27,6 +27,7 @@ from supabase import Client
 from src.session import ImapConfig, SmtpConfig
 from src.tools.classification import classify_action
 from src.tools import email_client
+from src.tools.markdown_formatter import format_email_summaries, format_email, format_thread
 
 logger = logging.getLogger(__name__)
 
@@ -409,28 +410,28 @@ def _dispatch_tool(
             imap_holder, config,
             lambda c: email_client.list_inbox(c, limit),
         )
-        return {"emails": [_email_summary_to_dict(e) for e in emails]}, None
+        return {"markdown": format_email_summaries(emails, "Inbox")}, None
 
     if tool_name == "read_email":
         result = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.read_email(c, args["email_id"]),
         )
-        return {"email": _email_to_dict(result)}, None
+        return {"markdown": format_email(result)}, None
 
     if tool_name == "read_thread":
         messages = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.read_thread(c, args["email_id"]),
         )
-        return {"messages": [_thread_message_to_dict(m) for m in messages]}, None
+        return {"markdown": format_thread(messages)}, None
 
     if tool_name == "search_emails":
         emails = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.search_emails(c, args["query"]),
         )
-        return {"emails": [_email_summary_to_dict(e) for e in emails]}, None
+        return {"markdown": format_email_summaries(emails, "Search Results")}, None
 
     if tool_name == "mark_as_read":
         email_client.with_reconnect(
@@ -614,58 +615,3 @@ def _handle_feature_request(
     )
 
 
-def _email_summary_to_dict(summary: email_client.EmailSummary) -> dict[str, Any]:
-    """Convert an EmailSummary dataclass to a plain dict for JSON serialization.
-
-    Args:
-        summary: EmailSummary instance.
-
-    Returns:
-        Dict representation.
-    """
-    return {
-        "id": summary.id,
-        "from": summary.from_addr,
-        "subject": summary.subject,
-        "snippet": summary.snippet,
-        "date": summary.date,
-    }
-
-
-def _thread_message_to_dict(msg: email_client.ThreadMessage) -> dict[str, Any]:
-    """Convert a ThreadMessage dataclass to a plain dict for JSON serialization.
-
-    Args:
-        msg: ThreadMessage instance.
-
-    Returns:
-        Dict representation.
-    """
-    return {
-        "id": msg.id,
-        "from": msg.from_addr,
-        "to": msg.to,
-        "subject": msg.subject,
-        "body": msg.body,
-        "date": msg.date,
-    }
-
-
-def _email_to_dict(em: email_client.Email) -> dict[str, Any]:
-    """Convert an Email dataclass to a plain dict for JSON serialization.
-
-    Args:
-        em: Email instance.
-
-    Returns:
-        Dict representation.
-    """
-    return {
-        "id": em.id,
-        "from": em.from_addr,
-        "to": em.to,
-        "subject": em.subject,
-        "body": em.body,
-        "date": em.date,
-        "is_read": em.is_read,
-    }

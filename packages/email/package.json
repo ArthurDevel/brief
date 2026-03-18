@@ -7,10 +7,14 @@
   "dependencies": {
     "@dublin/tools": "workspace:*",
     "imapflow": "^1.0.171",
-    "nodemailer": "^6.9.16"
+    "mailparser": "^3.7.2",
+    "nodemailer": "^6.9.16",
+    "turndown": "^7.2.0"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.4.5",
     "@types/nodemailer": "^6.4.17",
+    "@types/turndown": "^5.0.5",
     "hoodiecrow-imap": "^2.1.0",
     "vitest": "^4.1.0"
   }

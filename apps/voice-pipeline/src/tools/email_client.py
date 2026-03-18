@@ -19,9 +19,12 @@ Includes connection management with auto-reconnect.
 
 from __future__ import annotations
 
+import base64
 import email
 import email.policy
 import logging
+import quopri
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -29,6 +32,7 @@ from typing import Any, Callable, TypeVar, cast
 
 import aiosmtplib
 from imapclient import IMAPClient
+from markdownify import markdownify
 
 from src.session import ImapConfig, SmtpConfig
 
@@ -185,7 +189,8 @@ def with_reconnect(
 def list_inbox(client: IMAPClient, limit: int) -> list[EmailSummary]:
     """List recent emails in the inbox.
 
-    Fetches recent emails by sequence number (descending) from INBOX.
+    Uses BODYSTRUCTURE to identify the text/plain part, then fetches
+    only that part for the snippet. Avoids downloading full email bodies.
 
     Args:
         client: Connected IMAPClient.
@@ -196,45 +201,19 @@ def list_inbox(client: IMAPClient, limit: int) -> list[EmailSummary]:
     """
     client.select_folder("INBOX", readonly=True)
 
-    # Get all message UIDs, sorted newest first
     all_uids = client.search(["ALL"])  # type: ignore[arg-type]
     if not all_uids:
         return []
 
-    # Take the most recent `limit` UIDs
     recent_uids = all_uids[-limit:]
-
-    # Fetch envelope data for those UIDs
-    fetch_data = client.fetch(recent_uids, ["ENVELOPE", "BODY.PEEK[TEXT]<0.2000>"])
-
-    messages: list[EmailSummary] = []
-    for uid, data in fetch_data.items():
-        envelope: Any = data.get(b"ENVELOPE")
-        if not envelope:
-            continue
-
-        # Extract body snippet from partial fetch
-        body_key = _find_body_key(data)
-        raw_body: bytes = data.get(body_key, b"") if body_key else b""  # type: ignore[assignment]
-        snippet = _extract_snippet(raw_body)
-
-        messages.append(EmailSummary(
-            id=str(uid),
-            from_addr=_format_address(envelope.from_),
-            subject=_decode_header(envelope.subject),
-            snippet=snippet,
-            date=_format_date(envelope.date),
-        ))
-
-    # Return in reverse chronological order (most recent first)
-    messages.reverse()
-    return messages
+    return _fetch_summaries(client, recent_uids)
 
 
 def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
     """Search emails by query string on subject and from fields.
 
-    Uses IMAP OR search across subject and from fields.
+    Uses IMAP OR search across subject and from fields, then fetches
+    BODYSTRUCTURE to extract clean snippets.
 
     Args:
         client: Connected IMAPClient.
@@ -245,12 +224,27 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
     """
     client.select_folder("INBOX", readonly=True)
 
-    # IMAP OR search on subject + from
     uids = client.search(["OR", "SUBJECT", query, "FROM", query])  # type: ignore[arg-type]
     if not uids:
         return []
 
-    fetch_data = client.fetch(uids, ["ENVELOPE", "BODY.PEEK[TEXT]<0.2000>"])
+    return _fetch_summaries(client, uids)
+
+
+def _fetch_summaries(client: IMAPClient, uids: list[int]) -> list[EmailSummary]:
+    """Fetch email summaries using BODYSTRUCTURE for clean snippets.
+
+    For each email, inspects BODYSTRUCTURE to find the text/plain (or
+    text/html) MIME part, then fetches only that part and decodes it.
+
+    Args:
+        client: Connected IMAPClient.
+        uids: List of UIDs to fetch.
+
+    Returns:
+        List of EmailSummary in reverse chronological order.
+    """
+    fetch_data = client.fetch(uids, ["ENVELOPE", "BODYSTRUCTURE"])
 
     messages: list[EmailSummary] = []
     for uid, data in fetch_data.items():
@@ -258,9 +252,11 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
         if not envelope:
             continue
 
-        body_key = _find_body_key(data)
-        raw_body: bytes = data.get(body_key, b"") if body_key else b""  # type: ignore[assignment]
-        snippet = _extract_snippet(raw_body)
+        # Find the text part from BODYSTRUCTURE
+        bodystructure = data.get(b"BODYSTRUCTURE")
+        snippet = ""
+        if bodystructure:
+            snippet = _extract_snippet_via_bodystructure(client, uid, bodystructure)
 
         messages.append(EmailSummary(
             id=str(uid),
@@ -270,7 +266,6 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
             date=_format_date(envelope.date),
         ))
 
-    # Return in reverse chronological order
     messages.reverse()
     return messages
 
@@ -657,7 +652,9 @@ def _decode_bytes(value: bytes | str | None) -> str:
 
 
 def _decode_header(value: bytes | str | None) -> str:
-    """Decode an email header value.
+    """Decode an email header value, including RFC 2047 encoded words.
+
+    Handles =?UTF-8?Q?...?= and =?UTF-8?B?...?= encoded subjects.
 
     Args:
         value: Raw header bytes, string, or None.
@@ -667,8 +664,22 @@ def _decode_header(value: bytes | str | None) -> str:
     """
     if value is None:
         return "(no subject)"
-    decoded = _decode_bytes(value)
-    return decoded if decoded else "(no subject)"
+
+    raw = _decode_bytes(value) if isinstance(value, bytes) else value
+    if not raw:
+        return "(no subject)"
+
+    # Decode RFC 2047 encoded words (=?charset?encoding?text?=)
+    from email.header import decode_header as decode_rfc2047
+    parts = decode_rfc2047(raw)
+    decoded_parts = []
+    for part_bytes, charset in parts:
+        if isinstance(part_bytes, bytes):
+            decoded_parts.append(part_bytes.decode(charset or "utf-8", errors="replace"))
+        else:
+            decoded_parts.append(part_bytes)
+
+    return " ".join(decoded_parts).strip() or "(no subject)"
 
 
 def _format_date(dt: datetime | None) -> str:
@@ -685,38 +696,150 @@ def _format_date(dt: datetime | None) -> str:
     return dt.isoformat()
 
 
-def _find_body_key(data: dict) -> bytes | None:
-    """Find the BODY.PEEK[TEXT] key in fetch response data.
+def _extract_snippet_via_bodystructure(
+    client: IMAPClient, uid: int, bodystructure: Any
+) -> str:
+    """Extract a plain-text snippet using BODYSTRUCTURE to fetch only the text part.
 
-    The key format varies, so we search for any key containing BODY and TEXT.
-
-    Args:
-        data: Fetch response data dict.
-
-    Returns:
-        The matching key, or None.
-    """
-    for key in data:
-        if isinstance(key, bytes) and b"BODY" in key and b"TEXT" in key:
-            return key
-    return None
-
-
-def _extract_snippet(raw_body: bytes | str) -> str:
-    """Extract a plain-text snippet from raw email body content.
+    Walks the BODYSTRUCTURE to find the text/plain (or text/html) MIME part,
+    fetches only that part, decodes content-transfer-encoding, and truncates.
 
     Args:
-        raw_body: Raw body bytes or string.
+        client: Connected IMAPClient.
+        uid: UID of the email.
+        bodystructure: Parsed BODYSTRUCTURE from imapclient.
 
     Returns:
-        Short snippet of the email body.
+        Clean text snippet.
     """
-    text = _decode_bytes(raw_body) if isinstance(raw_body, bytes) else raw_body
-    if not text:
+    result = _find_text_part(bodystructure)
+    if not result:
         return ""
-    # Clean up whitespace and truncate
-    cleaned = " ".join(text.split())
-    return cleaned[:SNIPPET_LENGTH].strip()
+
+    mime_type, part_spec, encoding, charset = result
+
+    # Fetch just the text part
+    fetch_key = f"BODY.PEEK[{part_spec}]"
+    part_data = client.fetch([uid], [fetch_key])
+
+    # Find the body key in the response (key format varies)
+    raw_bytes: bytes = b""
+    for key, value in part_data.get(uid, {}).items():
+        if isinstance(key, bytes) and b"BODY" in key:
+            raw_bytes = cast(bytes, value) or b""
+            break
+
+    if not raw_bytes:
+        return ""
+
+    # Decode content-transfer-encoding
+    text = _decode_part(raw_bytes, encoding, charset)
+
+    # Convert HTML to markdown if needed (strip images and tables for snippets)
+    if mime_type == "text/html":
+        text = markdownify(
+            text, strip=["img", "table", "tr", "td", "th", "thead", "tbody"]
+        ).strip()
+
+    # Normalize line endings and strip zero-width characters
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff\u00ad]", "", text)
+
+    return text[:SNIPPET_LENGTH].replace("\n", " ").strip()
+
+
+def _find_text_part(
+    bodystructure: Any, path: list[int] | None = None
+) -> tuple[str, str, str, str] | None:
+    """Walk BODYSTRUCTURE to find the best text part.
+
+    Prefers text/plain over text/html. imapclient parses BODYSTRUCTURE as:
+    - Leaf part: tuple starting with bytes (b'TEXT', b'PLAIN', ...)
+    - Multipart: tuple where first element is a list of child parts
+
+    Args:
+        bodystructure: Parsed BODYSTRUCTURE from imapclient.
+        path: Current MIME part path (e.g. [1, 2]).
+
+    Returns:
+        Tuple of (mime_type, part_spec, encoding, charset) or None.
+    """
+    if path is None:
+        path = []
+
+    # Multipart: first element is a list of children
+    if isinstance(bodystructure[0], list):
+        children = bodystructure[0]
+        plain_result = None
+        html_result = None
+        for i, child in enumerate(children):
+            result = _find_text_part(child, path + [i + 1])
+            if result:
+                if result[0] == "text/plain" and plain_result is None:
+                    plain_result = result
+                elif result[0] == "text/html" and html_result is None:
+                    html_result = result
+        return plain_result or html_result
+
+    # Leaf part: (type, subtype, params, id, desc, encoding, size, ...)
+    mime_type = _bytes_to_str(bodystructure[0]).lower()
+    mime_subtype = _bytes_to_str(bodystructure[1]).lower()
+    full_type = f"{mime_type}/{mime_subtype}"
+
+    if full_type not in ("text/plain", "text/html"):
+        return None
+
+    encoding = _bytes_to_str(bodystructure[5]).lower() if bodystructure[5] else "7bit"
+
+    # Extract charset from params (index 2)
+    charset = "utf-8"
+    params = bodystructure[2]
+    if params:
+        param_list = list(params) if isinstance(params, tuple) else params
+        for j in range(0, len(param_list) - 1, 2):
+            if _bytes_to_str(param_list[j]).upper() == "CHARSET":
+                charset = _bytes_to_str(param_list[j + 1]).lower()
+
+    part_spec = ".".join(str(p) for p in path) if path else "1"
+    return (full_type, part_spec, encoding, charset)
+
+
+def _decode_part(raw_bytes: bytes, encoding: str, charset: str) -> str:
+    """Decode raw MIME part bytes using content-transfer-encoding and charset.
+
+    Args:
+        raw_bytes: Raw bytes from IMAP BODY fetch.
+        encoding: Content-Transfer-Encoding (e.g. 'base64', 'quoted-printable').
+        charset: Character set (e.g. 'utf-8', 'iso-8859-1').
+
+    Returns:
+        Decoded text string.
+    """
+    if encoding == "base64":
+        decoded = base64.b64decode(raw_bytes)
+    elif encoding == "quoted-printable":
+        decoded = quopri.decodestring(raw_bytes)
+    else:
+        decoded = raw_bytes
+
+    try:
+        return decoded.decode(charset)
+    except (UnicodeDecodeError, LookupError):
+        return decoded.decode("latin-1")
+
+
+def _bytes_to_str(value: Any) -> str:
+    """Convert bytes to str if needed.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        String representation.
+    """
+    if isinstance(value, bytes):
+        return value.decode("ascii", errors="replace")
+    return str(value)
 
 
 def _extract_references(raw_headers: bytes | str) -> list[str]:
@@ -748,12 +871,13 @@ def _extract_body(raw_source: bytes | str) -> str:
     """Extract the plain-text body from a raw RFC822 email source.
 
     Uses Python's email parser for proper MIME handling.
+    Prefers plain text; falls back to HTML-to-markdown via markdownify.
 
     Args:
         raw_source: Raw email source bytes or string.
 
     Returns:
-        Plain text body content.
+        Plain text body content, or HTML converted to markdown.
     """
     if not raw_source:
         return ""
@@ -761,18 +885,32 @@ def _extract_body(raw_source: bytes | str) -> str:
     source_bytes = raw_source if isinstance(raw_source, bytes) else raw_source.encode("utf-8")
     msg = email.message_from_bytes(source_bytes, policy=email.policy.default)
 
-    # Try to get plain text body
-    body = msg.get_body(preferencelist=("plain",))
-    if body:
-        content = body.get_content()
-        return content.strip() if isinstance(content, str) else ""
+    body = ""
 
-    # Fallback: just get the payload as string
-    payload = msg.get_payload(decode=True)
-    if isinstance(payload, bytes):
-        return payload.decode("utf-8", errors="replace").strip()
+    # Try plain text first
+    plain_part = msg.get_body(preferencelist=("plain",))
+    if plain_part:
+        content = plain_part.get_content()
+        if isinstance(content, str) and content.strip():
+            body = content.strip()
 
-    return ""
+    # Fall back to HTML, converted to markdown (strip images)
+    if not body:
+        html_part = msg.get_body(preferencelist=("html",))
+        if html_part:
+            html_content = html_part.get_content()
+            if isinstance(html_content, str) and html_content.strip():
+                body = markdownify(html_content, strip=["img"]).strip()
+
+    # Normalize CRLF line endings (RFC 5322 uses \r\n)
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Strip zero-width characters (marketers stuff these into emails)
+    import re
+    body = re.sub(r"[\u200b\u200c\u200d\ufeff\u00ad]", "", body)
+    body = re.sub(r"  +", " ", body)
+
+    return body.strip()
 
 
 def _build_raw_message(to: str, subject: str, body: str) -> str:

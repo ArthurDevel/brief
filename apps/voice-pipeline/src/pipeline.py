@@ -270,7 +270,7 @@ def _register_tool_handler(
                 "result": action_result.result,
                 "message": action_result.message,
             }
-            result_str = json.dumps(result_dict)
+            result_str = json.dumps(result_dict, ensure_ascii=False)
         except asyncio.TimeoutError:
             logger.error(f"Tool call [{function_name}] timed out after {TOOL_CALL_TIMEOUT_SECS}s")
             result_dict = {
@@ -278,7 +278,7 @@ def _register_tool_handler(
                 "result": None,
                 "message": f"Tool call timed out after {TOOL_CALL_TIMEOUT_SECS}s",
             }
-            result_str = json.dumps(result_dict)
+            result_str = json.dumps(result_dict, ensure_ascii=False)
         except Exception as e:
             logger.error(f"Tool call [{function_name}] failed: {e}")
             result_dict = {
@@ -286,7 +286,7 @@ def _register_tool_handler(
                 "result": None,
                 "message": str(e),
             }
-            result_str = json.dumps(result_dict)
+            result_str = json.dumps(result_dict, ensure_ascii=False)
 
         duration_ms = time.time() * 1000 - start_ms
         langfuse_observer.log_tool_call(
