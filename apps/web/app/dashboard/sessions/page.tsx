@@ -108,7 +108,7 @@ export default function HistoryPage() {
                 <tr key={session.id} className="border-b border-gray-100">
                   <td className="py-3">
                     <Link
-                      href={`/dashboard/history/${session.id}`}
+                      href={`/dashboard/sessions/${session.id}`}
                       className="text-blue-600 hover:underline"
                     >
                       {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
