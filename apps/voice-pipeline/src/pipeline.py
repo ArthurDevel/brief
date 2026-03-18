@@ -54,6 +54,9 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 DEFAULT_TEMPO = 1.5
+# Must be shorter than pipecat's 10s function_call_timeout_secs so that
+# our handler returns a proper error before pipecat sends "COMPLETED".
+TOOL_CALL_TIMEOUT_SECS = 8.0
 
 
 # ============================================================================
@@ -161,6 +164,8 @@ def create_pipeline(
     # -- Register function call handlers --
     # Each handler routes through tools/handlers.py handle_tool_call().
     # IMAP operations are synchronous, so wrap in asyncio.to_thread().
+    # A shared asyncio.Lock serializes IMAP access -- imapclient is not thread-safe.
+    imap_lock = asyncio.Lock()
     tool_names = [t["function"]["name"] for t in tools]
     for tool_name in tool_names:
         _register_tool_handler(
@@ -169,6 +174,7 @@ def create_pipeline(
             session=session,
             user_context=user_context,
             imap_holder=imap_holder,
+            imap_lock=imap_lock,
             supabase=supabase,
             langfuse_observer=langfuse_observer,
         )
@@ -212,13 +218,16 @@ def _register_tool_handler(
     session: ActiveSession,
     user_context: UserContext,
     imap_holder: dict[str, Any],
+    imap_lock: asyncio.Lock,
     supabase: Client,
     langfuse_observer: LangfuseObserver,
 ) -> None:
     """Register a single function call handler on the LLM service.
 
     The handler wraps handle_tool_call in asyncio.to_thread() since
-    IMAP operations are synchronous. Tool calls are also logged to Langfuse.
+    IMAP operations are synchronous. An asyncio.Lock serializes IMAP
+    access (imapclient is not thread-safe). A timeout ensures the handler
+    returns an error before pipecat's hardcoded "COMPLETED" fires.
 
     Args:
         llm: The LLM service to register the handler on.
@@ -226,6 +235,7 @@ def _register_tool_handler(
         session: Active session for action input.
         user_context: User context for approval config and SMTP config.
         imap_holder: Mutable IMAP client holder.
+        imap_lock: Shared asyncio.Lock to serialize IMAP access.
         supabase: Supabase client.
         langfuse_observer: Observer for Langfuse tracing.
     """
@@ -240,20 +250,33 @@ def _register_tool_handler(
                 arguments=args,
             )
 
-            # Run synchronous IMAP/tool operations in a thread
-            action_result = await asyncio.to_thread(
-                handle_tool_call,
-                action_input,
-                user_context.tool_approval_config,
-                imap_holder,
-                user_context.smtp_config,
-                supabase,
-            )
+            # Lock serializes IMAP access (imapclient is not thread-safe).
+            # Timeout ensures we return an error before pipecat sends "COMPLETED".
+            async with imap_lock:
+                action_result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        handle_tool_call,
+                        action_input,
+                        user_context.tool_approval_config,
+                        imap_holder,
+                        user_context.smtp_config,
+                        supabase,
+                    ),
+                    timeout=TOOL_CALL_TIMEOUT_SECS,
+                )
 
             result_dict = {
                 "status": action_result.status,
                 "result": action_result.result,
                 "message": action_result.message,
+            }
+            result_str = json.dumps(result_dict)
+        except asyncio.TimeoutError:
+            logger.error(f"Tool call [{function_name}] timed out after {TOOL_CALL_TIMEOUT_SECS}s")
+            result_dict = {
+                "status": "error",
+                "result": None,
+                "message": f"Tool call timed out after {TOOL_CALL_TIMEOUT_SECS}s",
             }
             result_str = json.dumps(result_dict)
         except Exception as e:
