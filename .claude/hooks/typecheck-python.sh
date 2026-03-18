@@ -15,8 +15,16 @@ if [[ ! -f "$FILE_PATH" ]]; then
   exit 0
 fi
 
-# Run pyright on the specific file
-OUTPUT=$(npx pyright "$FILE_PATH" 2>&1)
+# Find the nearest directory with pyrightconfig.json and run pyright from there
+SEARCH_DIR=$(dirname "$FILE_PATH")
+while [[ "$SEARCH_DIR" != "/" ]]; do
+  if [[ -f "$SEARCH_DIR/pyrightconfig.json" ]]; then
+    break
+  fi
+  SEARCH_DIR=$(dirname "$SEARCH_DIR")
+done
+
+OUTPUT=$(cd "$SEARCH_DIR" && npx pyright "$FILE_PATH" 2>&1)
 EXIT_CODE=$?
 
 if [[ $EXIT_CODE -ne 0 ]]; then
