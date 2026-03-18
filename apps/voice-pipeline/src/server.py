@@ -309,27 +309,12 @@ app.add_middleware(
 
 
 # ============================================================================
-# ENDPOINTS: HEALTH + SPEED
+# ENDPOINTS: HEALTH
 # ============================================================================
 
 @app.get("/health")
 async def health() -> JSONResponse:
     return JSONResponse({"status": "ok"})
-
-
-@app.get("/api/speed")
-async def get_speed() -> JSONResponse:
-    return JSONResponse({"speed": _speed_config["speed"]})
-
-
-@app.post("/api/speed")
-async def set_speed(request: Request) -> JSONResponse:
-    body = json.loads(await request.body())
-    speed = float(body.get("speed", _speed_config["speed"]))
-    speed = max(0.5, min(2.0, speed))
-    _speed_config["speed"] = speed
-    logger.info("[server] Speed updated to %.1f", speed)
-    return JSONResponse({"speed": speed})
 
 
 # ============================================================================
