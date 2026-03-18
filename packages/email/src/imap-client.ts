@@ -307,11 +307,11 @@ export async function readThread(client: ImapFlow, emailId: string): Promise<Thr
     for (const id of threadIds) {
       // Find messages with this Message-ID
       const byId = await client.search({ header: { "message-id": id } });
-      for (const uid of byId) matchedUids.add(uid);
+      if (byId) for (const uid of byId) matchedUids.add(uid);
 
       // Find messages that reference this Message-ID
       const byRef = await client.search({ header: { references: id } });
-      for (const uid of byRef) matchedUids.add(uid);
+      if (byRef) for (const uid of byRef) matchedUids.add(uid);
     }
 
     if (matchedUids.size === 0) {
@@ -384,6 +384,7 @@ export async function archiveEmail(
   try {
     // Fetch the stable Message-ID before moving (UIDs change across folders)
     const msg = await client.fetchOne(emailId, { envelope: true }, { uid: true });
+    if (!msg || !msg.envelope) throw new Error(`Email with UID ${emailId} not found`);
     const messageId = msg.envelope.messageId;
     if (!messageId) throw new Error("Email has no Message-ID header");
 
@@ -420,6 +421,7 @@ export async function deleteEmail(
   try {
     // Fetch the stable Message-ID before moving (UIDs change across folders)
     const msg = await client.fetchOne(emailId, { envelope: true }, { uid: true });
+    if (!msg || !msg.envelope) throw new Error(`Email with UID ${emailId} not found`);
     const messageId = msg.envelope.messageId;
     if (!messageId) throw new Error("Email has no Message-ID header");
 
@@ -457,7 +459,7 @@ export async function moveEmail(
   try {
     // Find the current UID by searching for the Message-ID header
     const uids = await client.search({ header: { "message-id": messageId } }, { uid: true });
-    if (uids.length === 0) {
+    if (!uids || uids.length === 0) {
       throw new Error(`Email with Message-ID ${messageId} not found in ${from}`);
     }
 
