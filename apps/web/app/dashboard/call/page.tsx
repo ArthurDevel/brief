@@ -101,14 +101,32 @@ async function startWebRTCSession(
   const offer = await peerConnection.createOffer();
   await peerConnection.setLocalDescription(offer);
 
+  // Wait for ICE gathering to complete so relay candidates are in the SDP.
+  // Without this, the offer SDP has no candidates and the server has nothing
+  // to connect to -- ICE stays at "checking" forever.
+  if (peerConnection.iceGatheringState !== "complete") {
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (peerConnection.iceGatheringState === "complete") {
+          peerConnection.removeEventListener("icegatheringstatechange", check);
+          resolve();
+        }
+      };
+      peerConnection.addEventListener("icegatheringstatechange", check);
+    });
+  }
+
+  // Use localDescription (has gathered candidates), not the original offer (empty)
+  const gatheredOffer = peerConnection.localDescription!;
+
   const offerRes = await fetch(
     `${VOICE_PIPELINE_URL}/sessions/${sessionId}/api/offer`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sdp: offer.sdp,
-        type: offer.type,
+        sdp: gatheredOffer.sdp,
+        type: gatheredOffer.type,
         requestData: { token },
       }),
     }
