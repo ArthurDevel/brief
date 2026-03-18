@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 
 TWILIO_PIPELINE_SAMPLE_RATE = 16000
 DEFAULT_SPEED = 1.5
+METERED_CREDENTIALS_URL = "https://0x41.metered.live/api/v1/turn/credentials"
 
 # Shared mutable config -- updated by the speed API, read by AudioSpeedProcessor
 _speed_config: dict[str, float] = {"speed": DEFAULT_SPEED}  # Overridden per-session from user settings
@@ -85,6 +86,25 @@ _webrtc_handler: SmallWebRTCRequestHandler | None = None
 
 # Track sessions that are currently in a pipeline so we can finalize them on shutdown
 _live_pipeline_sessions: dict[str, dict[str, Any]] = {}  # db_session_id -> cleanup info
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+async def _fetch_ice_servers(api_key: str) -> list[dict]:
+    """Fetch TURN/STUN credentials from the Metered API.
+
+    Args:
+        api_key: Metered API key.
+
+    Returns:
+        List of ICE server dicts (urls, username, credential).
+    """
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(f"{METERED_CREDENTIALS_URL}?apiKey={api_key}")
+        resp.raise_for_status()
+        return resp.json()
 
 
 # ============================================================================
@@ -275,7 +295,18 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
 async def lifespan(app: FastAPI):
     """Manage app lifecycle: initialize and clean up WebRTC handler and Langfuse."""
     global _webrtc_handler
-    _webrtc_handler = SmallWebRTCRequestHandler()
+
+    # Fetch TURN/STUN servers so the server-side peer connection can traverse NAT
+    settings = load_settings()
+    ice_servers = None
+    if settings.metered_api_key:
+        try:
+            ice_servers = await _fetch_ice_servers(settings.metered_api_key)
+            logger.info("[server] Loaded %d ICE servers from Metered", len(ice_servers))
+        except Exception as exc:
+            logger.error("[server] Failed to fetch ICE servers at startup: %s", exc)
+
+    _webrtc_handler = SmallWebRTCRequestHandler(ice_servers=ice_servers)
     yield
 
     # Finalize any sessions that were still active when the server was killed
@@ -349,16 +380,14 @@ async def webrtc_start(request: Request) -> JSONResponse:
     session_id = str(uuid.uuid4())
     _active_sessions[session_id] = request_data.get("body", {})
 
-    # Fetch TURN/STUN credentials from Metered for WebRTC connectivity
+    # Fetch fresh TURN/STUN credentials from Metered for the client,
+    # and update the server-side handler so both sides can traverse NAT
     ice_servers = []
     if settings.metered_api_key:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(
-                    f"https://0x41.metered.live/api/v1/turn/credentials?apiKey={settings.metered_api_key}"
-                )
-                resp.raise_for_status()
-                ice_servers = resp.json()
+            ice_servers = await _fetch_ice_servers(settings.metered_api_key)
+            if _webrtc_handler:
+                _webrtc_handler.update_ice_servers(ice_servers)
         except Exception as exc:
             logger.error("[server] Failed to fetch TURN credentials: %s", exc)
 
