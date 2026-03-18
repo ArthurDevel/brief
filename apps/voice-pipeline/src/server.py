@@ -123,9 +123,9 @@ def _to_rtc_ice_servers(raw_servers: list[dict]) -> list[RTCIceServer]:
         elif url.startswith("stun:") and not stun_server:
             stun_server = server
 
-    # Build RTCIceServer list from selected servers
+    # Build RTCIceServer list -- TURN first so aioice picks it before STUN
     ice_servers: list[RTCIceServer] = []
-    for selected in [stun_server, turn_server]:
+    for selected in [turn_server, stun_server]:
         if not selected:
             continue
         raw_urls = selected.get("urls") or selected.get("url")
