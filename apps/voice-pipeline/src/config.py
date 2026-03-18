@@ -64,6 +64,7 @@ class Settings:
     internal_api_key: str = ""
     port: int = 7860
     public_url: str = "http://localhost:7860"
+    metered_api_key: str = ""
 
 
 # ============================================================================
@@ -97,4 +98,5 @@ def load_settings() -> Settings:
         internal_api_key=os.environ["INTERNAL_API_KEY"],
         port=int(os.getenv("PORT", "7860")),
         public_url=os.getenv("PUBLIC_URL", "http://localhost:7860"),
+        metered_api_key=os.getenv("METERED_API_KEY", ""),
     )
