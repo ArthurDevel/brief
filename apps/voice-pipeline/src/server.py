@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -60,7 +59,7 @@ from src.tools.email_client import close_imap_connection, create_imap_connection
 from src.transports.twilio import TwilioTransport, TwilioParams
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 # ============================================================================
