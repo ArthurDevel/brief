@@ -333,7 +333,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("[server] No METERED_API_KEY set, skipping TURN server setup")
 
-    logger.info("[server] Creating SmallWebRTCRequestHandler with ice_servers=%s", ice_servers)
+    # Test connectivity to the TURN server from inside the container
+    import socket
+    import ssl
+    try:
+        sock = socket.create_connection(("global.relay.metered.ca", 443), timeout=5)
+        ctx = ssl.create_default_context()
+        ssock = ctx.wrap_socket(sock, server_hostname="global.relay.metered.ca")
+        logger.info("[server] TURN TLS connectivity OK: {}", ssock.getpeername())
+        ssock.close()
+    except Exception as exc:
+        logger.error("[server] TURN TLS connectivity FAILED: {}", exc)
+
+    logger.info("[server] Creating SmallWebRTCRequestHandler with ice_servers={}", ice_servers)
     _webrtc_handler = SmallWebRTCRequestHandler(ice_servers=ice_servers)
     yield
 
