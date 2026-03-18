@@ -95,23 +95,47 @@ _live_pipeline_sessions: dict[str, dict[str, Any]] = {}  # db_session_id -> clea
 def _to_rtc_ice_servers(raw_servers: list[dict]) -> list[RTCIceServer]:
     """Convert Metered API response dicts to RTCIceServer objects.
 
+    aiortc only uses the first STUN and first TURN server, so we pick
+    the best candidates: STUN on port 80, and TURNS over TCP on port 443
+    (most likely to work through firewalls/proxies).
+
     Args:
         raw_servers: List of dicts with urls/username/credential from Metered API.
 
     Returns:
-        List of RTCIceServer objects for use with aiortc peer connections.
+        List of RTCIceServer objects (1 STUN + 1 TURN) for aiortc.
     """
-    ice_servers = []
+    stun_server: dict | None = None
+    turn_server: dict | None = None
+
+    # Find the best STUN and TURN server from the list
     for server in raw_servers:
-        urls = server.get("urls") or server.get("url")
-        if not urls:
+        raw = server.get("urls") or server.get("url") or ""
+        url: str = raw[0] if isinstance(raw, list) else raw
+
+        # Prefer TURNS over TCP on 443 (works through any proxy)
+        if url.startswith("turns:") and "transport=tcp" in url:
+            turn_server = server
+        # Fallback: any TURN server if no TURNS found yet
+        elif url.startswith("turn:") and not turn_server:
+            turn_server = server
+        # Pick first STUN server
+        elif url.startswith("stun:") and not stun_server:
+            stun_server = server
+
+    # Build RTCIceServer list from selected servers
+    ice_servers: list[RTCIceServer] = []
+    for selected in [stun_server, turn_server]:
+        if not selected:
             continue
-        if isinstance(urls, str):
-            urls = [urls]
+        raw_urls = selected.get("urls") or selected.get("url")
+        if not raw_urls:
+            continue
+        url_list: list[str] = [raw_urls] if isinstance(raw_urls, str) else raw_urls
         ice_servers.append(RTCIceServer(
-            urls=urls,
-            username=server.get("username", ""),
-            credential=server.get("credential", ""),
+            urls=url_list,
+            username=selected.get("username", ""),
+            credential=selected.get("credential", ""),
         ))
     return ice_servers
 
@@ -322,14 +346,14 @@ async def lifespan(app: FastAPI):
 
     # Fetch TURN/STUN servers so the server-side peer connection can traverse NAT
     settings = load_settings()
-    logger.info("[server] METERED_API_KEY present: %s", bool(settings.metered_api_key))
+    logger.info("[server] METERED_API_KEY present: {}", bool(settings.metered_api_key))
     ice_servers = None
     if settings.metered_api_key:
         try:
             ice_servers = await _fetch_ice_servers(settings.metered_api_key)
-            logger.info("[server] Loaded %d ICE servers from Metered: %s", len(ice_servers), ice_servers)
+            logger.info("[server] Loaded {} ICE servers from Metered: {}", len(ice_servers), ice_servers)
         except Exception as exc:
-            logger.error("[server] Failed to fetch ICE servers at startup: %s", exc, exc_info=True)
+            logger.exception("[server] Failed to fetch ICE servers at startup: {}", exc)
     else:
         logger.warning("[server] No METERED_API_KEY set, skipping TURN server setup")
 
@@ -429,15 +453,15 @@ async def webrtc_start(request: Request) -> JSONResponse:
                 resp = await client.get(f"{METERED_CREDENTIALS_URL}?apiKey={settings.metered_api_key}")
                 resp.raise_for_status()
                 ice_servers_for_client = resp.json()
-            logger.info("[server] /start fetched %d ICE servers for client: %s", len(ice_servers_for_client), ice_servers_for_client)
+            logger.info("[server] /start fetched {} ICE servers for client: {}", len(ice_servers_for_client), ice_servers_for_client)
 
             # Convert to RTCIceServer objects for the server-side peer connection
             rtc_ice_servers = _to_rtc_ice_servers(ice_servers_for_client)
-            logger.info("[server] /start converted %d RTCIceServer objects, updating handler", len(rtc_ice_servers))
+            logger.info("[server] /start converted {} RTCIceServer objects, updating handler", len(rtc_ice_servers))
             if _webrtc_handler:
                 _webrtc_handler.update_ice_servers(rtc_ice_servers)
         except Exception as exc:
-            logger.error("[server] Failed to fetch TURN credentials: %s", exc, exc_info=True)
+            logger.exception("[server] Failed to fetch TURN credentials: {}", exc)
     else:
         logger.warning("[server] /start: No METERED_API_KEY, skipping TURN")
 
