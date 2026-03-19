@@ -45,6 +45,7 @@ METERED_CREDENTIALS_URL = "https://0x41.metered.live/api/v1/turn/credentials"
 
 ICE_TIMEOUT_SECONDS = 30
 TRACK_RECEIVE_TIMEOUT_SECONDS = 15
+INCOMPLETE_OFFER_TIMEOUT_SECONDS = 15
 
 
 # ============================================================================
@@ -459,11 +460,181 @@ async def test_4_audio_track(raw_servers: list[dict]) -> bool:
 
 
 # ============================================================================
+# TEST 5: INCOMPLETE OFFER (reproduces the production bug)
+# ============================================================================
+
+async def test_5_incomplete_offer(raw_servers: list[dict]) -> bool:
+    """
+    Reproduce the production bug: browser sends offer BEFORE ICE gathering,
+    so the SDP has zero candidates. The server gets an offer with no candidates,
+    creates an answer with its own candidates, but has no remote candidates to
+    check -- ICE stays at "checking" forever.
+
+    In aiortc, setLocalDescription triggers gathering and blocks until complete.
+    To simulate the browser behavior (sending before gathering), we:
+    1. Call createOffer() to get the offer object (no candidates yet)
+    2. Call setLocalDescription(offer) which gathers candidates and blocks
+    3. Pass the ORIGINAL offer (pre-gathering, no candidates) to the server
+
+    This test is EXPECTED TO FAIL (timeout) to prove the bug exists.
+
+    @param raw_servers: Server dicts from the Metered API.
+    @return: True if ICE connected (not expected).
+    """
+    _print_header("TEST 5: Incomplete Offer (reproduces production bug)")
+
+    ice_servers = _build_ice_servers(raw_servers)
+    config = RTCConfiguration(iceServers=ice_servers)
+
+    client_pc = RTCPeerConnection(configuration=config)
+    server_pc = RTCPeerConnection(configuration=config)
+
+    # Add a dummy audio track to the client side
+    audio_track = _DummyAudioTrack()
+    client_pc.addTrack(audio_track)
+    print("  Added dummy audio track to client peer")
+
+    # Step 1: Create the offer (no candidates yet)
+    offer = await client_pc.createOffer()
+    print(f"    [client] Created offer (type={offer.type})")
+
+    # Count candidates in the original offer (should be zero)
+    original_candidate_count = offer.sdp.count("a=candidate:")
+    print(f"    [client] Original offer has {original_candidate_count} ICE candidate(s)")
+
+    # Step 2: Set local description (this triggers gathering and blocks)
+    await client_pc.setLocalDescription(offer)
+    print("    [client] Set local description (gathering complete)")
+
+    # Count candidates after gathering (should have candidates now)
+    gathered_candidate_count = client_pc.localDescription.sdp.count("a=candidate:")
+    print(f"    [client] Gathered description has {gathered_candidate_count} ICE candidate(s)")
+
+    # Step 3: Pass the ORIGINAL offer (no candidates) to the server
+    # This is exactly what the browser does wrong -- sends createOffer() result
+    # before gathering completes
+    print("\n  Sending ORIGINAL offer (no candidates) to server ...")
+    await server_pc.setRemoteDescription(offer)
+    print("    [server] Set remote description (incomplete offer)")
+
+    answer = await server_pc.createAnswer()
+    print(f"    [server] Created answer (type={answer.type})")
+
+    await server_pc.setLocalDescription(answer)
+    print("    [server] Set local description")
+
+    await client_pc.setRemoteDescription(server_pc.localDescription)
+    print("    [client] Set remote description (server answer)")
+
+    # Wait for ICE -- expected to FAIL
+    print(f"\n  Waiting for ICE connection (timeout={INCOMPLETE_OFFER_TIMEOUT_SECONDS}s) ...")
+    print("  (Expected to FAIL -- the offer had no candidates)")
+    connected = await _wait_for_ice_connected(
+        client_pc, server_pc, "client", "server",
+        timeout=INCOMPLETE_OFFER_TIMEOUT_SECONDS,
+    )
+
+    # Print final states
+    print(f"\n  Final ICE states:")
+    print(f"    [client] {client_pc.iceConnectionState}")
+    print(f"    [server] {server_pc.iceConnectionState}")
+
+    if not connected:
+        print("\n  WHY THIS FAILS: The offer SDP had no ICE candidates, so the")
+        print("  server had no remote candidates to check against. ICE stays at")
+        print("  'checking' forever. This is the production bug -- the browser")
+        print("  sends createOffer().sdp immediately, before gathering completes.")
+
+    # This test PASSES if the connection FAILS (proving the bug)
+    bug_reproduced = not connected
+    _print_result("Bug reproduced (ICE failed to connect)", bug_reproduced)
+
+    # Cleanup
+    audio_track.stop()
+    await client_pc.close()
+    await server_pc.close()
+    return bug_reproduced
+
+
+# ============================================================================
+# TEST 6: COMPLETE OFFER (the fix)
+# ============================================================================
+
+async def test_6_complete_offer(raw_servers: list[dict]) -> bool:
+    """
+    The fix for the production bug: wait for ICE gathering to complete,
+    then send the GATHERED localDescription (which has all candidates)
+    to the server instead of the original offer.
+
+    @param raw_servers: Server dicts from the Metered API.
+    @return: True if ICE connected.
+    """
+    _print_header("TEST 6: Complete Offer (the fix)")
+
+    ice_servers = _build_ice_servers(raw_servers)
+    config = RTCConfiguration(iceServers=ice_servers)
+
+    client_pc = RTCPeerConnection(configuration=config)
+    server_pc = RTCPeerConnection(configuration=config)
+
+    # Add a dummy audio track to the client side
+    audio_track = _DummyAudioTrack()
+    client_pc.addTrack(audio_track)
+    print("  Added dummy audio track to client peer")
+
+    # Step 1: Create the offer
+    offer = await client_pc.createOffer()
+    print(f"    [client] Created offer (type={offer.type})")
+
+    # Step 2: Set local description (triggers gathering, blocks until complete)
+    await client_pc.setLocalDescription(offer)
+    print("    [client] Set local description (gathering complete)")
+
+    # Step 3: Use the GATHERED localDescription (with candidates) for the server
+    gathered_description = client_pc.localDescription
+    candidate_count = gathered_description.sdp.count("a=candidate:")
+    print(f"    [client] Gathered description has {candidate_count} ICE candidate(s)")
+
+    print("\n  Sending GATHERED offer (with candidates) to server ...")
+    await server_pc.setRemoteDescription(gathered_description)
+    print("    [server] Set remote description (complete offer)")
+
+    answer = await server_pc.createAnswer()
+    print(f"    [server] Created answer (type={answer.type})")
+
+    await server_pc.setLocalDescription(answer)
+    print("    [server] Set local description")
+
+    await client_pc.setRemoteDescription(server_pc.localDescription)
+    print("    [client] Set remote description (server answer)")
+
+    # Wait for ICE -- expected to PASS
+    print("\n  Waiting for ICE connection ...")
+    print("  (Expected to PASS -- the offer has all candidates)")
+    connected = await _wait_for_ice_connected(
+        client_pc, server_pc, "client", "server"
+    )
+
+    # Print final states
+    print(f"\n  Final ICE states:")
+    print(f"    [client] {client_pc.iceConnectionState}")
+    print(f"    [server] {server_pc.iceConnectionState}")
+
+    _print_result("ICE connected (fix works)", connected)
+
+    # Cleanup
+    audio_track.stop()
+    await client_pc.close()
+    await server_pc.close()
+    return connected
+
+
+# ============================================================================
 # ENTRY POINT
 # ============================================================================
 
 async def main() -> None:
-    """Run all four tests in order."""
+    """Run all six tests in order."""
     print("=" * 60)
     print("  WebRTC TURN Docker Connectivity Test")
     print(f"  Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -485,14 +656,22 @@ async def main() -> None:
     # Test 4: Audio track
     audio_ok = await test_4_audio_track(raw_servers)
 
+    # Test 5: Incomplete offer (reproduces the bug)
+    bug_reproduced = await test_5_incomplete_offer(raw_servers)
+
+    # Test 6: Complete offer (the fix)
+    fix_works = await test_6_complete_offer(raw_servers)
+
     # Summary
     _print_header("SUMMARY")
     _print_result("Test 1 - Fetch credentials", raw_servers is not None)
     _print_result("Test 2 - TURN allocation (relay candidates)", has_relay)
     _print_result("Test 3 - Peer connection (data channel)", peer_ok)
     _print_result("Test 4 - Audio track exchange", audio_ok)
+    _print_result("Test 5 - Incomplete offer (bug reproduced)", bug_reproduced)
+    _print_result("Test 6 - Complete offer (fix works)", fix_works)
 
-    all_passed = all([raw_servers, has_relay, peer_ok, audio_ok])
+    all_passed = all([raw_servers, has_relay, peer_ok, audio_ok, bug_reproduced, fix_works])
     print(f"\n  {'ALL TESTS PASSED' if all_passed else 'SOME TESTS FAILED'}")
     print()
 
