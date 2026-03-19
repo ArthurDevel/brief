@@ -12,8 +12,9 @@
 
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { createBrowserClient } from "@/lib/supabase/client";
+import * as QRCode from "qrcode";
 
 // ============================================================================
 // CONSTANTS
@@ -21,6 +22,19 @@ import { createBrowserClient } from "@/lib/supabase/client";
 
 const VOICE_PIPELINE_URL =
   process.env.NEXT_PUBLIC_VOICE_PIPELINE_URL ?? "http://localhost:7860";
+
+const PHONE_NUMBER = "+16503999357";
+
+const VCARD_CONTACT_NAME = "Brief.ai";
+
+const VCARD = [
+  "BEGIN:VCARD",
+  "VERSION:3.0",
+  `FN:${VCARD_CONTACT_NAME}`,
+  `N:;${VCARD_CONTACT_NAME};;;`,
+  `TEL;TYPE=VOICE:${PHONE_NUMBER}`,
+  "END:VCARD",
+].join("\n");
 
 // ============================================================================
 // TYPES
@@ -153,7 +167,13 @@ export default function CallPage() {
   const [callActive, setCallActive] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const pipelineSessionRef = useRef<PipelineCallSession | null>(null);
+
+  // Generate vCard QR code on mount
+  useEffect(() => {
+    QRCode.toDataURL(VCARD, { width: 200, margin: 2 }).then(setQrDataUrl);
+  }, []);
 
   // --------------------------------------------------------------------------
   // Call handlers
@@ -228,6 +248,20 @@ export default function CallPage() {
         <div className="mb-6 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
+      )}
+
+      {/* QR code to add the phone number as a contact */}
+      {qrDataUrl && (
+        <section className="mb-6 rounded-lg border border-gray-200 bg-white p-6">
+          <h2 className="mb-2 text-lg font-semibold text-gray-900">Call from your phone</h2>
+          <p className="mb-4 text-sm text-gray-500">
+            Scan this QR code to add the number to your contacts.
+          </p>
+          <div className="flex flex-col items-start gap-2">
+            <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+            <span className="text-xs text-gray-400">{PHONE_NUMBER}</span>
+          </div>
+        </section>
       )}
 
       <section className="rounded-lg border border-gray-200 bg-white p-6">
