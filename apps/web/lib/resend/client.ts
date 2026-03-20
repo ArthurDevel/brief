@@ -56,8 +56,13 @@ export async function sendSessionSummary(
     throw new Error("RESEND_FROM_ADDRESS is not set");
   }
 
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!appUrl) {
+    throw new Error("NEXT_PUBLIC_APP_URL is not set");
+  }
+
   const client = getResendClient();
-  const html = buildSessionSummaryHtml(actions);
+  const html = buildSessionSummaryHtml(actions, sessionId, appUrl);
 
   const { data, error } = await client.emails.send({
     from: fromAddress,

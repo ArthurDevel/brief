@@ -15,8 +15,8 @@
 
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import type { SessionDetail, TranscriptEntry } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 
@@ -347,10 +347,13 @@ function ActionsSummary({
 
 export default function SessionDetailPage() {
   const params = useParams<{ sessionId: string }>();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const emailActionHandled = useRef(false);
 
   const loadSession = useCallback(async () => {
     try {
@@ -369,6 +372,26 @@ export default function SessionDetailPage() {
   useEffect(() => {
     loadSession();
   }, [loadSession]);
+
+  // Handle action/actionId query params from email links
+  useEffect(() => {
+    if (emailActionHandled.current || !session || loading) return;
+
+    const action = searchParams.get("action");
+    const actionId = searchParams.get("actionId");
+    if (!action || !actionId) return;
+
+    emailActionHandled.current = true;
+
+    // Strip query params from the URL so a refresh doesn't re-trigger
+    router.replace(`/dashboard/sessions/${params.sessionId}`);
+
+    if (actionId === "all") {
+      handleBulk(action);
+    } else {
+      handleAction(actionId, action);
+    }
+  }, [session, loading, searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * Handles a single action operation (approve, reject, or undo).
