@@ -65,6 +65,7 @@ class Settings:
     port: int = 7860
     public_url: str = "http://localhost:7860"
     metered_api_key: str = ""
+    recording_enabled: bool = False
 
 
 # ============================================================================
@@ -99,4 +100,5 @@ def load_settings() -> Settings:
         port=int(os.getenv("PORT", "7860")),
         public_url=os.getenv("PUBLIC_URL", "http://localhost:7860"),
         metered_api_key=os.getenv("METERED_API_KEY", ""),
+        recording_enabled=os.getenv("RECORDING_ENABLED", "false").lower() == "true",
     )
