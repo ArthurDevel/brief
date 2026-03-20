@@ -97,26 +97,26 @@ export default function FeatureRequestsTab() {
   return (
     <div>
       {error && (
-        <div className="mb-6 rounded-md bg-red-50 p-4 text-sm text-red-700">
+        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
 
       {/* Submit form */}
-      <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-semibold text-gray-800">Submit a Request</h2>
+      <div className="mb-8 border border-gray-200 bg-white p-6">
+        <h2 className="mb-4 text-lg font-bold text-black">Submit a Request</h2>
         <form onSubmit={handleSubmit} className="flex gap-3">
           <input
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Describe the feature you'd like..."
-            className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="flex-1 border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
           />
           <button
             type="submit"
             disabled={submitting || !description.trim()}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="bg-black px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
           >
             {submitting ? "Submitting..." : "Submit"}
           </button>
@@ -124,8 +124,8 @@ export default function FeatureRequestsTab() {
       </div>
 
       {/* Requests table */}
-      <div className="rounded-lg border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-semibold text-gray-800">
+      <div className="border border-gray-200 bg-white p-6">
+        <h2 className="mb-4 text-lg font-bold text-black">
           Your Requests ({requests.length})
         </h2>
 
@@ -146,7 +146,7 @@ export default function FeatureRequestsTab() {
                   <td className="py-3 text-gray-800">{req.description}</td>
                   <td className="py-3">
                     <span
-                      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                      className={`inline-block px-2 py-0.5 text-xs font-bold ${
                         req.source === "voice"
                           ? "bg-purple-100 text-purple-700"
                           : "bg-blue-100 text-blue-700"

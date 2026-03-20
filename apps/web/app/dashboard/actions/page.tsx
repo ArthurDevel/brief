@@ -164,14 +164,14 @@ function PendingActionsTable({
                 <button
                   onClick={() => onApprove(action.id)}
                   disabled={loadingId === action.id}
-                  className="rounded bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                  className="bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
                 >
                   {loadingId === action.id ? "..." : "Approve"}
                 </button>
                 <button
                   onClick={() => onReject(action.id)}
                   disabled={loadingId === action.id}
-                  className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                  className="bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
                 >
                   Reject
                 </button>
@@ -230,7 +230,7 @@ function ExecutedActionsTable({
                 <button
                   onClick={() => onUndo(action.id)}
                   disabled={loadingId === action.id}
-                  className="rounded bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
+                  className="bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
                 >
                   {loadingId === action.id ? "..." : "Undo"}
                 </button>
@@ -330,7 +330,7 @@ export default function ActionsPage() {
   if (loading) {
     return (
       <div>
-        <h1 className="mb-8 text-2xl font-bold text-gray-900">Actions</h1>
+        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Actions</h1>
         <p className="text-gray-500">Loading...</p>
       </div>
     );
@@ -338,20 +338,20 @@ export default function ActionsPage() {
 
   return (
     <div>
-      <h1 className="mb-8 text-2xl font-bold text-gray-900">Actions</h1>
+      <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Actions</h1>
 
       {error && (
-        <div className="mb-6 rounded-md bg-red-50 p-4 text-sm text-red-700">
+        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
 
       {/* Pending Actions */}
       <section className="mb-10">
-        <h2 className="mb-4 text-lg font-semibold text-gray-800">
+        <h2 className="mb-4 text-lg font-bold text-black">
           Pending Actions ({pendingActions.length})
         </h2>
-        <div className="rounded-lg border border-gray-200 bg-white p-6">
+        <div className="border border-gray-200 bg-white p-6">
           <PendingActionsTable
             actions={pendingActions}
             onApprove={handleApprove}
@@ -363,10 +363,10 @@ export default function ActionsPage() {
 
       {/* Executed Actions */}
       <section>
-        <h2 className="mb-4 text-lg font-semibold text-gray-800">
+        <h2 className="mb-4 text-lg font-bold text-black">
           Executed Actions ({executedActions.length})
         </h2>
-        <div className="rounded-lg border border-gray-200 bg-white p-6">
+        <div className="border border-gray-200 bg-white p-6">
           <ExecutedActionsTable
             actions={executedActions}
             onUndo={handleUndo}

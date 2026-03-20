@@ -149,9 +149,9 @@ function TranscriptBubble({ entry }: { entry: TranscriptEntry }) {
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[70%] rounded-lg px-4 py-2 text-sm ${
+        className={`max-w-[70%] px-4 py-2 text-sm ${
           isUser
-            ? "bg-blue-600 text-white"
+            ? "bg-black text-white"
             : "bg-gray-100 text-gray-800"
         }`}
       >
@@ -171,7 +171,7 @@ function TranscriptBubble({ entry }: { entry: TranscriptEntry }) {
 function ActionCard({ action }: { action: ActionRow }) {
   return (
     <div className="flex justify-center">
-      <div className="rounded-md border border-gray-300 bg-gray-50 px-4 py-2 text-xs text-gray-600">
+      <div className="border border-gray-300 bg-gray-50 px-4 py-2 text-xs text-gray-600">
         <span className="font-mono font-medium">{action.toolName}</span>
         <span className="ml-2 text-gray-400">({action.status})</span>
       </div>
@@ -219,7 +219,7 @@ function ActionsSummary({
     <div className="mb-8 space-y-6">
       {/* Pending actions */}
       {pendingActions.length > 0 && (
-        <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-6">
+        <div className="border border-yellow-200 bg-yellow-50 p-6">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-yellow-800">
               Pending Actions ({pendingActions.length})
@@ -228,14 +228,14 @@ function ActionsSummary({
               <button
                 onClick={onApproveAll}
                 disabled={isBulkProcessing}
-                className="rounded bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                className="bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
               >
                 {isBulkProcessing ? "..." : "Approve All"}
               </button>
               <button
                 onClick={onRejectAll}
                 disabled={isBulkProcessing}
-                className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                className="bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
               >
                 {isBulkProcessing ? "..." : "Reject All"}
               </button>
@@ -263,14 +263,14 @@ function ActionsSummary({
                       <button
                         onClick={() => onApprove(action.id)}
                         disabled={processingId !== null}
-                        className="rounded bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                        className="bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
                       >
                         {processingId === action.id ? "..." : "Approve"}
                       </button>
                       <button
                         onClick={() => onReject(action.id)}
                         disabled={processingId !== null}
-                        className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                        className="bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
                       >
                         {processingId === action.id ? "..." : "Reject"}
                       </button>
@@ -285,7 +285,7 @@ function ActionsSummary({
 
       {/* Completed actions */}
       {completedActions.length > 0 && (
-        <div className="rounded-lg border border-gray-200 bg-white p-6">
+        <div className="border border-gray-200 bg-white p-6">
           <h2 className="mb-4 text-sm font-semibold text-gray-700">
             Completed Actions ({completedActions.length})
           </h2>
@@ -307,7 +307,7 @@ function ActionsSummary({
                   <td className="py-3 text-gray-600">{summarizeResult(action.result)}</td>
                   <td className="py-3">
                     <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                      className={`px-2 py-0.5 text-xs font-bold ${
                         action.status === "executed"
                           ? "bg-green-100 text-green-700"
                           : action.status === "undone"
@@ -323,7 +323,7 @@ function ActionsSummary({
                       <button
                         onClick={() => onUndo(action.id)}
                         disabled={processingId !== null}
-                        className="rounded bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
+                        className="bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
                       >
                         {processingId === action.id ? "..." : "Undo"}
                       </button>
@@ -445,7 +445,7 @@ export default function SessionDetailPage() {
   if (loading) {
     return (
       <div>
-        <h1 className="mb-8 text-2xl font-bold text-gray-900">Session Detail</h1>
+        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Session Detail</h1>
         <p className="text-gray-500">Loading...</p>
       </div>
     );
@@ -454,8 +454,8 @@ export default function SessionDetailPage() {
   if (error || !session) {
     return (
       <div>
-        <h1 className="mb-8 text-2xl font-bold text-gray-900">Session Detail</h1>
-        <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Session Detail</h1>
+        <div className="bg-red-50 p-4 text-sm text-red-700">
           {error ?? "Session not found"}
         </div>
       </div>
@@ -466,10 +466,10 @@ export default function SessionDetailPage() {
 
   return (
     <div>
-      <h1 className="mb-4 text-2xl font-bold text-gray-900">Session Detail</h1>
+      <h1 className="mb-4 text-3xl font-extrabold tracking-tight text-black">Session Detail</h1>
 
       {/* Session header */}
-      <div className="mb-6 rounded-lg border border-gray-200 bg-white p-6">
+      <div className="mb-6 border border-gray-200 bg-white p-6">
         <div className="flex gap-8 text-sm text-gray-600">
           <div>
             <span className="font-medium text-gray-500">Date: </span>
@@ -488,7 +488,7 @@ export default function SessionDetailPage() {
 
       {/* Actions summary with controls */}
       {error && (
-        <div className="mb-6 rounded-md bg-red-50 p-4 text-sm text-red-700">{error}</div>
+        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">{error}</div>
       )}
 
       <ActionsSummary

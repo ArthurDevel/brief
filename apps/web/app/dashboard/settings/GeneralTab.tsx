@@ -400,15 +400,15 @@ export default function GeneralTab() {
   return (
     <div>
       {error && (
-        <div className="mb-6 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
 
       <div className="space-y-8">
         {/* IMAP Configuration */}
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">IMAP Configuration</h2>
+        <section className="border border-gray-200 bg-white p-6">
+          <h2 className="mb-4 text-lg font-bold text-black">IMAP Configuration</h2>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <InputField label="Host" value={imapHost} onChange={setImapHost} placeholder="imap.gmail.com" />
             <InputField label="Port" type="number" value={String(imapPort)} onChange={(v) => setImapPort(Number(v))} />
@@ -425,14 +425,14 @@ export default function GeneralTab() {
             {imapDirty ? (
               <SectionSaveButton onClick={handleSaveImap} saving={savingSection === "imap"} />
             ) : savedSection === "imap" ? (
-              <span className="rounded-md bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
             ) : null}
           </div>
         </section>
 
         {/* SMTP Configuration */}
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">SMTP Configuration</h2>
+        <section className="border border-gray-200 bg-white p-6">
+          <h2 className="mb-4 text-lg font-bold text-black">SMTP Configuration</h2>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <InputField label="Host" value={smtpHost} onChange={setSmtpHost} placeholder="smtp.gmail.com" />
             <InputField label="Port" type="number" value={String(smtpPort)} onChange={(v) => setSmtpPort(Number(v))} />
@@ -449,14 +449,14 @@ export default function GeneralTab() {
             {smtpDirty ? (
               <SectionSaveButton onClick={handleSaveSmtp} saving={savingSection === "smtp"} />
             ) : savedSection === "smtp" ? (
-              <span className="rounded-md bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
             ) : null}
           </div>
         </section>
 
         {/* Phone Number */}
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">Phone Number</h2>
+        <section className="border border-gray-200 bg-white p-6">
+          <h2 className="mb-4 text-lg font-bold text-black">Phone Number</h2>
           <InputField
             label="Your phone number (for caller ID authentication)"
             value={phoneNumber}
@@ -467,14 +467,14 @@ export default function GeneralTab() {
             {phoneDirty ? (
               <SectionSaveButton onClick={handleSavePhone} saving={savingSection === "phone"} />
             ) : savedSection === "phone" ? (
-              <span className="rounded-md bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
             ) : null}
           </div>
         </section>
 
         {/* PIN */}
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">PIN</h2>
+        <section className="border border-gray-200 bg-white p-6">
+          <h2 className="mb-4 text-lg font-bold text-black">PIN</h2>
           <InputField
             label={hasPin ? "Change PIN (4-6 digits, leave blank to keep current)" : "Set PIN (4-6 digits)"}
             type="password"
@@ -486,16 +486,16 @@ export default function GeneralTab() {
             {pinDirty ? (
               <SectionSaveButton onClick={handleSavePin} saving={savingSection === "pin"} />
             ) : savedSection === "pin" ? (
-              <span className="rounded-md bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
             ) : null}
           </div>
         </section>
 
         {/* Voice Preference */}
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
+        <section className="border border-gray-200 bg-white p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">Voice Preference</h2>
-            {savedSection === "voice" && <span className="rounded-md bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>}
+            <h2 className="text-lg font-bold text-black">Voice Preference</h2>
+            {savedSection === "voice" && <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>}
           </div>
           {voices.length === 0 ? (
             <p className="text-sm text-gray-500">Loading voices...</p>
@@ -504,9 +504,9 @@ export default function GeneralTab() {
               {voices.map((voice) => (
                 <label
                   key={voice.canonicalName}
-                  className={`flex items-center gap-3 rounded-md border p-3 cursor-pointer transition-colors ${
+                  className={`flex items-center gap-3 border p-3 cursor-pointer transition-colors ${
                     voicePreference === voice.canonicalName
-                      ? "border-blue-500 bg-blue-50"
+                      ? "border-black bg-black/5"
                       : "border-gray-200 hover:border-gray-300"
                   }`}
                 >
@@ -516,7 +516,7 @@ export default function GeneralTab() {
                     value={voice.canonicalName}
                     checked={voicePreference === voice.canonicalName}
                     onChange={() => handleVoiceChange(voice.canonicalName)}
-                    className="accent-blue-600"
+                    className="accent-black"
                   />
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium text-gray-900 capitalize">{voice.name}</span>
@@ -531,7 +531,7 @@ export default function GeneralTab() {
                         e.preventDefault();
                         handlePlayPreview(voice.canonicalName, voice.sampleUrl!);
                       }}
-                      className="shrink-0 rounded-md border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                      className="shrink-0 border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50"
                     >
                       {playingVoice === voice.canonicalName ? "Stop" : "Preview"}
                     </button>
@@ -543,10 +543,10 @@ export default function GeneralTab() {
         </section>
 
         {/* Voice Speed */}
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
+        <section className="border border-gray-200 bg-white p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">Voice Speed</h2>
-            {savedSection === "speed" && <span className="rounded-md bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>}
+            <h2 className="text-lg font-bold text-black">Voice Speed</h2>
+            {savedSection === "speed" && <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>}
           </div>
           <div className="flex items-center gap-4">
             <span className="text-sm text-gray-500 w-10">1x</span>
@@ -557,7 +557,7 @@ export default function GeneralTab() {
               step={0.05}
               value={voiceSpeed}
               onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
-              className="flex-1 accent-blue-600"
+              className="flex-1 accent-black"
             />
             <span className="text-sm text-gray-500 w-12">1.5x</span>
             <span className="text-sm font-medium text-gray-900 w-12 text-right">{voiceSpeed.toFixed(2)}x</span>
@@ -565,7 +565,7 @@ export default function GeneralTab() {
               type="button"
               onClick={handleSpeedPreview}
               disabled={!voices.find((v) => v.canonicalName === voicePreference)?.sampleUrl}
-              className="shrink-0 rounded-md border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+              className="shrink-0 border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50"
             >
               {previewingSpeed ? "Stop" : "Preview"}
             </button>
@@ -573,10 +573,10 @@ export default function GeneralTab() {
         </section>
 
         {/* Tool Approval Toggles */}
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
+        <section className="border border-gray-200 bg-white p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">Tool Approval Settings</h2>
-            {savedSection === "tools" && <span className="rounded-md bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>}
+            <h2 className="text-lg font-bold text-black">Tool Approval Settings</h2>
+            {savedSection === "tools" && <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>}
           </div>
           <p className="mb-4 text-sm text-gray-500">
             Control which actions require manual approval. &quot;send_email&quot; always requires approval.
@@ -591,7 +591,7 @@ export default function GeneralTab() {
                     handleToolApprovalChange(toolName, e.target.value as ActionClassification)
                   }
                   disabled={toolName === "send_email"}
-                  className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
+                  className="border border-gray-300 px-3 py-1.5 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black disabled:bg-gray-100 disabled:text-gray-500"
                 >
                   <option value="">Default</option>
                   {CLASSIFICATION_OPTIONS.map((opt) => (
@@ -606,8 +606,8 @@ export default function GeneralTab() {
         </section>
 
         {/* Memory Entries */}
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">Memory Entries</h2>
+        <section className="border border-gray-200 bg-white p-6">
+          <h2 className="mb-4 text-lg font-bold text-black">Memory Entries</h2>
           <p className="mb-4 text-sm text-gray-500">
             Things the assistant remembers about you across calls.
           </p>
@@ -618,12 +618,12 @@ export default function GeneralTab() {
               onChange={(e) => setNewMemoryContent(e.target.value)}
               placeholder="Add something for the assistant to remember..."
               rows={2}
-              className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="flex-1 border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
             />
             <button
               type="button"
               onClick={handleAddMemoryEntry}
-              className="self-end rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              className="self-end border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
             >
               Add
             </button>
@@ -631,12 +631,12 @@ export default function GeneralTab() {
 
           <div className="space-y-3">
             {memoryEntries.map((entry) => (
-              <div key={entry.id} className="flex items-start gap-2 rounded-md border border-gray-200 p-3">
+              <div key={entry.id} className="flex items-start gap-2 border border-gray-200 p-3">
                 <p className="flex-1 whitespace-pre-wrap text-sm text-gray-700">{entry.content}</p>
                 <button
                   type="button"
                   onClick={() => handleDeleteMemoryEntry(entry.id)}
-                  className="shrink-0 rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 hover:bg-red-50"
+                  className="shrink-0 border border-red-300 px-3 py-1 text-sm text-red-700 hover:bg-red-50"
                 >
                   Delete
                 </button>
@@ -662,7 +662,7 @@ function SectionSaveButton({ onClick, saving }: { onClick: () => void; saving: b
       type="button"
       onClick={onClick}
       disabled={saving}
-      className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+      className="bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
     >
       {saving ? "Saving..." : "Save"}
     </button>
@@ -686,7 +686,7 @@ function InputField({ label, value, onChange, placeholder, type = "text" }: Inpu
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="w-full border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
       />
     </div>
   );

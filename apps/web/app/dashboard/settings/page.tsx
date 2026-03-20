@@ -45,7 +45,7 @@ function SettingsContent() {
 
   return (
     <div>
-      <h1 className="mb-6 text-2xl font-bold text-gray-900">Settings</h1>
+      <h1 className="mb-6 text-3xl font-extrabold tracking-tight text-black">Settings</h1>
 
       {/* Tab bar */}
       <div className="mb-8 flex border-b border-gray-200">
@@ -55,8 +55,8 @@ function SettingsContent() {
             onClick={() => setActiveTab(tab.id)}
             className={`px-4 py-2 text-sm font-medium transition-colors ${
               activeTab === tab.id
-                ? "border-b-2 border-blue-600 text-blue-600"
-                : "text-gray-500 hover:text-gray-700"
+                ? "border-b-2 border-black text-black font-bold"
+                : "text-gray-500 hover:text-black"
             }`}
           >
             {tab.label}
