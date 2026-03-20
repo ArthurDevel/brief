@@ -32,6 +32,9 @@ import { createBrowserClient } from "@/lib/supabase/client";
 const VOICE_PIPELINE_URL =
   process.env.NEXT_PUBLIC_VOICE_PIPELINE_URL ?? "http://localhost:7860";
 
+/** Max time (ms) to wait for ICE gathering before sending the offer with whatever candidates are available. */
+const ICE_GATHERING_TIMEOUT_MS = 3000;
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -136,14 +139,18 @@ async function startWebRTCSession(
   // Wait for ICE gathering to complete so relay candidates are in the SDP.
   // Without this, the offer SDP has no candidates and the server has nothing
   // to connect to -- ICE stays at "checking" forever.
+  // A timeout ensures we don't hang if some TURN servers are slow to respond.
   if (peerConnection.iceGatheringState !== "complete") {
     await new Promise<void>((resolve) => {
-      const check = () => {
-        if (peerConnection.iceGatheringState === "complete") {
-          peerConnection.removeEventListener("icegatheringstatechange", check);
-          resolve();
-        }
+      const done = () => {
+        peerConnection.removeEventListener("icegatheringstatechange", check);
+        clearTimeout(timer);
+        resolve();
       };
+      const check = () => {
+        if (peerConnection.iceGatheringState === "complete") done();
+      };
+      const timer = setTimeout(done, ICE_GATHERING_TIMEOUT_MS);
       peerConnection.addEventListener("icegatheringstatechange", check);
     });
   }
