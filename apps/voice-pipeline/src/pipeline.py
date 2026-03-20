@@ -36,6 +36,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from supabase import Client
 
 from src.audio.recorder import AudioRecorder
+from src.audio.normalizer import AudioNormalizerProcessor
 from src.audio.speed import AudioSpeedProcessor
 from src.audio.watchdog import AudioFrameWatchdog
 from src.config import LLM_MODEL, Settings
@@ -100,7 +101,7 @@ def create_pipeline(
 
     Pipeline chain:
         transport.input() -> STT -> context_aggregator.user() -> LLM (with tools)
-        -> TTS -> speed_processor -> transport.output() -> context_aggregator.assistant()
+        -> TTS -> speed_processor -> normalizer -> transport.output() -> context_aggregator.assistant()
 
     Args:
         transport: The Pipecat transport (WebRTC or Twilio).
@@ -149,6 +150,13 @@ def create_pipeline(
         config=speed_config,
         sample_rate=sample_rate,
         num_channels=num_channels,
+    )
+
+    # -- Audio normalizer (RMS normalization with peak limiting) --
+    normalizer_config = {"enabled": True}
+    normalizer = AudioNormalizerProcessor(
+        config=normalizer_config,
+        sample_rate=sample_rate,
     )
 
     # -- Build system prompt and LLM context --
@@ -220,7 +228,7 @@ def create_pipeline(
     pipeline_chain: list[Any] = [transport.input(), watchdog]
     if user_recorder is not None:
         pipeline_chain.append(user_recorder)
-    pipeline_chain.extend([stt, user_aggregator, llm, tts, speed_processor])
+    pipeline_chain.extend([stt, user_aggregator, llm, tts, speed_processor, normalizer])
     if assistant_recorder is not None:
         pipeline_chain.append(assistant_recorder)
     pipeline_chain.extend([transport.output(), assistant_aggregator])
