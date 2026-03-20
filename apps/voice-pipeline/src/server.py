@@ -58,6 +58,7 @@ from src.session import end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
 from src.tools.email_client import close_imap_connection, create_imap_connection
 from src.transports.twilio import TwilioTransport, TwilioParams
+from src import session_logger
 
 
 from loguru import logger
@@ -168,6 +169,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
         transport_type: "webrtc" or "twilio".
     """
     session = start_session(user_context.user_id, supabase)
+    session_logger.start(session.session_id)
     usage_tracker = UsageTracker()
     cost_tracker = CostTracker(usage_tracker)
     langfuse_observer = LangfuseObserver(session, transport_type, voice=user_context.voice_preference)
@@ -223,6 +225,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
         return task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder
 
     except Exception:
+        session_logger.stop(session.session_id)
         try:
             close_imap_connection(imap_client)
         except Exception as exc:
@@ -303,6 +306,11 @@ async def _cleanup_session(
         except Exception as exc:
             logger.error("[server] Recording upload failed for session %s: %s", session.session_id, exc)
 
+    # Capture and upload session logs
+    log_text = session_logger.stop(session.session_id)
+    if log_text:
+        await session_logger.upload_session_logs(session.session_id, log_text, supabase)
+
     _live_pipeline_sessions.pop(session.session_id, None)
 
 
@@ -379,6 +387,7 @@ async def lifespan(app: FastAPI):
 
     # Fetch TURN/STUN servers so the server-side peer connection can traverse NAT
     settings = load_settings()
+    session_logger.install()
     logger.info("[server] METERED_API_KEY present: {}", bool(settings.metered_api_key))
     ice_servers = None
     if settings.metered_api_key:
