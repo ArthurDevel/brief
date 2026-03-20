@@ -14,6 +14,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { CallProvider } from "@/contexts/CallContext";
+import ActiveCallBar from "@/components/ActiveCallBar";
 
 // ============================================================================
 // CONSTANTS
@@ -51,34 +53,39 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      {/* Sidebar */}
-      <aside className="w-64 border-r border-gray-200 bg-white">
-        <div className="p-6">
-          <h2 className="text-lg font-bold text-gray-900">Voice Email</h2>
-        </div>
-        <nav className="px-4 pb-6">
-          {NAV_ITEMS.map((item) => {
-            const active = isActive(item.href, pathname);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`block rounded-md px-3 py-2 text-sm font-medium ${
-                  active
-                    ? "bg-gray-100 text-gray-900"
-                    : "text-gray-700 hover:bg-gray-100 hover:text-gray-900"
-                }`}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
-      </aside>
+    <CallProvider>
+      <div className="flex flex-col h-screen">
+        <ActiveCallBar />
+        <div className="flex flex-1 min-h-0 bg-gray-50">
+        {/* Sidebar */}
+        <aside className="w-64 border-r border-gray-200 bg-white">
+          <div className="p-6">
+            <h2 className="text-lg font-bold text-gray-900">Voice Email</h2>
+          </div>
+          <nav className="px-4 pb-6">
+            {NAV_ITEMS.map((item) => {
+              const active = isActive(item.href, pathname);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`block rounded-md px-3 py-2 text-sm font-medium ${
+                    active
+                      ? "bg-gray-100 text-gray-900"
+                      : "text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+        </aside>
 
-      {/* Main content */}
-      <main className="flex-1 p-8">{children}</main>
-    </div>
+        {/* Main content */}
+        <main className="flex-1 overflow-auto p-8">{children}</main>
+        </div>
+      </div>
+    </CallProvider>
   );
 }
