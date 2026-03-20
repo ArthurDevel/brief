@@ -137,8 +137,7 @@ def create_pipeline(
     )
 
     # -- Speed processor (WSOLA) --
-    # Uses the shared speed_config dict so the tempo can be updated live via API
-    speed_config = audio_config.get("speed_config", {"speed": user_context.voice_speed})
+    speed_config = {"speed": user_context.voice_speed}
     speed_processor = AudioSpeedProcessor(
         config=speed_config,
         sample_rate=sample_rate,
