@@ -76,6 +76,14 @@ export async function handleToolCall(
   smtpConfig: SmtpConfig,
   supabase: SupabaseClient
 ): Promise<ActionResult> {
+  // Intercept batch tools before the normal classify/dispatch flow
+  if (input.toolName === "batch_archive_emails") {
+    return await handleBatchArchive(input, imapClient, smtpConfig, supabase);
+  }
+  if (input.toolName === "batch_delete_emails") {
+    return await handleBatchDelete(input, supabase);
+  }
+
   const classification = classifyAction(input.toolName, userConfig);
   const requiresApproval = classification === "mutating_queued";
 
@@ -299,6 +307,113 @@ async function executeAndStore(
     status: "executed",
     result,
     message: `Action ${input.toolName} executed successfully`,
+  };
+}
+
+/**
+ * Fans out a batch_archive_emails call into individual archive_email actions.
+ * Processes emails sequentially (IMAP supports only one operation at a time).
+ * Each email gets its own action row with an individual undo recipe.
+ * @param input - The batch action input containing email_ids in arguments
+ * @param imapClient - Connected ImapFlow client for email operations
+ * @param smtpConfig - SMTP configuration for sending emails
+ * @param supabase - Supabase client for DB operations
+ * @returns ActionResult with summary counts and all created actionIds
+ */
+async function handleBatchArchive(
+  input: ActionInput,
+  imapClient: ImapFlow,
+  smtpConfig: SmtpConfig,
+  supabase: SupabaseClient
+): Promise<ActionResult> {
+  const emailIds = (input.arguments.email_ids as string[]) ?? [];
+  const sourceFolder = (input.arguments.source_folder as string) ?? "INBOX";
+
+  const total = emailIds.length;
+  let succeeded = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  const actionIds: string[] = [];
+  let firstSuccessfulActionId = "";
+
+  for (const emailId of emailIds) {
+    try {
+      const individualInput: ActionInput = {
+        userId: input.userId,
+        sessionId: input.sessionId,
+        toolName: "archive_email",
+        arguments: { email_id: emailId, source_folder: sourceFolder },
+      };
+
+      const result = await executeAndStore(individualInput, imapClient, smtpConfig, supabase);
+      actionIds.push(result.actionId);
+
+      if (!firstSuccessfulActionId) {
+        firstSuccessfulActionId = result.actionId;
+      }
+      succeeded++;
+    } catch (err) {
+      failed++;
+      errors.push(`email ${emailId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return {
+    actionId: firstSuccessfulActionId || "",
+    status: "executed",
+    result: { total, succeeded, failed, errors, actionIds },
+    message: `Archived ${succeeded} of ${total} emails (${failed} failed)`,
+  };
+}
+
+/**
+ * Fans out a batch_delete_emails call into individual pending delete_email actions.
+ * Processes emails sequentially. Each email gets its own pending action row.
+ * @param input - The batch action input containing email_ids in arguments
+ * @param supabase - Supabase client for DB operations
+ * @returns ActionResult with summary counts and all created actionIds
+ */
+async function handleBatchDelete(
+  input: ActionInput,
+  supabase: SupabaseClient
+): Promise<ActionResult> {
+  const emailIds = (input.arguments.email_ids as string[]) ?? [];
+  const sourceFolder = (input.arguments.source_folder as string) ?? "INBOX";
+
+  const total = emailIds.length;
+  let succeeded = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  const actionIds: string[] = [];
+  let firstSuccessfulActionId = "";
+
+  for (const emailId of emailIds) {
+    try {
+      const individualInput: ActionInput = {
+        userId: input.userId,
+        sessionId: input.sessionId,
+        toolName: "delete_email",
+        arguments: { email_id: emailId, source_folder: sourceFolder },
+      };
+
+      const result = await insertPendingAction(individualInput, supabase);
+      actionIds.push(result.actionId);
+
+      if (!firstSuccessfulActionId) {
+        firstSuccessfulActionId = result.actionId;
+      }
+      succeeded++;
+    } catch (err) {
+      failed++;
+      errors.push(`email ${emailId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return {
+    actionId: firstSuccessfulActionId || "",
+    status: "pending",
+    result: { total, succeeded, failed, errors, actionIds },
+    message: `Queued ${succeeded} of ${total} emails for deletion (${failed} failed)`,
   };
 }
 

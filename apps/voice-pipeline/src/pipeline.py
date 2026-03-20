@@ -72,6 +72,8 @@ TOOL_NARRATIONS: dict[str, str] = {
     "send_email": "Sending that email.",
     "archive_email": "Archiving that email.",
     "delete_email": "Deleting that email.",
+    "batch_archive_emails": "Archiving those emails.",
+    "batch_delete_emails": "Deleting those emails.",
 }
 
 

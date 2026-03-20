@@ -6,9 +6,10 @@ Port of packages/tools/src/definitions.ts.
 Each definition describes a tool the LLM can call. These are schema-only
 (no handlers) -- handlers live in handlers.py and email_client.py.
 
-- Define all 10 tool schemas (list_inbox, read_email, search_emails,
-  mark_as_read, draft_email, delete_email, archive_email, send_email,
-  save_memory, submit_feature_request)
+- Define all 13 tool schemas (list_inbox, read_email, read_thread,
+  search_emails, mark_as_read, draft_email, delete_email, archive_email,
+  send_email, batch_archive_emails, batch_delete_emails, save_memory,
+  submit_feature_request)
 - Export them as a list for LLM service configuration
 """
 
@@ -20,7 +21,7 @@ from __future__ import annotations
 # ============================================================================
 
 def get_tool_definitions() -> list[dict]:
-    """Return all 10 tool schemas as Python dicts in OpenAI function-calling format.
+    """Return all 13 tool schemas as Python dicts in OpenAI function-calling format.
 
     Returns:
         List of tool definition dicts, each with "type", "function" containing
@@ -209,6 +210,48 @@ def get_tool_definitions() -> list[dict]:
                             "description": "Email body (for new emails).",
                         },
                     },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "batch_archive_emails",
+                "description": (
+                    "Archive multiple emails at once by their IDs. "
+                    "Moves each email out of the inbox."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "email_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Array of email IDs to archive.",
+                        },
+                    },
+                    "required": ["email_ids"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "batch_delete_emails",
+                "description": (
+                    "Delete multiple emails at once by their IDs. "
+                    "Moves each email to the Trash folder."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "email_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Array of email IDs to delete.",
+                        },
+                    },
+                    "required": ["email_ids"],
                 },
             },
         },
