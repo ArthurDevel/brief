@@ -23,7 +23,7 @@ import type { UsageInfo } from "@/lib/types";
 
 const PLANS = [
   { name: "Free", hours: 1, price: "$0/month" },
-  { name: "Pro", hours: 5, price: "$9.99/month" },
+  { name: "Pro", hours: 5, price: "$20/month" },
 ];
 
 // ============================================================================
