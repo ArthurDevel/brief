@@ -49,6 +49,8 @@ ALL_TOOLS: list[dict[str, str]] = [
     {"name": "draft_email", "default_class": "mutating_auto"},
     {"name": "delete_email", "default_class": "mutating_queued"},
     {"name": "send_email", "default_class": "mutating_queued"},
+    {"name": "batch_archive_emails", "default_class": "mutating_auto"},
+    {"name": "batch_delete_emails", "default_class": "mutating_queued"},
     {"name": "save_memory", "default_class": "read_only"},
     {"name": "submit_feature_request", "default_class": "read_only"},
 ]

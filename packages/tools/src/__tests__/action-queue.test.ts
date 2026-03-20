@@ -17,7 +17,8 @@ import {
   closeImapConnection,
   listInbox,
 } from "@dublin/email";
-import { executeAction, undoAction } from "../action-queue";
+import { executeAction, undoAction, handleToolCall, classifyAction } from "../action-queue";
+import type { ActionInput } from "../types";
 
 // ============================================================================
 // TEST SERVER SETUP
@@ -428,6 +429,357 @@ describe("Action queue (Hoodiecrow integration)", () => {
     try {
       const result = await undoAction("a6", supabase, client);
       expect(result.success).toBe(false);
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+});
+
+// ============================================================================
+// BATCH TOOL CLASSIFICATION
+// ============================================================================
+
+describe("Batch tool classification", () => {
+  it("classifies batch_archive_emails as mutating_auto", () => {
+    expect(classifyAction("batch_archive_emails", {})).toBe("mutating_auto");
+  });
+
+  it("classifies batch_delete_emails as mutating_queued", () => {
+    expect(classifyAction("batch_delete_emails", {})).toBe("mutating_queued");
+  });
+});
+
+// ============================================================================
+// BATCH EMAIL ACTIONS (INTEGRATION)
+// ============================================================================
+
+const BATCH_IMAP_PORT = 14_244;
+
+const BATCH_SEED_MESSAGES = [
+  {
+    raw: [
+      "From: Alice <alice@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch test email 1",
+      "Date: Mon, 10 Mar 2026 09:00:00 +0000",
+      "Message-Id: <batch-msg-001@example.com>",
+      "",
+      "Body of batch test email 1.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Bob <bob@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch test email 2",
+      "Date: Tue, 11 Mar 2026 10:00:00 +0000",
+      "Message-Id: <batch-msg-002@example.com>",
+      "",
+      "Body of batch test email 2.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Carol <carol@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch test email 3",
+      "Date: Wed, 12 Mar 2026 11:00:00 +0000",
+      "Message-Id: <batch-msg-003@example.com>",
+      "",
+      "Body of batch test email 3.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Dave <dave@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch test email 4",
+      "Date: Thu, 13 Mar 2026 12:00:00 +0000",
+      "Message-Id: <batch-msg-004@example.com>",
+      "",
+      "Body of batch test email 4.",
+    ].join("\r\n"),
+  },
+];
+
+function createBatchTestServer() {
+  return hoodiecrow({
+    plugins: [
+      "ID",
+      "SASL-IR",
+      "AUTH-PLAIN",
+      "NAMESPACE",
+      "IDLE",
+      "ENABLE",
+      "CONDSTORE",
+      "LITERALPLUS",
+      "UNSELECT",
+      "SPECIAL-USE",
+      "CREATE-SPECIAL-USE",
+    ],
+    storage: {
+      INBOX: {
+        messages: [...BATCH_SEED_MESSAGES],
+      },
+      "": {
+        separator: "/",
+        folders: {
+          "[Google Mail]": {
+            flags: ["\\Noselect"],
+            folders: {
+              "All Mail": {
+                "special-use": "\\All",
+                messages: [...BATCH_SEED_MESSAGES],
+              },
+              Drafts: { "special-use": "\\Drafts" },
+              "Sent Mail": { "special-use": "\\Sent" },
+              Trash: { "special-use": "\\Trash" },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+const batchImapConfig: ImapConfig = {
+  host: "127.0.0.1",
+  port: BATCH_IMAP_PORT,
+  user: TEST_USER,
+  password: TEST_PASS,
+  secure: false,
+};
+
+describe("Batch email actions (Hoodiecrow integration)", () => {
+  let server: ReturnType<typeof hoodiecrow>;
+
+  beforeAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server = createBatchTestServer();
+        server.listen(BATCH_IMAP_PORT, () => resolve());
+      }),
+  );
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  );
+
+  // --------------------------------------------------------------------------
+  // Batch archive: creates individual action rows, removes emails from inbox
+  // --------------------------------------------------------------------------
+
+  it("batch archive creates individual action rows and removes emails from inbox", async () => {
+    const client = await createImapConnection(batchImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const target1 = emails.find((e) => e.subject === "Batch test email 1")!;
+      const target2 = emails.find((e) => e.subject === "Batch test email 2")!;
+      expect(target1).toBeDefined();
+      expect(target2).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "batch_archive_emails",
+        arguments: { email_ids: [target1.id, target2.id] },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+
+      // Emails should be gone from inbox
+      const after = await listInbox(client, 10);
+      expect(after.find((e) => e.subject === "Batch test email 1")).toBeUndefined();
+      expect(after.find((e) => e.subject === "Batch test email 2")).toBeUndefined();
+
+      // Result summary
+      const summary = result.result as Record<string, unknown>;
+      expect(summary.total).toBe(2);
+      expect(summary.succeeded).toBe(2);
+      expect(summary.failed).toBe(0);
+
+      // Action rows in DB
+      const actionRows = Object.values(store.actions);
+      const archiveRows = actionRows.filter((r) => r.tool_name === "archive_email");
+      expect(archiveRows).toHaveLength(2);
+
+      for (const row of archiveRows) {
+        expect(row.status).toBe("executed");
+        const undo = row.undo_recipe as Record<string, unknown>;
+        expect(undo.operation).toBe("move_email");
+      }
+
+      // Undo recipes contain stable Message-ID from seed data
+      const messageIds = archiveRows.map(
+        (r) => ((r.undo_recipe as Record<string, unknown>).params as Record<string, unknown>).messageId
+      );
+      expect(messageIds).toContain("<batch-msg-001@example.com>");
+      expect(messageIds).toContain("<batch-msg-002@example.com>");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Batch delete: creates pending action rows, does NOT move emails
+  // (runs before undo test -- inbox still has emails 3 and 4)
+  // --------------------------------------------------------------------------
+
+  it("batch delete creates individual pending action rows", async () => {
+    const client = await createImapConnection(batchImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const target1 = emails.find((e) => e.subject === "Batch test email 3")!;
+      const target2 = emails.find((e) => e.subject === "Batch test email 4")!;
+      expect(target1).toBeDefined();
+      expect(target2).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "batch_delete_emails",
+        arguments: { email_ids: [target1.id, target2.id] },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+
+      // Result summary
+      const summary = result.result as Record<string, unknown>;
+      expect(summary.total).toBe(2);
+      expect(summary.succeeded).toBe(2);
+      expect(summary.failed).toBe(0);
+
+      // Action rows in DB should be pending delete_email
+      const actionRows = Object.values(store.actions);
+      const deleteRows = actionRows.filter((r) => r.tool_name === "delete_email");
+      expect(deleteRows).toHaveLength(2);
+
+      for (const row of deleteRows) {
+        expect(row.status).toBe("pending");
+        expect(row.requires_approval).toBe(true);
+      }
+
+      // Emails should still be in inbox (not moved)
+      const after = await listInbox(client, 10);
+      expect(after.find((e) => e.id === target1.id)).toBeDefined();
+      expect(after.find((e) => e.id === target2.id)).toBeDefined();
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Individual undo after batch archive
+  // --------------------------------------------------------------------------
+
+  it("undoing one action from a batch restores only that email", async () => {
+    const client = await createImapConnection(batchImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const target1 = emails.find((e) => e.subject === "Batch test email 3")!;
+      const target2 = emails.find((e) => e.subject === "Batch test email 4")!;
+      expect(target1).toBeDefined();
+      expect(target2).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "batch_archive_emails",
+        arguments: { email_ids: [target1.id, target2.id] },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const summary = result.result as Record<string, unknown>;
+      const actionIds = summary.actionIds as string[];
+      expect(actionIds).toHaveLength(2);
+
+      // Undo only the first action
+      const undoResult = await undoAction(actionIds[0], supabase, client);
+      expect(undoResult.success).toBe(true);
+
+      // Only email 3 should be back, email 4 stays archived
+      const after = await listInbox(client, 10);
+      expect(after.find((e) => e.subject === "Batch test email 3")).toBeDefined();
+      expect(after.find((e) => e.subject === "Batch test email 4")).toBeUndefined();
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Partial failure: one valid ID, one invalid ID
+  // --------------------------------------------------------------------------
+
+  it("partial failure: one valid email ID and one invalid", async () => {
+    const client = await createImapConnection(batchImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const validTarget = emails[0]!;
+      expect(validTarget).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "batch_archive_emails",
+        arguments: { email_ids: [validTarget.id, "99999"] },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+
+      const summary = result.result as Record<string, unknown>;
+      expect(summary.succeeded).toBe(1);
+      expect(summary.failed).toBe(1);
+
+      // Only 1 action row created
+      const actionRows = Object.values(store.actions);
+      expect(actionRows).toHaveLength(1);
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Empty email_ids array
+  // --------------------------------------------------------------------------
+
+  it("empty email_ids array returns cleanly with no DB rows", async () => {
+    const client = await createImapConnection(batchImapConfig);
+    try {
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "batch_archive_emails",
+        arguments: { email_ids: [] },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+
+      const summary = result.result as Record<string, unknown>;
+      expect(summary.total).toBe(0);
+      expect(summary.succeeded).toBe(0);
+      expect(summary.failed).toBe(0);
+      expect(summary.actionIds).toEqual([]);
+
+      // No DB rows
+      expect(Object.keys(store.actions)).toHaveLength(0);
     } finally {
       await closeImapConnection(client);
     }

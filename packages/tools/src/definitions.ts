@@ -5,9 +5,10 @@
  * (no handlers) -- handlers live in action-queue.ts and the email package.
  *
  * Responsibilities:
- * - Define all 10 tool schemas (list_inbox, read_email, search_emails,
- *   mark_as_read, draft_email, delete_email, archive_email, send_email,
- *   save_memory, submit_feature_request)
+ * - Define all 13 tool schemas (list_inbox, read_email, read_thread,
+ *   search_emails, mark_as_read, draft_email, delete_email, archive_email,
+ *   send_email, batch_archive_emails, batch_delete_emails, save_memory,
+ *   submit_feature_request)
  * - Export them as an array for session.update
  */
 
@@ -22,7 +23,7 @@ export interface ToolDefinition {
   description: string;
   parameters: {
     type: "object";
-    properties: Record<string, { type: string; description: string }>;
+    properties: Record<string, { type: string; description: string; items?: { type: string } }>;
     required?: string[];
   };
 }
@@ -176,6 +177,40 @@ export const toolDefinitions: ToolDefinition[] = [
         subject: { type: "string", description: "Email subject (for new emails)." },
         body: { type: "string", description: "Email body (for new emails)." },
       },
+    },
+  },
+
+  {
+    type: "function",
+    name: "batch_archive_emails",
+    description: "Archive multiple emails at once by their IDs. Moves each email out of the inbox.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of email IDs to archive.",
+        },
+      },
+      required: ["email_ids"],
+    },
+  },
+
+  {
+    type: "function",
+    name: "batch_delete_emails",
+    description: "Delete multiple emails at once by their IDs. Moves each email to the Trash folder.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of email IDs to delete.",
+        },
+      },
+      required: ["email_ids"],
     },
   },
 

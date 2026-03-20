@@ -33,6 +33,8 @@ const TOOL_NAME_LABELS: Record<ToolName, string> = {
   send_email: "Send Email",
   save_memory: "Save Memory",
   submit_feature_request: "Submit Feature Request",
+  batch_archive_emails: "Batch Archive Emails",
+  batch_delete_emails: "Batch Delete Emails",
 };
 
 /** Argument keys to prioritize when building action descriptions. */

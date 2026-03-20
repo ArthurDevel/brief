@@ -99,6 +99,12 @@ def handle_tool_call(
     Returns:
         ActionResult with the outcome.
     """
+    # Intercept batch tools before the normal classify/dispatch flow
+    if input.tool_name == "batch_archive_emails":
+        return _handle_batch_archive(input, imap_holder, smtp_config, supabase)
+    if input.tool_name == "batch_delete_emails":
+        return _handle_batch_delete(input, supabase)
+
     classification = classify_action(input.tool_name, user_config)
     requires_approval = classification == "mutating_queued"
 
@@ -262,6 +268,121 @@ def undo_action(
         raise RuntimeError(f"Failed to update action {action_id} to undone")
 
     return UndoResult(success=True, message=f"Action {action_id} undone successfully")
+
+
+# ============================================================================
+# BATCH HANDLERS
+# ============================================================================
+
+def _handle_batch_archive(
+    input: ActionInput,
+    imap_holder: dict[str, Any],
+    smtp_config: SmtpConfig,
+    supabase: Client,
+) -> ActionResult:
+    """Fan out a batch archive request into individual archive_email actions.
+
+    Loops sequentially over each email_id, calling _execute_and_store for each.
+    Each iteration constructs a fresh ActionInput with a fresh arguments dict
+    because _execute_and_store mutates input.arguments in-place (adds message_id).
+
+    Args:
+        input: The batch action input containing email_ids in arguments.
+        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}.
+        smtp_config: SMTP configuration for sending emails.
+        supabase: Supabase client for DB operations.
+
+    Returns:
+        ActionResult with summary counts and all created action IDs.
+    """
+    email_ids: list[str] = input.arguments.get("email_ids", [])
+    source_folder: str = input.arguments.get("source_folder", "INBOX")
+
+    total = len(email_ids)
+    succeeded = 0
+    failed = 0
+    errors: list[str] = []
+    action_ids: list[str] = []
+    first_action_id = ""
+
+    for email_id in email_ids:
+        # Fresh ActionInput + fresh dict per iteration (critical -- see plan notes)
+        individual_input = ActionInput(
+            user_id=input.user_id,
+            session_id=input.session_id,
+            tool_name="archive_email",
+            arguments={"email_id": email_id, "source_folder": source_folder},
+        )
+        try:
+            result = _execute_and_store(individual_input, imap_holder, smtp_config, supabase)
+            action_ids.append(result.action_id)
+            if not first_action_id:
+                first_action_id = result.action_id
+            succeeded += 1
+        except Exception as e:
+            failed += 1
+            errors.append(f"email_id={email_id}: {e}")
+            logger.warning("Batch archive failed for email_id=%s: %s", email_id, e)
+
+    return ActionResult(
+        action_id=first_action_id or "",
+        status="executed",
+        result={"total": total, "succeeded": succeeded, "failed": failed, "errors": errors, "actionIds": action_ids},
+        message=f"Archived {succeeded} of {total} emails ({failed} failed)",
+    )
+
+
+def _handle_batch_delete(
+    input: ActionInput,
+    supabase: Client,
+) -> ActionResult:
+    """Fan out a batch delete request into individual pending delete_email actions.
+
+    Loops sequentially over each email_id, calling _insert_pending_action for each.
+    Each iteration constructs a fresh ActionInput with a fresh arguments dict.
+
+    Args:
+        input: The batch action input containing email_ids in arguments.
+        supabase: Supabase client for DB operations.
+
+    Returns:
+        ActionResult with summary counts and all created action IDs.
+    """
+    email_ids: list[str] = input.arguments.get("email_ids", [])
+    source_folder: str = input.arguments.get("source_folder", "INBOX")
+
+    total = len(email_ids)
+    succeeded = 0
+    failed = 0
+    errors: list[str] = []
+    action_ids: list[str] = []
+    first_action_id = ""
+
+    for email_id in email_ids:
+        # Fresh ActionInput + fresh dict per iteration
+        individual_input = ActionInput(
+            user_id=input.user_id,
+            session_id=input.session_id,
+            tool_name="delete_email",
+            arguments={"email_id": email_id, "source_folder": source_folder},
+        )
+        try:
+            result = _insert_pending_action(individual_input, supabase)
+            action_ids.append(result.action_id)
+            if not first_action_id:
+                first_action_id = result.action_id
+            succeeded += 1
+        except Exception as e:
+            failed += 1
+            errors.append(f"email_id={email_id}: {e}")
+            logger.warning("Batch delete failed for email_id=%s: %s", email_id, e)
+
+    return ActionResult(
+        action_id=first_action_id or "",
+        status="pending",
+        result={"total": total, "succeeded": succeeded, "failed": failed, "errors": errors, "actionIds": action_ids},
+        message=f"Queued {succeeded} of {total} emails for deletion ({failed} failed)",
+    )
 
 
 # ============================================================================
