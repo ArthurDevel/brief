@@ -170,7 +170,7 @@ function TranscriptBubble({ entry }: { entry: TranscriptEntry }) {
  */
 function ActionCard({ action }: { action: ActionRow }) {
   return (
-    <div className="flex justify-center">
+    <div className="flex justify-start">
       <div className="border border-gray-300 bg-gray-50 px-4 py-2 text-xs text-gray-600">
         <span className="font-mono font-medium">{action.toolName}</span>
         <span className="ml-2 text-gray-400">({action.status})</span>
@@ -502,20 +502,23 @@ export default function SessionDetailPage() {
       />
 
       {/* Timeline */}
-      <div className="space-y-3">
-        {timeline.length === 0 ? (
-          <p className="text-sm text-gray-500">No transcript or actions recorded.</p>
-        ) : (
-          timeline.map((item, index) => (
-            <div key={index}>
-              {item.type === "transcript" ? (
-                <TranscriptBubble entry={item.data as TranscriptEntry} />
-              ) : (
-                <ActionCard action={item.data as ActionRow} />
-              )}
-            </div>
-          ))
-        )}
+      <div className="border border-gray-200 bg-white p-6">
+        <h2 className="mb-4 text-sm font-semibold text-gray-700">Transcript</h2>
+        <div className="space-y-3">
+          {timeline.length === 0 ? (
+            <p className="text-sm text-gray-500">No transcript or actions recorded.</p>
+          ) : (
+            timeline.map((item, index) => (
+              <div key={index}>
+                {item.type === "transcript" ? (
+                  <TranscriptBubble entry={item.data as TranscriptEntry} />
+                ) : (
+                  <ActionCard action={item.data as ActionRow} />
+                )}
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );
