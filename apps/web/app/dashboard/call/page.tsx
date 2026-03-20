@@ -53,18 +53,18 @@ export default function CallPage() {
 
   return (
     <div>
-      <h1 className="mb-8 text-2xl font-bold text-gray-900">Browser Call</h1>
+      <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Browser Call</h1>
 
       {error && (
-        <div className="mb-6 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
 
       {/* QR code to add the phone number as a contact */}
       {qrDataUrl && (
-        <section className="mb-6 rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-2 text-lg font-semibold text-gray-900">Call from your phone</h2>
+        <section className="mb-6 border border-gray-200 bg-white p-6">
+          <h2 className="mb-2 text-lg font-bold text-black">Call from your phone</h2>
           <p className="mb-4 text-sm text-gray-500">
             Scan this QR code to add the number to your contacts.
           </p>
@@ -75,7 +75,7 @@ export default function CallPage() {
         </section>
       )}
 
-      <section className="rounded-lg border border-gray-200 bg-white p-6">
+      <section className="border border-gray-200 bg-white p-6">
         <p className="mb-4 text-sm text-gray-500">
           Voice connection via the Pipecat pipeline (Deepgram STT + OpenRouter LLM + Deepgram TTS). Uses WebRTC.
         </p>
@@ -86,14 +86,14 @@ export default function CallPage() {
           {!callActive ? (
             <button
               onClick={startCall}
-              className="rounded-md bg-green-600 px-6 py-2 text-sm font-medium text-white hover:bg-green-700"
+              className="bg-green-600 px-6 py-2 text-sm font-medium text-white hover:bg-green-700"
             >
               Start Call
             </button>
           ) : (
             <button
               onClick={endCall}
-              className="rounded-md bg-red-600 px-6 py-2 text-sm font-medium text-white hover:bg-red-700"
+              className="bg-red-600 px-6 py-2 text-sm font-medium text-white hover:bg-red-700"
             >
               End Call
             </button>

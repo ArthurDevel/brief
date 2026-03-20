@@ -75,7 +75,7 @@ export default function HistoryPage() {
   if (loading) {
     return (
       <div>
-        <h1 className="mb-8 text-2xl font-bold text-gray-900">History</h1>
+        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">History</h1>
         <p className="text-gray-500">Loading...</p>
       </div>
     );
@@ -83,10 +83,10 @@ export default function HistoryPage() {
 
   return (
     <div>
-      <h1 className="mb-8 text-2xl font-bold text-gray-900">History</h1>
+      <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">History</h1>
 
       {error && (
-        <div className="mb-6 rounded-md bg-red-50 p-4 text-sm text-red-700">
+        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
@@ -94,7 +94,7 @@ export default function HistoryPage() {
       {sessions.length === 0 ? (
         <p className="text-gray-500">No call sessions yet.</p>
       ) : (
-        <div className="rounded-lg border border-gray-200 bg-white p-6">
+        <div className="border border-gray-200 bg-white p-6">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-gray-200">
@@ -109,7 +109,7 @@ export default function HistoryPage() {
                   <td className="py-3">
                     <Link
                       href={`/dashboard/sessions/${session.id}`}
-                      className="text-blue-600 hover:underline"
+                      className="font-medium text-black hover:underline"
                     >
                       {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
                     </Link>

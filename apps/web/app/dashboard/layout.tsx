@@ -56,11 +56,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <CallProvider>
       <div className="flex flex-col h-screen">
         <ActiveCallBar />
-        <div className="flex flex-1 min-h-0 bg-gray-50">
+        <div className="flex flex-1 min-h-0">
         {/* Sidebar */}
         <aside className="w-64 border-r border-gray-200 bg-white">
           <div className="p-6">
-            <h2 className="text-lg font-bold text-gray-900">Voice Email</h2>
+            <h2 className="text-xl font-extrabold tracking-tight text-black">Voice Email</h2>
           </div>
           <nav className="px-4 pb-6">
             {NAV_ITEMS.map((item) => {
@@ -69,10 +69,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`block rounded-md px-3 py-2 text-sm font-medium ${
+                  className={`block px-3 py-2 text-sm font-medium ${
                     active
-                      ? "bg-gray-100 text-gray-900"
-                      : "text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                      ? "bg-gray-100 text-black font-bold"
+                      : "text-gray-600 hover:bg-gray-50 hover:text-black"
                   }`}
                 >
                   {item.label}
@@ -83,7 +83,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </aside>
 
         {/* Main content */}
-        <main className="flex-1 overflow-auto p-8">{children}</main>
+        <main
+          className="flex-1 overflow-auto p-8"
+          style={{
+            backgroundImage: "radial-gradient(#d4d4d8 1px, transparent 1px)",
+            backgroundSize: "24px 24px",
+          }}
+        >
+          {children}
+        </main>
         </div>
       </div>
     </CallProvider>

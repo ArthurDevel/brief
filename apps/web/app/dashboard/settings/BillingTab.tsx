@@ -61,7 +61,7 @@ export default function BillingTab() {
 
   if (error || !usage) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="bg-red-50 p-4 text-sm text-red-700">
         {error ?? "Failed to load billing info"}
       </div>
     );
@@ -74,8 +74,8 @@ export default function BillingTab() {
   return (
     <div>
       {/* Current plan + usage */}
-      <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-semibold text-gray-800">Current Plan</h2>
+      <div className="mb-8 border border-gray-200 bg-white p-6">
+        <h2 className="mb-4 text-lg font-bold text-black">Current Plan</h2>
 
         <p className="mb-2 text-sm text-gray-600">
           <span className="font-medium">Plan:</span>{" "}
@@ -93,9 +93,9 @@ export default function BillingTab() {
             <span>{usage.hoursUsed.toFixed(2)}h used</span>
             <span>{usage.hoursLimit}h limit</span>
           </div>
-          <div className="mt-1 h-3 w-full rounded-full bg-gray-200">
+          <div className="mt-1 h-3 w-full bg-gray-200">
             <div
-              className={`h-3 rounded-full ${usagePercent >= 90 ? "bg-red-500" : "bg-blue-600"}`}
+              className={`h-3 ${usagePercent >= 90 ? "bg-red-500" : "bg-black"}`}
               style={{ width: `${usagePercent}%` }}
             />
           </div>
@@ -107,8 +107,8 @@ export default function BillingTab() {
       </div>
 
       {/* Plan comparison */}
-      <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-semibold text-gray-800">Plans</h2>
+      <div className="mb-8 border border-gray-200 bg-white p-6">
+        <h2 className="mb-4 text-lg font-bold text-black">Plans</h2>
         <table className="w-full text-left text-sm">
           <thead>
             <tr className="border-b border-gray-200">
@@ -122,13 +122,13 @@ export default function BillingTab() {
               <tr
                 key={plan.name}
                 className={`border-b border-gray-100 ${
-                  plan.name.toLowerCase() === usage.plan ? "bg-blue-50" : ""
+                  plan.name.toLowerCase() === usage.plan ? "bg-black/5" : ""
                 }`}
               >
                 <td className="py-3 font-medium">
                   {plan.name}
                   {plan.name.toLowerCase() === usage.plan && (
-                    <span className="ml-2 text-xs text-blue-600">(current)</span>
+                    <span className="ml-2 text-xs text-black font-medium">(current)</span>
                   )}
                 </td>
                 <td className="py-3 text-gray-600">{plan.hours}h / month</td>
@@ -144,7 +144,7 @@ export default function BillingTab() {
         <div className="relative inline-block" title="Coming soon -- Stripe integration pending">
           <button
             disabled
-            className="cursor-not-allowed rounded-md bg-gray-400 px-6 py-2 text-sm font-medium text-white"
+            className="cursor-not-allowed bg-gray-400 px-6 py-2 text-sm font-medium text-white"
           >
             Upgrade to Pro
           </button>

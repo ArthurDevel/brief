@@ -112,12 +112,12 @@ function RecentSessionCard({
   onReject: (id: string) => void;
 }) {
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-6">
+    <div className="border border-gray-200 bg-white p-6">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-800">Most Recent Session</h2>
+        <h2 className="text-lg font-bold text-black">Most Recent Session</h2>
         <Link
           href={`/dashboard/sessions/${session.id}`}
-          className="text-sm text-blue-600 hover:underline"
+          className="text-sm font-medium text-black hover:underline"
         >
           View full session
         </Link>
@@ -166,14 +166,14 @@ function RecentSessionCard({
                         <button
                           onClick={() => onApprove(action.id)}
                           disabled={processingId === action.id}
-                          className="rounded bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                          className="bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
                         >
                           {processingId === action.id ? "..." : "Approve"}
                         </button>
                         <button
                           onClick={() => onReject(action.id)}
                           disabled={processingId === action.id}
-                          className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                          className="bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
                         >
                           Reject
                         </button>
@@ -206,13 +206,13 @@ function PreviousSessionCard({
 }) {
   return (
     <Link href={`/dashboard/sessions/${session.id}`} className="block">
-      <div className="rounded-lg border border-gray-200 bg-white p-6 hover:border-blue-300">
+      <div className="border border-gray-200 bg-white p-6 hover:border-black">
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-600">
             {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
           </span>
           {hasPendingActions && (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+            <span className="bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
               Pending actions
             </span>
           )}
@@ -301,7 +301,7 @@ export default function DashboardOverviewPage() {
   if (loading) {
     return (
       <div>
-        <h1 className="mb-8 text-2xl font-bold text-gray-900">Overview</h1>
+        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Overview</h1>
         <p className="text-gray-500">Loading...</p>
       </div>
     );
@@ -317,10 +317,10 @@ export default function DashboardOverviewPage() {
 
   return (
     <div>
-      <h1 className="mb-8 text-2xl font-bold text-gray-900">Overview</h1>
+      <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Overview</h1>
 
       {error && (
-        <div className="mb-6 rounded-md bg-red-50 p-4 text-sm text-red-700">{error}</div>
+        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">{error}</div>
       )}
 
       {/* Most recent session */}
@@ -335,7 +335,7 @@ export default function DashboardOverviewPage() {
           />
         </div>
       ) : (
-        <div className="mb-6 rounded-lg border border-gray-200 bg-white p-6">
+        <div className="mb-6 border border-gray-200 bg-white p-6">
           <p className="text-sm text-gray-500">No sessions yet.</p>
         </div>
       )}
@@ -356,9 +356,9 @@ export default function DashboardOverviewPage() {
       {/* All Sessions button */}
       <Link
         href="/dashboard/sessions"
-        className="inline-block rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        className="group inline-flex items-center gap-2 border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-gray-50"
       >
-        All Sessions
+        All Sessions <span className="transition-transform group-hover:translate-x-1">&rarr;</span>
       </Link>
     </div>
   );
