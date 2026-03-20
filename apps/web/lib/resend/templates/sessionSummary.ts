@@ -36,7 +36,7 @@ const TOOL_NAME_LABELS: Record<ToolName, string> = {
 };
 
 /** Argument keys to prioritize when building action descriptions. */
-const RELEVANT_KEYS = ["to", "subject", "query", "message_id", "content"];
+const RELEVANT_KEYS = ["to", "from", "subject", "query", "content"];
 
 const MAX_VALUE_LENGTH = 60;
 

@@ -426,8 +426,10 @@ def mark_as_read(client: IMAPClient, email_id: str) -> None:
 
 def archive_email(
     client: IMAPClient, email_id: str, source_folder: str = "INBOX"
-) -> dict:
+) -> tuple[dict, str]:
     """Archive an email by moving it to All Mail.
+
+    Fetches the envelope before moving to extract the stable RFC Message-ID.
 
     Args:
         client: Connected IMAPClient.
@@ -435,13 +437,17 @@ def archive_email(
         source_folder: The folder the email is currently in.
 
     Returns:
-        UndoRecipe dict to reverse the archive operation.
+        Tuple of (undo_recipe_dict, message_id).
     """
     archive_folder = resolve_special_use_folder(client, b"\\All")
     client.select_folder(source_folder)
+
+    # Fetch envelope before move to extract stable Message-ID
+    message_id = _fetch_message_id(client, int(email_id))
+
     client.move([int(email_id)], archive_folder)
 
-    return {
+    undo_recipe = {
         "operation": "move_email",
         "params": {
             "email_id": email_id,
@@ -449,12 +455,15 @@ def archive_email(
             "to": source_folder,
         },
     }
+    return undo_recipe, message_id
 
 
 def delete_email(
     client: IMAPClient, email_id: str, source_folder: str = "INBOX"
-) -> dict:
+) -> tuple[dict, str]:
     """Delete an email by moving it to Trash.
+
+    Fetches the envelope before moving to extract the stable RFC Message-ID.
 
     Args:
         client: Connected IMAPClient.
@@ -462,13 +471,17 @@ def delete_email(
         source_folder: The folder the email is currently in.
 
     Returns:
-        UndoRecipe dict to reverse the delete operation.
+        Tuple of (undo_recipe_dict, message_id).
     """
     trash_folder = resolve_special_use_folder(client, b"\\Trash")
     client.select_folder(source_folder)
+
+    # Fetch envelope before move to extract stable Message-ID
+    message_id = _fetch_message_id(client, int(email_id))
+
     client.move([int(email_id)], trash_folder)
 
-    return {
+    undo_recipe = {
         "operation": "move_email",
         "params": {
             "email_id": email_id,
@@ -476,6 +489,7 @@ def delete_email(
             "to": source_folder,
         },
     }
+    return undo_recipe, message_id
 
 
 def move_email(
@@ -596,6 +610,35 @@ def delete_draft(client: IMAPClient, draft_uid: str) -> None:
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def _fetch_message_id(client: IMAPClient, uid: int) -> str:
+    """Fetch the RFC Message-ID from the envelope for a given UID.
+
+    Must be called after select_folder so the UID is valid in the selected context.
+
+    Args:
+        client: Connected IMAPClient with a folder already selected.
+        uid: The UID of the email.
+
+    Returns:
+        The Message-ID string (e.g. "<abc@example.com>").
+
+    Raises:
+        RuntimeError: If the envelope or Message-ID is missing.
+    """
+    fetch_data = client.fetch([uid], ["ENVELOPE"])
+    if uid not in fetch_data:
+        raise RuntimeError(f"Email with UID {uid} not found for envelope fetch")
+
+    envelope: Any = fetch_data[uid].get(b"ENVELOPE")
+    if not envelope:
+        raise RuntimeError(f"Email with UID {uid} has no envelope data")
+
+    if not envelope.message_id:
+        raise RuntimeError(f"Email with UID {uid} has no Message-ID in envelope")
+
+    return _decode_bytes(envelope.message_id)
+
 
 def _parse_append_uid(result: object) -> str | None:
     """Parse the UID from an IMAP APPEND response.

@@ -64,6 +64,10 @@ def _capture_handler(tool_name: str, **kwargs):
         imap_lock=kwargs.get("imap_lock", asyncio.Lock()),
         supabase=kwargs.get("supabase", MagicMock()),
         langfuse_observer=kwargs.get("langfuse_observer", MagicMock()),
+        deepgram_api_key=kwargs.get("deepgram_api_key", "test-key"),
+        tts_sample_rate=kwargs.get("tts_sample_rate", 16000),
+        tts_voice=kwargs.get("tts_voice", "aura-asteria-en"),
+        narration_http_session=kwargs.get("narration_http_session", {"session": None}),
     )
 
     return captured[tool_name]
@@ -192,3 +196,103 @@ class TestToolHandlerError:
         assert result["status"] == "error"
         assert result["result"] is None
         assert "IMAP operation failed" in result["message"]
+
+
+class TestMessageIdInArguments:
+    """When archive_email or delete_email is executed via handle_tool_call,
+    the message_id from the IMAP envelope must be merged into the stored
+    action arguments."""
+
+    def _make_mock_supabase(self, inserted_row: dict) -> MagicMock:
+        """Create a mock Supabase client that captures the inserted row."""
+        mock_supabase = MagicMock()
+
+        def capture_insert(row):
+            inserted_row.update(row)
+            mock_response = MagicMock()
+            mock_response.data = [{"id": "action-1"}]
+            mock_chain = MagicMock()
+            mock_chain.execute = MagicMock(return_value=mock_response)
+            return mock_chain
+
+        mock_supabase.table.return_value.insert = capture_insert
+        return mock_supabase
+
+    def test_archive_email_stores_message_id(self, monkeypatch):
+        """archive_email via handle_tool_call should merge message_id into arguments."""
+        from src.tools.handlers import handle_tool_call, ActionInput, UndoRecipe
+
+        monkeypatch.setattr(
+            "src.tools.handlers._dispatch_tool",
+            lambda **kwargs: (
+                {"archived": True},
+                UndoRecipe(operation="move_email", params={"email_id": "42", "from": "[Gmail]/All Mail", "to": "INBOX"}),
+                "<test-msg-id@example.com>",
+            ),
+        )
+
+        inserted_row: dict = {}
+        mock_supabase = self._make_mock_supabase(inserted_row)
+
+        result = handle_tool_call(
+            input=ActionInput(user_id="test-user", session_id="test-session", tool_name="archive_email", arguments={"email_id": "42"}),
+            user_config={},
+            imap_holder={"client": MagicMock(), "config": MagicMock()},
+            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert inserted_row["arguments"]["message_id"] == "<test-msg-id@example.com>"
+        assert inserted_row["arguments"]["email_id"] == "42"
+
+    def test_delete_email_stores_message_id(self, monkeypatch):
+        """delete_email (with user_config override to auto) should merge message_id."""
+        from src.tools.handlers import handle_tool_call, ActionInput, UndoRecipe
+
+        monkeypatch.setattr(
+            "src.tools.handlers._dispatch_tool",
+            lambda **kwargs: (
+                {"deleted": True},
+                UndoRecipe(operation="move_email", params={"email_id": "99", "from": "[Gmail]/Trash", "to": "INBOX"}),
+                "<delete-msg-id@example.com>",
+            ),
+        )
+
+        inserted_row: dict = {}
+        mock_supabase = self._make_mock_supabase(inserted_row)
+
+        # delete_email defaults to mutating_queued, so override to mutating_auto
+        result = handle_tool_call(
+            input=ActionInput(user_id="test-user", session_id="test-session", tool_name="delete_email", arguments={"email_id": "99"}),
+            user_config={"delete_email": "mutating_auto"},
+            imap_holder={"client": MagicMock(), "config": MagicMock()},
+            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert inserted_row["arguments"]["message_id"] == "<delete-msg-id@example.com>"
+
+    def test_non_email_tool_has_no_message_id(self, monkeypatch):
+        """Tools that do not return a message_id should not add one to arguments."""
+        from src.tools.handlers import handle_tool_call, ActionInput
+
+        monkeypatch.setattr(
+            "src.tools.handlers._dispatch_tool",
+            lambda **kwargs: ({"marked": True}, None, None),
+        )
+
+        inserted_row: dict = {}
+        mock_supabase = self._make_mock_supabase(inserted_row)
+
+        result = handle_tool_call(
+            input=ActionInput(user_id="test-user", session_id="test-session", tool_name="mark_as_read", arguments={"email_id": "10"}),
+            user_config={},
+            imap_holder={"client": MagicMock(), "config": MagicMock()},
+            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert "message_id" not in inserted_row["arguments"]

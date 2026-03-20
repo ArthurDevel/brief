@@ -18,7 +18,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import TurndownService from "turndown";
-import type { ImapConfig, EmailSummary, Email, ThreadMessage } from "./types";
+import type { ImapConfig, EmailSummary, Email, ThreadMessage, EmailMeta } from "./types";
 import type { UndoRecipe } from "@dublin/tools";
 
 // ============================================================================
@@ -464,6 +464,100 @@ export async function moveEmail(
     }
 
     await client.messageMove(String(uids[0]), to, { uid: true });
+  } finally {
+    lock.release();
+  }
+}
+
+// ============================================================================
+// EMAIL META LOOKUPS
+// ============================================================================
+
+/**
+ * Fetches email metadata (subject, from) by RFC Message-ID header.
+ * Searches All Mail first, then Trash (Gmail's All Mail excludes Trash).
+ * @param client - Connected ImapFlow client
+ * @param messageId - The RFC Message-ID header value (e.g. "<abc@example.com>")
+ * @returns EmailMeta with subject and from fields
+ * @throws If the email is not found in either folder
+ */
+export async function fetchEmailMetaByMessageId(
+  client: ImapFlow,
+  messageId: string
+): Promise<EmailMeta> {
+  // Try All Mail first
+  const allMailFolder = await resolveSpecialUseFolder(client, "\\All");
+  const allMailResult = await searchAndFetchMeta(client, allMailFolder, messageId);
+  if (allMailResult) return allMailResult;
+
+  // Fall back to Trash (Gmail's All Mail excludes trashed emails)
+  const trashFolder = await resolveSpecialUseFolder(client, "\\Trash");
+  const trashResult = await searchAndFetchMeta(client, trashFolder, messageId);
+  if (trashResult) return trashResult;
+
+  throw new Error(`Email with Message-ID ${messageId} not found in All Mail or Trash`);
+}
+
+/**
+ * Fetches email metadata (subject, from) by UID in a specific folder.
+ * Used for pending actions where message_id is not yet available.
+ * @param client - Connected ImapFlow client
+ * @param uid - The UID of the email
+ * @param folder - The folder to search in (defaults to "INBOX")
+ * @returns EmailMeta with subject and from fields
+ * @throws If the email is not found
+ */
+export async function fetchEmailMetaByUid(
+  client: ImapFlow,
+  uid: string,
+  folder: string = "INBOX"
+): Promise<EmailMeta> {
+  const lock = await client.getMailboxLock(folder);
+
+  try {
+    const msg = await client.fetchOne(uid, { envelope: true }, { uid: true });
+    if (!msg || !msg.envelope) {
+      throw new Error(`Email with UID ${uid} not found in ${folder}`);
+    }
+
+    return {
+      subject: msg.envelope.subject ?? "(no subject)",
+      from: formatAddress(msg.envelope.from),
+    };
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Searches a folder by Message-ID header and fetches metadata from the result.
+ * @param client - Connected ImapFlow client
+ * @param folder - The folder to search in
+ * @param messageId - The RFC Message-ID header value
+ * @returns EmailMeta if found, null otherwise
+ */
+async function searchAndFetchMeta(
+  client: ImapFlow,
+  folder: string,
+  messageId: string
+): Promise<EmailMeta | null> {
+  const lock = await client.getMailboxLock(folder);
+
+  try {
+    const uids = await client.search(
+      { header: { "message-id": messageId } },
+      { uid: true }
+    );
+
+    if (!uids || uids.length === 0) return null;
+
+    const msg = await client.fetchOne(String(uids[0]), { envelope: true }, { uid: true });
+    if (!msg || !msg.envelope) return null;
+
+    return {
+      subject: msg.envelope.subject ?? "(no subject)",
+      from: formatAddress(msg.envelope.from),
+    };
   } finally {
     lock.release();
   }
