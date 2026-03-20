@@ -150,8 +150,8 @@ def execute_action(
             f'Action {action_id} cannot be executed -- status is "{action["status"]}"'
         )
 
-    # Execute the tool
-    result, undo_recipe = _dispatch_tool(
+    # Execute the tool (discard message_id -- approved actions are already in the DB)
+    result, undo_recipe, _ = _dispatch_tool(
         tool_name=action["tool_name"],
         args=action["arguments"],
         imap_holder=imap_holder,
@@ -328,7 +328,7 @@ def _execute_and_store(
     Raises:
         RuntimeError: If the database insert fails.
     """
-    result, undo_recipe = _dispatch_tool(
+    result, undo_recipe, message_id = _dispatch_tool(
         tool_name=input.tool_name,
         args=input.arguments,
         imap_holder=imap_holder,
@@ -336,6 +336,10 @@ def _execute_and_store(
         supabase=supabase,
         user_id=input.user_id,
     )
+
+    # Merge message_id into arguments for DB storage (used for enrichment later)
+    if message_id is not None:
+        input.arguments["message_id"] = message_id
 
     # Serialize undo recipe for DB storage
     undo_recipe_data = (
@@ -382,7 +386,7 @@ def _dispatch_tool(
     smtp_config: SmtpConfig,
     supabase: Client,
     user_id: str,
-) -> tuple[dict[str, Any], UndoRecipe | None]:
+) -> tuple[dict[str, Any], UndoRecipe | None, str | None]:
     """Dispatch a tool call to the appropriate handler.
 
     Routes to email_client functions or Supabase inserts for memory/feature requests.
@@ -397,7 +401,8 @@ def _dispatch_tool(
         user_id: The user ID (for memory/feature request operations).
 
     Returns:
-        Tuple of (result dict, UndoRecipe or None).
+        Tuple of (result dict, UndoRecipe or None, message_id or None).
+        message_id is only returned for archive_email and delete_email.
 
     Raises:
         ValueError: If tool_name is unknown.
@@ -410,58 +415,58 @@ def _dispatch_tool(
             imap_holder, config,
             lambda c: email_client.list_inbox(c, limit),
         )
-        return {"markdown": format_email_summaries(emails, "Inbox")}, None
+        return {"markdown": format_email_summaries(emails, "Inbox")}, None, None
 
     if tool_name == "read_email":
         result = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.read_email(c, args["email_id"]),
         )
-        return {"markdown": format_email(result)}, None
+        return {"markdown": format_email(result)}, None, None
 
     if tool_name == "read_thread":
         messages = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.read_thread(c, args["email_id"]),
         )
-        return {"markdown": format_thread(messages)}, None
+        return {"markdown": format_thread(messages)}, None, None
 
     if tool_name == "search_emails":
         emails = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.search_emails(c, args["query"]),
         )
-        return {"markdown": format_email_summaries(emails, "Search Results")}, None
+        return {"markdown": format_email_summaries(emails, "Search Results")}, None, None
 
     if tool_name == "mark_as_read":
         email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.mark_as_read(c, args["email_id"]),
         )
-        return {"marked": True}, None
+        return {"marked": True}, None, None
 
     if tool_name == "archive_email":
         source_folder = args.get("source_folder", "INBOX")
-        recipe_data = email_client.with_reconnect(
+        recipe_data, message_id = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.archive_email(c, args["email_id"], source_folder),
         )
-        return {"archived": True}, UndoRecipe(**recipe_data)
+        return {"archived": True}, UndoRecipe(**recipe_data), message_id
 
     if tool_name == "delete_email":
         source_folder = args.get("source_folder", "INBOX")
-        recipe_data = email_client.with_reconnect(
+        recipe_data, message_id = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.delete_email(c, args["email_id"], source_folder),
         )
-        return {"deleted": True}, UndoRecipe(**recipe_data)
+        return {"deleted": True}, UndoRecipe(**recipe_data), message_id
 
     if tool_name == "draft_email":
         recipe_data = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.save_draft(c, args["to"], args["subject"], args["body"]),
         )
-        return {"drafted": True, "draft_uid": recipe_data["params"]["draft_uid"]}, UndoRecipe(**recipe_data)
+        return {"drafted": True, "draft_uid": recipe_data["params"]["draft_uid"]}, UndoRecipe(**recipe_data), None
 
     if tool_name == "send_email":
         # send_email can send a draft by draft_id, or a new email with to/subject/body
@@ -475,13 +480,15 @@ def _dispatch_tool(
             asyncio.get_event_loop().run_until_complete(
                 email_client.send_email(smtp_config, args["to"], args["subject"], args["body"])
             )
-        return {"sent": True}, None
+        return {"sent": True}, None, None
 
     if tool_name == "save_memory":
-        return _handle_save_memory(supabase, user_id, args["content"])
+        result, recipe = _handle_save_memory(supabase, user_id, args["content"])
+        return result, recipe, None
 
     if tool_name == "submit_feature_request":
-        return _handle_feature_request(supabase, user_id, args["description"])
+        result, recipe = _handle_feature_request(supabase, user_id, args["description"])
+        return result, recipe, None
 
     raise ValueError(f"Unknown tool: {tool_name}")
 

@@ -2,13 +2,14 @@
  * API route for end-of-session processing.
  *
  * Handles post-session tasks triggered by the voice pipeline after a call
- * ends. Currently sends a summary email with all actions taken during the
- * session.
+ * ends. Enriches email-related actions with metadata (subject, from) via
+ * IMAP, then sends a summary email.
  *
  * Responsibilities:
  * - Authenticate via INTERNAL_API_KEY (service-to-service)
  * - Load session and verify it exists with ended_at set
  * - Load actions for the session
+ * - Enrich email-referencing actions with subject/from metadata
  * - Load user email via Supabase admin API
  * - Send summary email via Resend (if there are actions)
  */
@@ -16,7 +17,17 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/client";
 import { sendSessionSummary } from "@/lib/resend/client";
+import { retrieveSecret } from "@dublin/tools";
+import {
+  createImapConnection,
+  closeImapConnection,
+  fetchEmailMetaByMessageId,
+  fetchEmailMetaByUid,
+} from "@dublin/email";
 import type { ActionRow } from "@dublin/tools";
+
+/** IMAP client type derived from createImapConnection return value. */
+type ImapClient = Awaited<ReturnType<typeof createImapConnection>>;
 
 // ============================================================================
 // TYPES
@@ -26,13 +37,16 @@ interface EndOfSessionResult {
   emailSent: boolean;
 }
 
+/** Tool names that reference an email and should be enriched with metadata. */
+const EMAIL_TOOL_NAMES = ["archive_email", "delete_email"];
+
 // ============================================================================
 // ENDPOINT
 // ============================================================================
 
 /**
  * Processes end-of-session tasks for a completed voice call session.
- * Sends a summary email listing all actions taken during the session.
+ * Enriches email-referencing actions with metadata, then sends a summary email.
  * @param request - The incoming request (body is empty)
  * @param context - Route params containing the session ID
  * @returns JSON with { emailSent: true/false }
@@ -106,6 +120,45 @@ export async function POST(
     return NextResponse.json({ emailSent: false });
   }
 
+  // Enrich email-referencing actions with subject/from metadata.
+  // Wrapped in try/catch so IMAP failures do not block email sending.
+  try {
+    // Load IMAP credentials (same pattern as approve route)
+    const { data: settings, error: settingsError } = await supabase
+      .from("user_settings")
+      .select("imap_host, imap_port, imap_user, imap_password_secret_id")
+      .eq("user_id", session.user_id)
+      .single();
+
+    if (settingsError || !settings || !settings.imap_password_secret_id) {
+      console.warn("Skipping email enrichment: IMAP settings not configured");
+    } else {
+      const imapPassword = await retrieveSecret(supabase, settings.imap_password_secret_id);
+      const imapClient = await createImapConnection({
+        host: settings.imap_host,
+        port: settings.imap_port,
+        user: settings.imap_user,
+        password: imapPassword,
+      });
+
+      try {
+        const enrichedActions = await enrichActionsWithEmailMeta(actions, imapClient);
+
+        // Update enriched actions in the DB
+        for (const action of enrichedActions) {
+          await supabase
+            .from("actions")
+            .update({ arguments: action.arguments })
+            .eq("id", action.id);
+        }
+      } finally {
+        await closeImapConnection(imapClient);
+      }
+    }
+  } catch (error) {
+    console.error("Email enrichment failed, continuing with summary send:", error);
+  }
+
   // Get user email from Supabase auth
   const { data: userData, error: userError } =
     await supabase.auth.admin.getUserById(session.user_id);
@@ -121,4 +174,57 @@ export async function POST(
   await sendSessionSummary(userData.user.email, sessionId, actions);
 
   return NextResponse.json({ emailSent: true });
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Enriches actions that reference an email with subject/from metadata.
+ * For each action with an email_id in its arguments:
+ * - If message_id is present, looks up by Message-ID header (stable across folders)
+ * - Otherwise, falls back to UID lookup in INBOX
+ * Each individual lookup is wrapped in try/catch so one failure does not block others.
+ * @param actions - Array of action rows to enrich
+ * @param imapClient - Connected ImapFlow client
+ * @returns Array of actions whose arguments were updated (subset of input)
+ */
+async function enrichActionsWithEmailMeta(
+  actions: ActionRow[],
+  imapClient: ImapClient
+): Promise<ActionRow[]> {
+  const enriched: ActionRow[] = [];
+
+  for (const action of actions) {
+    // Only enrich email-related actions that have an email_id
+    if (!EMAIL_TOOL_NAMES.includes(action.toolName)) continue;
+    if (!action.arguments?.email_id) continue;
+
+    // Skip if already enriched
+    if (action.arguments.subject && action.arguments.from) continue;
+
+    try {
+      const messageId = action.arguments.message_id as string | undefined;
+      const emailId = action.arguments.email_id as string;
+
+      const meta = messageId
+        ? await fetchEmailMetaByMessageId(imapClient, messageId)
+        : await fetchEmailMetaByUid(imapClient, emailId);
+
+      action.arguments = {
+        ...action.arguments,
+        subject: meta.subject,
+        from: meta.from,
+      };
+      enriched.push(action);
+    } catch (error) {
+      console.warn(
+        `Failed to enrich action ${action.id} (${action.toolName}):`,
+        error
+      );
+    }
+  }
+
+  return enriched;
 }

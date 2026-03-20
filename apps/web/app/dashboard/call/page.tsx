@@ -1,227 +1,51 @@
 /**
  * Browser-based voice call page.
  *
- * Uses WebRTC to connect to the Pipecat voice-pipeline server
- * (Deepgram STT + OpenRouter LLM + Deepgram TTS).
+ * Consumes the shared CallContext for all call state and actions.
+ * The actual WebRTC session lifecycle is managed by CallProvider
+ * (wrapped at the dashboard layout level).
  *
  * Responsibilities:
- * - Authenticate with Supabase and pass JWT to the pipeline
- * - Establish WebRTC peer connection with the Pipecat server
- * - Manage connection lifecycle
+ * - Render call UI (start/end buttons, status, errors)
+ * - Delegate call actions to CallContext
+ * - Display QR code for phone-based calling
  */
 
 "use client";
 
-import { useState, useRef, useCallback } from "react";
-import { createBrowserClient } from "@/lib/supabase/client";
+import { useState, useEffect } from "react";
+import { useCall } from "@/contexts/CallContext";
+import * as QRCode from "qrcode";
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-const VOICE_PIPELINE_URL =
-  process.env.NEXT_PUBLIC_VOICE_PIPELINE_URL ?? "http://localhost:7860";
+const PHONE_NUMBER = "+16503999357";
 
-/** Max time (ms) to wait for ICE gathering before sending the offer with whatever candidates are available. */
-const ICE_GATHERING_TIMEOUT_MS = 3000;
+const VCARD_CONTACT_NAME = "Brief.ai";
 
-// ============================================================================
-// TYPES
-// ============================================================================
-
-/** Refs held during an active pipeline (WebRTC) call session. */
-interface PipelineCallSession {
-  peerConnection: RTCPeerConnection;
-  micStream: MediaStream;
-}
-
-/** Response from POST /start on the Pipecat server. */
-interface StartResponse {
-  sessionId: string;
-  iceServers?: RTCIceServer[];
-}
-
-/** Response from POST /sessions/{sessionId}/api/offer on the Pipecat server. */
-interface OfferResponse {
-  sdp: string;
-  type: RTCSdpType;
-}
-
-// ============================================================================
-// WEBRTC SESSION
-// ============================================================================
-
-/**
- * Starts a WebRTC session with the Pipecat voice-pipeline server.
- *
- * Steps:
- * 1. POST /start to get sessionId and ICE servers
- * 2. Create RTCPeerConnection with the returned ICE config
- * 3. Add mic track and set up remote audio playback
- * 4. Create and send SDP offer with the JWT in requestData
- * 5. Apply the SDP answer from the server
- */
-async function startWebRTCSession(
-  token: string,
-  micStream: MediaStream
-): Promise<PipelineCallSession> {
-  const startRes = await fetch(`${VOICE_PIPELINE_URL}/start`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token }),
-  });
-
-  if (!startRes.ok) {
-    const body = await startRes.json().catch(() => null);
-    if (body?.code === "LIMIT_REACHED") {
-      throw new Error("You've reached your monthly call limit. Please upgrade your plan.");
-    }
-    throw new Error(body?.error ?? `${startRes.status} ${startRes.statusText}`);
-  }
-
-  const startData: StartResponse = await startRes.json();
-  const { sessionId, iceServers } = startData;
-
-  const peerConnection = new RTCPeerConnection({
-    iceServers: iceServers ?? [],
-  });
-
-  const micTrack = micStream.getAudioTracks()[0];
-  if (!micTrack) {
-    throw new Error("No audio track found on microphone stream");
-  }
-  peerConnection.addTrack(micTrack, micStream);
-
-  const remoteAudio = new Audio();
-  remoteAudio.autoplay = true;
-  const remoteStream = new MediaStream();
-  remoteAudio.srcObject = remoteStream;
-
-  peerConnection.ontrack = (event: RTCTrackEvent) => {
-    remoteStream.addTrack(event.track);
-  };
-
-  const offer = await peerConnection.createOffer();
-  await peerConnection.setLocalDescription(offer);
-
-  // Wait for ICE gathering to complete so relay candidates are in the SDP.
-  // Without this, the offer SDP has no candidates and the server has nothing
-  // to connect to -- ICE stays at "checking" forever.
-  // A timeout ensures we don't hang if some TURN servers are slow to respond.
-  if (peerConnection.iceGatheringState !== "complete") {
-    await new Promise<void>((resolve) => {
-      const done = () => {
-        peerConnection.removeEventListener("icegatheringstatechange", check);
-        clearTimeout(timer);
-        resolve();
-      };
-      const check = () => {
-        if (peerConnection.iceGatheringState === "complete") done();
-      };
-      const timer = setTimeout(done, ICE_GATHERING_TIMEOUT_MS);
-      peerConnection.addEventListener("icegatheringstatechange", check);
-    });
-  }
-
-  // Use localDescription (has gathered candidates), not the original offer (empty)
-  const gatheredOffer = peerConnection.localDescription!;
-
-  const offerRes = await fetch(
-    `${VOICE_PIPELINE_URL}/sessions/${sessionId}/api/offer`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sdp: gatheredOffer.sdp,
-        type: gatheredOffer.type,
-        requestData: { token },
-      }),
-    }
-  );
-
-  if (!offerRes.ok) {
-    peerConnection.close();
-    throw new Error(`Failed to send SDP offer: ${offerRes.status} ${offerRes.statusText}`);
-  }
-
-  const answerData: OfferResponse = await offerRes.json();
-  await peerConnection.setRemoteDescription(
-    new RTCSessionDescription({ sdp: answerData.sdp, type: answerData.type })
-  );
-
-  return { peerConnection, micStream };
-}
+const VCARD = [
+  "BEGIN:VCARD",
+  "VERSION:3.0",
+  `FN:${VCARD_CONTACT_NAME}`,
+  `N:;${VCARD_CONTACT_NAME};;;`,
+  `TEL;TYPE=VOICE:${PHONE_NUMBER}`,
+  "END:VCARD",
+].join("\n");
 
 // ============================================================================
 // COMPONENT
 // ============================================================================
 
 export default function CallPage() {
-  const [callActive, setCallActive] = useState(false);
-  const [status, setStatus] = useState("Ready");
-  const [error, setError] = useState<string | null>(null);
-  const pipelineSessionRef = useRef<PipelineCallSession | null>(null);
+  const { callActive, status, error, startCall, endCall } = useCall();
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
-  // --------------------------------------------------------------------------
-  // Call handlers
-  // --------------------------------------------------------------------------
-
-  const startCall = useCallback(async () => {
-    setError(null);
-    setStatus("Connecting...");
-
-    try {
-      const supabase = createBrowserClient();
-      const { data: sessionData, error: authError } = await supabase.auth.getSession();
-      if (authError || !sessionData.session) {
-        throw new Error("Not authenticated. Please sign in first.");
-      }
-      const token = sessionData.session.access_token;
-
-      setStatus("Requesting microphone...");
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      setStatus("Establishing WebRTC connection...");
-      const pipelineSession = await startWebRTCSession(token, micStream);
-      pipelineSessionRef.current = pipelineSession;
-
-      pipelineSession.peerConnection.onconnectionstatechange = () => {
-        const state = pipelineSession.peerConnection.connectionState;
-        if (state === "connected") {
-          setStatus("Call active");
-        } else if (state === "disconnected" || state === "failed" || state === "closed") {
-          endCall();
-        }
-      };
-
-      setCallActive(true);
-      setStatus("Call active");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to start call";
-      setError(msg);
-      setStatus("Ready");
-      if (pipelineSessionRef.current) {
-        cleanupSession();
-      }
-    }
+  // Generate vCard QR code on mount
+  useEffect(() => {
+    QRCode.toDataURL(VCARD, { width: 200, margin: 2 }).then(setQrDataUrl);
   }, []);
-
-  const endCall = useCallback(() => {
-    cleanupSession();
-    setCallActive(false);
-    setStatus("Ready");
-  }, []);
-
-  function cleanupSession(): void {
-    const session = pipelineSessionRef.current;
-    if (!session) return;
-
-    session.peerConnection.onconnectionstatechange = null;
-    session.peerConnection.ontrack = null;
-    session.peerConnection.close();
-    session.micStream.getTracks().forEach((track) => track.stop());
-    pipelineSessionRef.current = null;
-  }
 
   // ============================================================================
   // RENDER
@@ -235,6 +59,20 @@ export default function CallPage() {
         <div className="mb-6 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
+      )}
+
+      {/* QR code to add the phone number as a contact */}
+      {qrDataUrl && (
+        <section className="mb-6 rounded-lg border border-gray-200 bg-white p-6">
+          <h2 className="mb-2 text-lg font-semibold text-gray-900">Call from your phone</h2>
+          <p className="mb-4 text-sm text-gray-500">
+            Scan this QR code to add the number to your contacts.
+          </p>
+          <div className="flex flex-col items-start gap-2">
+            <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+            <span className="text-xs text-gray-400">{PHONE_NUMBER}</span>
+          </div>
+        </section>
       )}
 
       <section className="rounded-lg border border-gray-200 bg-white p-6">

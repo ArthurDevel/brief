@@ -55,6 +55,14 @@ export interface Email {
   isRead: boolean;
 }
 
+/** Lightweight email metadata used for enriching action arguments. */
+export interface EmailMeta {
+  /** Email subject line */
+  subject: string;
+  /** Formatted sender (e.g. "Alice <alice@example.com>") */
+  from: string;
+}
+
 /** A single message within a thread, returned in chronological order. */
 export interface ThreadMessage {
   id: string;

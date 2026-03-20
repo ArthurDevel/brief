@@ -8,3 +8,4 @@ package-lock.json
 *.pyc
 *.wav
 .venv/
+.claude/settings.local.json
