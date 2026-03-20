@@ -9,6 +9,7 @@
  * - Returns null when no call is active
  */
 
+import React from "react";
 import Link from "next/link";
 import { useCall } from "@/contexts/CallContext";
 
@@ -22,7 +23,7 @@ import { useCall } from "@/contexts/CallContext";
  *
  * @returns The active call bar, or null if no call is active
  */
-export default function ActiveCallBar(): JSX.Element | null {
+export default function ActiveCallBar(): React.ReactElement | null {
   const { callActive, status } = useCall();
 
   if (!callActive) {

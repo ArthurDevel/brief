@@ -190,7 +190,7 @@ async function startWebRTCSession(
  * @param children - React children to wrap
  * @returns The provider JSX element
  */
-export function CallProvider({ children }: { children: ReactNode }): JSX.Element {
+export function CallProvider({ children }: { children: ReactNode }): React.ReactElement {
   const [callActive, setCallActive] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
