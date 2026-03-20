@@ -35,6 +35,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from supabase import Client
 
+from src.audio.recorder import AudioRecorder
 from src.audio.speed import AudioSpeedProcessor
 from src.audio.watchdog import AudioFrameWatchdog
 from src.config import LLM_MODEL, Settings
@@ -90,6 +91,8 @@ def create_pipeline(
     supabase: Client,
     settings: Settings,
     imap_holder: dict[str, Any],
+    user_recorder: AudioRecorder | None = None,
+    assistant_recorder: AudioRecorder | None = None,
 ) -> PipelineTask:
     """Build the full Pipecat pipeline with STT, LLM, TTS, and speed control.
 
@@ -107,6 +110,8 @@ def create_pipeline(
         settings: Application settings.
         imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}
             for IMAP operations with reconnect support.
+        user_recorder: AudioRecorder for user mic audio, or None if recording disabled.
+        assistant_recorder: AudioRecorder for assistant TTS audio, or None if recording disabled.
 
     Returns:
         Configured PipelineTask ready to run.
@@ -207,19 +212,18 @@ def create_pipeline(
     watchdog = AudioFrameWatchdog()
 
     # -- Assemble pipeline --
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            watchdog,
-            stt,
-            user_aggregator,
-            llm,
-            tts,
-            speed_processor,
-            transport.output(),
-            assistant_aggregator,
-        ]
-    )
+    # Optional recorders capture audio for debug recording (when recording_enabled=True).
+    # user_recorder goes after watchdog (captures InputAudioRawFrame from mic).
+    # assistant_recorder goes after speed_processor (captures TTSAudioRawFrame from TTS).
+    pipeline_chain: list[Any] = [transport.input(), watchdog]
+    if user_recorder is not None:
+        pipeline_chain.append(user_recorder)
+    pipeline_chain.extend([stt, user_aggregator, llm, tts, speed_processor])
+    if assistant_recorder is not None:
+        pipeline_chain.append(assistant_recorder)
+    pipeline_chain.extend([transport.output(), assistant_aggregator])
+
+    pipeline = Pipeline(pipeline_chain)
 
     task = PipelineTask(
         pipeline,

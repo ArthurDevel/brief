@@ -25,7 +25,7 @@ from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import InputAudioRawFrame, LLMRunFrame, TTSAudioRawFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
@@ -37,6 +37,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
+from src.audio.recorder import AudioRecorder, combine_wav_buffers, upload_recording
 from src.auth.jwt_auth import verify_token
 from src.auth.twilio_auth import (
     MAX_PIN_ATTEMPTS,
@@ -184,6 +185,14 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             "num_channels": 1,
         }
 
+        # Create audio recorders if recording is enabled
+        user_recorder: AudioRecorder | None = None
+        assistant_recorder: AudioRecorder | None = None
+        if settings.recording_enabled:
+            user_recorder = AudioRecorder(target_frame_type=InputAudioRawFrame)
+            assistant_recorder = AudioRecorder(target_frame_type=TTSAudioRawFrame)
+            logger.info("[server] Recording enabled for session %s", session.session_id)
+
         task = create_pipeline(
             transport=transport,
             user_context=user_context,
@@ -195,6 +204,8 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             supabase=supabase,
             settings=settings,
             imap_holder=imap_holder,
+            user_recorder=user_recorder,
+            assistant_recorder=assistant_recorder,
         )
 
         # Register so lifespan shutdown can finalize if the process is killed
@@ -205,9 +216,11 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             "imap_holder": imap_holder,
             "supabase": supabase,
             "settings": settings,
+            "user_recorder": user_recorder,
+            "assistant_recorder": assistant_recorder,
         }
 
-        return task, session, cost_tracker, langfuse_observer, imap_holder
+        return task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder
 
     except Exception:
         try:
@@ -217,10 +230,20 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
         raise
 
 
-async def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase, settings) -> None:
+async def _cleanup_session(
+    imap_holder,
+    cost_tracker,
+    langfuse_observer,
+    session,
+    supabase,
+    settings,
+    user_recorder: AudioRecorder | None = None,
+    assistant_recorder: AudioRecorder | None = None,
+) -> None:
     """Clean up after a pipeline session ends.
 
     Fetches actual LLM costs from OpenRouter before finalizing the session.
+    If recorders are provided, combines and uploads the recording.
 
     Args:
         imap_holder: Mutable IMAP client holder.
@@ -229,6 +252,8 @@ async def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session
         session: Active session to finalize.
         supabase: Supabase client.
         settings: App settings (for OpenRouter API key).
+        user_recorder: AudioRecorder for user audio, or None.
+        assistant_recorder: AudioRecorder for assistant audio, or None.
     """
     try:
         close_imap_connection(imap_holder["client"])
@@ -267,6 +292,16 @@ async def _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session
                 logger.info("[server] End-of-session hook completed for session %s", session.session_id)
         except BaseException as exc:
             logger.warning("[server] End-of-session hook failed for session %s: %s", session.session_id, exc)
+
+    # Combine and upload call recording if recorders were active
+    if user_recorder is not None and assistant_recorder is not None:
+        try:
+            user_buffer = user_recorder.get_buffer()
+            assistant_buffer = assistant_recorder.get_buffer()
+            wav_bytes = combine_wav_buffers(user_buffer, assistant_buffer)
+            await upload_recording(session.session_id, wav_bytes, supabase)
+        except Exception as exc:
+            logger.error("[server] Recording upload failed for session %s: %s", session.session_id, exc)
 
     _live_pipeline_sessions.pop(session.session_id, None)
 
@@ -309,7 +344,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         ),
     )
 
-    task, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
+    task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder = await _setup_pipeline_session(
         transport, user_context, settings, supabase, transport_type="webrtc"
     )
 
@@ -327,7 +362,10 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        await _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase, settings)
+        await _cleanup_session(
+            imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
+            user_recorder=user_recorder, assistant_recorder=assistant_recorder,
+        )
 
 
 # ============================================================================
@@ -388,6 +426,8 @@ async def lifespan(app: FastAPI):
                 info["session"],
                 info["supabase"],
                 info["settings"],
+                user_recorder=info.get("user_recorder"),
+                assistant_recorder=info.get("assistant_recorder"),
             )
         except BaseException as exc:
             logger.error("[server] Failed to finalize session %s: %s", sid, exc)
@@ -668,7 +708,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         buffered_messages=buffered_messages,
     )
 
-    task, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
+    task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder = await _setup_pipeline_session(
         transport, user_context, settings, supabase, transport_type="twilio"
     )
 
@@ -682,7 +722,10 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        await _cleanup_session(imap_holder, cost_tracker, langfuse_observer, session, supabase, settings)
+        await _cleanup_session(
+            imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
+            user_recorder=user_recorder, assistant_recorder=assistant_recorder,
+        )
 
 
 # ============================================================================
