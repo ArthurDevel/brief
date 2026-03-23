@@ -1,46 +1,24 @@
 /**
  * HTML template for the end-of-session summary email.
  *
- * Renders a table of actions taken during a voice call session,
- * showing the tool name, a short description, status, and action buttons.
- * Pending actions get Approve/Decline buttons that link to the session
- * dashboard with query params to trigger the action.
+ * Renders actions taken during a voice call session, split into two sections
+ * (pending and completed) matching the dashboard layout. Shows tool label,
+ * From/To, Subject columns, and action buttons for pending items.
  *
  * Responsibilities:
- * - Map ToolName values to human-readable labels
- * - Build a short description from action arguments
+ * - Split actions into pending and completed sections
+ * - Show From/To and Subject as separate columns (like the dashboard)
  * - Render approve/decline buttons for pending actions
  * - Render bulk approve all / decline all buttons
  * - Render the full HTML email body
  */
 
-import type { ActionRow, ToolName } from "@dublin/tools";
+import type { ActionRow } from "@dublin/tools";
+import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
-
-/** Human-readable labels for each tool name. */
-const TOOL_NAME_LABELS: Record<ToolName, string> = {
-  list_inbox: "List Inbox",
-  read_email: "Read Email",
-  read_thread: "Read Thread",
-  search_emails: "Search Emails",
-  mark_as_read: "Mark as Read",
-  draft_email: "Draft Email",
-  delete_email: "Delete Email",
-  archive_email: "Archive Email",
-  send_email: "Send Email",
-  save_memory: "Save Memory",
-  submit_feature_request: "Submit Feature Request",
-  batch_archive_emails: "Batch Archive Emails",
-  batch_delete_emails: "Batch Delete Emails",
-};
-
-/** Argument keys to prioritize when building action descriptions. */
-const RELEVANT_KEYS = ["to", "from", "subject", "query", "content"];
-
-const MAX_VALUE_LENGTH = 60;
 
 const BUTTON_STYLE_APPROVE =
   "display: inline-block; padding: 6px 14px; background-color: #16a34a; color: #ffffff; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: 600;";
@@ -48,13 +26,17 @@ const BUTTON_STYLE_APPROVE =
 const BUTTON_STYLE_DECLINE =
   "display: inline-block; padding: 6px 14px; background-color: #dc2626; color: #ffffff; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: 600;";
 
+const CELL_STYLE = "padding: 8px 12px; border-bottom: 1px solid #eee;";
+
+const HEADER_STYLE = "padding: 8px 12px; text-align: left;";
+
 // ============================================================================
 // MAIN ENTRYPOINT
 // ============================================================================
 
 /**
  * Builds the full HTML body for a session summary email.
- * @param actions - List of actions taken during the session
+ * @param actions - List of actions taken during the session (already filtered, no read-only)
  * @param sessionId - The session ID, used for building dashboard links
  * @param baseUrl - The app base URL (e.g. https://app.example.com)
  * @returns HTML string ready to send
@@ -65,61 +47,94 @@ export function buildSessionSummaryHtml(
   baseUrl: string
 ): string {
   const sessionUrl = `${baseUrl}/dashboard/sessions/${sessionId}`;
-  const hasPending = actions.some((a) => a.status === "pending");
 
-  const rows = actions
-    .map((action) => {
-      const label = TOOL_NAME_LABELS[action.toolName] ?? action.toolName;
-      const description = buildActionDescription(action);
-      const buttons =
-        action.status === "pending"
-          ? buildActionButtons(sessionUrl, action.id)
-          : action.status;
-      return `
-        <tr>
-          <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${label}</td>
-          <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${description}</td>
-          <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${action.status}</td>
-          <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${buttons}</td>
-        </tr>`;
-    })
-    .join("");
+  const pendingActions = actions.filter((a) => a.status === "pending");
+  const completedActions = actions.filter((a) => a.status !== "pending");
 
   // Bulk buttons only shown when there are pending actions
-  const bulkButtons = hasPending
-    ? `<div style="margin-bottom: 16px;">
-        <a href="${sessionUrl}?action=approve&actionId=all" style="${BUTTON_STYLE_APPROVE} margin-right: 8px;">Approve All</a>
-        <a href="${sessionUrl}?action=reject&actionId=all" style="${BUTTON_STYLE_DECLINE}">Decline All</a>
-      </div>`
-    : "";
+  const bulkButtons =
+    pendingActions.length > 0
+      ? `<div style="margin-bottom: 16px;">
+          <a href="${sessionUrl}?action=approve&actionId=all" style="${BUTTON_STYLE_APPROVE} margin-right: 8px;">Approve All</a>
+          <a href="${sessionUrl}?action=reject&actionId=all" style="${BUTTON_STYLE_DECLINE}">Decline All</a>
+        </div>`
+      : "";
+
+  const pendingSection =
+    pendingActions.length > 0
+      ? `<h3 style="margin: 0 0 8px 0;">Pending Actions (${pendingActions.length})</h3>
+         ${bulkButtons}
+         ${buildActionTable(pendingActions, sessionUrl, true)}`
+      : "";
+
+  const completedSection =
+    completedActions.length > 0
+      ? `<h3 style="margin: 24px 0 8px 0;">Completed Actions (${completedActions.length})</h3>
+         ${buildActionTable(completedActions, sessionUrl, false)}`
+      : "";
 
   return `
     <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
       <h2>Session Summary</h2>
-      <p>${actions.length} action${actions.length === 1 ? "" : "s"} taken during this session.</p>
-      ${bulkButtons}
-      <table style="width: 100%; border-collapse: collapse;">
-        <thead>
-          <tr style="background: #f5f5f5;">
-            <th style="padding: 8px 12px; text-align: left;">Action</th>
-            <th style="padding: 8px 12px; text-align: left;">Details</th>
-            <th style="padding: 8px 12px; text-align: left;">Status</th>
-            <th style="padding: 8px 12px; text-align: left;"></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-        </tbody>
-      </table>
-      <p style="margin-top: 16px; font-size: 13px;">
-        <a href="${sessionUrl}" style="color: #2563eb;">View full session on dashboard</a>
+      <p>
+        ${actions.length} action${actions.length === 1 ? "" : "s"} during this session.
+        <a href="${sessionUrl}" style="color: #2563eb; margin-left: 8px; font-size: 13px;">View on dashboard</a>
       </p>
+      ${pendingSection}
+      ${completedSection}
     </div>`;
 }
 
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+/**
+ * Builds an HTML table for a list of actions.
+ * @param actions - Actions to render
+ * @param sessionUrl - Base session dashboard URL
+ * @param showButtons - Whether to show approve/decline buttons (for pending) or status text
+ * @returns HTML table string
+ */
+function buildActionTable(
+  actions: ActionRow[],
+  sessionUrl: string,
+  showButtons: boolean
+): string {
+  const rows = actions
+    .map((action) => {
+      const label = TOOL_LABELS[action.toolName] ?? action.toolName;
+      const lastCol = showButtons
+        ? buildActionButtons(sessionUrl, action.id)
+        : action.status;
+
+      return `
+        <tr>
+          <td style="${CELL_STYLE}">${label}</td>
+          <td style="${CELL_STYLE}">${getContact(action.arguments)}</td>
+          <td style="${CELL_STYLE}">${getSubject(action.arguments)}</td>
+          <td style="${CELL_STYLE}">${lastCol}</td>
+        </tr>`;
+    })
+    .join("");
+
+  const lastHeader = showButtons ? "" : "Status";
+
+  return `
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr style="background: #f5f5f5;">
+          <th style="${HEADER_STYLE}">Action</th>
+          <th style="${HEADER_STYLE}">From / To</th>
+          <th style="${HEADER_STYLE}">Subject</th>
+          <th style="${HEADER_STYLE}">${lastHeader}</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>`;
+}
 
 /**
  * Builds approve/decline button HTML for a pending action.
@@ -134,41 +149,21 @@ function buildActionButtons(sessionUrl: string, actionId: string): string {
 }
 
 /**
- * Builds a short human-readable description from the action's arguments.
- * Picks the most relevant fields (to, subject, query, etc.) and truncates long values.
- * @param action - The action row
- * @returns A short description string
+ * Extracts the "from" or "to" field from action arguments.
+ * @param args - The action arguments object
+ * @returns The from/to string or "-"
  */
-function buildActionDescription(action: ActionRow): string {
-  const args = action.arguments;
-  if (!args || Object.keys(args).length === 0) return "-";
+function getContact(args: Record<string, unknown>): string {
+  const value = (args.from ?? args.to) as string | undefined;
+  return value ?? "-";
+}
 
-  // Pick the most relevant fields for common tools
-  const parts: string[] = [];
-
-  for (const key of RELEVANT_KEYS) {
-    if (key in args) {
-      const value = String(args[key]);
-      const truncated =
-        value.length > MAX_VALUE_LENGTH
-          ? value.slice(0, MAX_VALUE_LENGTH - 3) + "..."
-          : value;
-      parts.push(`${key}: ${truncated}`);
-    }
-  }
-
-  if (parts.length === 0) {
-    // Fall back to first two keys
-    const entries = Object.entries(args).slice(0, 2);
-    for (const [key, value] of entries) {
-      const str = String(value);
-      const truncated =
-        str.length > MAX_VALUE_LENGTH
-          ? str.slice(0, MAX_VALUE_LENGTH - 3) + "..."
-          : str;
-      parts.push(`${key}: ${truncated}`);
-    }
-  }
-
-  return parts.join(", ");
+/**
+ * Extracts the subject field from action arguments.
+ * @param args - The action arguments object
+ * @returns The subject string or "-"
+ */
+function getSubject(args: Record<string, unknown>): string {
+  const value = args.subject as string | undefined;
+  return value ?? "-";
 }
