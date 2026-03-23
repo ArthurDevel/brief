@@ -21,18 +21,9 @@ import * as QRCode from "qrcode";
 // CONSTANTS
 // ============================================================================
 
-const PHONE_NUMBER = "+16503999357";
+const PHONE_NUMBER = process.env.NEXT_PUBLIC_PHONE_NUMBER ?? "";
 
 const VCARD_CONTACT_NAME = "Brief.ai";
-
-const VCARD = [
-  "BEGIN:VCARD",
-  "VERSION:3.0",
-  `FN:${VCARD_CONTACT_NAME}`,
-  `N:;${VCARD_CONTACT_NAME};;;`,
-  `TEL;TYPE=VOICE:${PHONE_NUMBER}`,
-  "END:VCARD",
-].join("\n");
 
 // ============================================================================
 // COMPONENT
@@ -42,9 +33,20 @@ export default function CallPage() {
   const { callActive, status, error, startCall, endCall } = useCall();
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
-  // Generate vCard QR code on mount
+  // Generate vCard QR code on mount (only if phone number is configured)
   useEffect(() => {
-    QRCode.toDataURL(VCARD, { width: 200, margin: 2 }).then(setQrDataUrl);
+    if (!PHONE_NUMBER) return;
+
+    const vcard = [
+      "BEGIN:VCARD",
+      "VERSION:3.0",
+      `FN:${VCARD_CONTACT_NAME}`,
+      `N:;${VCARD_CONTACT_NAME};;;`,
+      `TEL;TYPE=VOICE:${PHONE_NUMBER}`,
+      "END:VCARD",
+    ].join("\n");
+
+    QRCode.toDataURL(vcard, { width: 200, margin: 2 }).then(setQrDataUrl);
   }, []);
 
   // ============================================================================
