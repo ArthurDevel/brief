@@ -19,11 +19,9 @@ Includes connection management with auto-reconnect.
 
 from __future__ import annotations
 
-import base64
 import email
 import email.policy
 import logging
-import quopri
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -232,10 +230,10 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
 
 
 def _fetch_summaries(client: IMAPClient, uids: list[int]) -> list[EmailSummary]:
-    """Fetch email summaries using BODYSTRUCTURE for clean snippets.
+    """Fetch email summaries in a single IMAP call.
 
-    For each email, inspects BODYSTRUCTURE to find the text/plain (or
-    text/html) MIME part, then fetches only that part and decodes it.
+    Fetches ENVELOPE, BODYSTRUCTURE, and BODY.PEEK[TEXT] in one batch,
+    then extracts snippets locally without additional round trips.
 
     Args:
         client: Connected IMAPClient.
@@ -244,7 +242,7 @@ def _fetch_summaries(client: IMAPClient, uids: list[int]) -> list[EmailSummary]:
     Returns:
         List of EmailSummary in reverse chronological order.
     """
-    fetch_data = client.fetch(uids, ["ENVELOPE", "BODYSTRUCTURE"])
+    fetch_data = client.fetch(uids, ["ENVELOPE", "BODYSTRUCTURE", "BODY.PEEK[TEXT]"])
 
     messages: list[EmailSummary] = []
     for uid, data in fetch_data.items():
@@ -252,11 +250,16 @@ def _fetch_summaries(client: IMAPClient, uids: list[int]) -> list[EmailSummary]:
         if not envelope:
             continue
 
-        # Find the text part from BODYSTRUCTURE
+        # Extract snippet from batch-fetched text body
         bodystructure = data.get(b"BODYSTRUCTURE")
         snippet = ""
         if bodystructure:
-            snippet = _extract_snippet_via_bodystructure(client, uid, bodystructure)
+            raw_text: bytes = b""
+            for key, value in data.items():
+                if isinstance(key, bytes) and b"TEXT" in key and isinstance(value, bytes):
+                    raw_text = value
+                    break
+            snippet = _extract_snippet_from_raw_text(raw_text, bodystructure)
 
         messages.append(EmailSummary(
             id=str(uid),
@@ -739,50 +742,49 @@ def _format_date(dt: datetime | None) -> str:
     return dt.isoformat()
 
 
-def _extract_snippet_via_bodystructure(
-    client: IMAPClient, uid: int, bodystructure: Any
-) -> str:
-    """Extract a plain-text snippet using BODYSTRUCTURE to fetch only the text part.
+def _extract_snippet_from_raw_text(raw_text: bytes, bodystructure: Any) -> str:
+    """Extract a clean text snippet from batch-fetched BODY.PEEK[TEXT] data.
 
-    Walks the BODYSTRUCTURE to find the text/plain (or text/html) MIME part,
-    fetches only that part, decodes content-transfer-encoding, and truncates.
+    Reconstructs a minimal MIME message using the Content-Type from
+    BODYSTRUCTURE, then uses Python's email stdlib to parse and extract
+    the text content. This handles all encoding (base64, quoted-printable),
+    charset, and multipart nesting automatically.
 
     Args:
-        client: Connected IMAPClient.
-        uid: UID of the email.
+        raw_text: Raw bytes from BODY.PEEK[TEXT] in the batch fetch.
         bodystructure: Parsed BODYSTRUCTURE from imapclient.
 
     Returns:
-        Clean text snippet.
+        Clean text snippet, max SNIPPET_LENGTH chars.
     """
-    result = _find_text_part(bodystructure)
-    if not result:
+    if not raw_text:
         return ""
 
-    mime_type, part_spec, encoding, charset = result
+    # Build a Content-Type header from BODYSTRUCTURE
+    content_type = _build_content_type_string(bodystructure)
 
-    # Fetch just the text part
-    fetch_key = f"BODY.PEEK[{part_spec}]"
-    part_data = client.fetch([uid], [fetch_key])
+    # Reconstruct a minimal MIME message so Python's email parser can handle it
+    header = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8")
+    mime_bytes = header + raw_text
+    msg = email.message_from_bytes(mime_bytes, policy=email.policy.default)
 
-    # Find the body key in the response (key format varies)
-    raw_bytes: bytes = b""
-    for key, value in part_data.get(uid, {}).items():
-        if isinstance(key, bytes) and b"BODY" in key:
-            raw_bytes = cast(bytes, value) or b""
-            break
+    # Extract text content -- prefer plain text, fall back to HTML
+    text = ""
+    plain_part = msg.get_body(preferencelist=("plain",))
+    if plain_part is not None:
+        content = plain_part.get_content()
+        if isinstance(content, str) and content.strip():
+            text = content.strip()
 
-    if not raw_bytes:
-        return ""
-
-    # Decode content-transfer-encoding
-    text = _decode_part(raw_bytes, encoding, charset)
-
-    # Convert HTML to markdown if needed (strip images and tables for snippets)
-    if mime_type == "text/html":
-        text = markdownify(
-            text, strip=["img", "table", "tr", "td", "th", "thead", "tbody"]
-        ).strip()
+    if not text:
+        html_part = msg.get_body(preferencelist=("html",))
+        if html_part is not None:
+            html_content = html_part.get_content()
+            if isinstance(html_content, str) and html_content.strip():
+                text = markdownify(
+                    html_content,
+                    strip=["img", "table", "tr", "td", "th", "thead", "tbody"],
+                ).strip()
 
     # Normalize line endings and strip zero-width characters
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -791,98 +793,69 @@ def _extract_snippet_via_bodystructure(
     return text[:SNIPPET_LENGTH].replace("\n", " ").strip()
 
 
-def _find_text_part(
-    bodystructure: Any, path: list[int] | None = None
-) -> tuple[str, str, str, str] | None:
-    """Walk BODYSTRUCTURE to find the best text part.
+def _build_content_type_string(bodystructure: Any) -> str:
+    """Build a Content-Type header string from a parsed BODYSTRUCTURE.
 
-    Prefers text/plain over text/html. imapclient parses BODYSTRUCTURE as:
-    - Leaf part: tuple starting with bytes (b'TEXT', b'PLAIN', ...)
-    - Multipart: tuple where first element is a list of child parts
+    For multipart messages, includes the boundary parameter.
+    For simple messages, returns type/subtype with charset if present.
 
     Args:
         bodystructure: Parsed BODYSTRUCTURE from imapclient.
-        path: Current MIME part path (e.g. [1, 2]).
 
     Returns:
-        Tuple of (mime_type, part_spec, encoding, charset) or None.
+        Content-Type string (e.g. "multipart/alternative; boundary=xyz").
     """
-    if path is None:
-        path = []
-
-    # Multipart: first element is a list of children
+    # Multipart: first element is a list of child parts
     if isinstance(bodystructure[0], list):
-        children = bodystructure[0]
-        plain_result = None
-        html_result = None
-        for i, child in enumerate(children):
-            result = _find_text_part(child, path + [i + 1])
-            if result:
-                if result[0] == "text/plain" and plain_result is None:
-                    plain_result = result
-                elif result[0] == "text/html" and html_result is None:
-                    html_result = result
-        return plain_result or html_result
+        subtype = bodystructure[1]
+        if isinstance(subtype, bytes):
+            subtype = subtype.decode("ascii", errors="replace").lower()
 
-    # Leaf part: (type, subtype, params, id, desc, encoding, size, ...)
-    mime_type = _bytes_to_str(bodystructure[0]).lower()
-    mime_subtype = _bytes_to_str(bodystructure[1]).lower()
-    full_type = f"{mime_type}/{mime_subtype}"
+        # Boundary is in the params (index 2 for multipart)
+        boundary = ""
+        params = bodystructure[2] if len(bodystructure) > 2 else None
+        if params:
+            param_list = list(params) if isinstance(params, tuple) else params
+            for j in range(0, len(param_list) - 1, 2):
+                key = param_list[j]
+                if isinstance(key, bytes):
+                    key = key.decode("ascii", errors="replace")
+                if key.upper() == "BOUNDARY":
+                    val = param_list[j + 1]
+                    if isinstance(val, bytes):
+                        val = val.decode("ascii", errors="replace")
+                    boundary = val
 
-    if full_type not in ("text/plain", "text/html"):
-        return None
+        ct = f"multipart/{subtype}"
+        if boundary:
+            ct += f'; boundary="{boundary}"'
+        return ct
 
-    encoding = _bytes_to_str(bodystructure[5]).lower() if bodystructure[5] else "7bit"
+    # Simple: (type, subtype, params, ...)
+    main_type = bodystructure[0]
+    sub_type = bodystructure[1]
+    if isinstance(main_type, bytes):
+        main_type = main_type.decode("ascii", errors="replace").lower()
+    if isinstance(sub_type, bytes):
+        sub_type = sub_type.decode("ascii", errors="replace").lower()
 
-    # Extract charset from params (index 2)
-    charset = "utf-8"
-    params = bodystructure[2]
+    ct = f"{main_type}/{sub_type}"
+
+    # Include charset if present (index 2 for simple parts)
+    params = bodystructure[2] if len(bodystructure) > 2 else None
     if params:
         param_list = list(params) if isinstance(params, tuple) else params
         for j in range(0, len(param_list) - 1, 2):
-            if _bytes_to_str(param_list[j]).upper() == "CHARSET":
-                charset = _bytes_to_str(param_list[j + 1]).lower()
+            key = param_list[j]
+            if isinstance(key, bytes):
+                key = key.decode("ascii", errors="replace")
+            if key.upper() == "CHARSET":
+                val = param_list[j + 1]
+                if isinstance(val, bytes):
+                    val = val.decode("ascii", errors="replace")
+                ct += f"; charset={val}"
 
-    part_spec = ".".join(str(p) for p in path) if path else "1"
-    return (full_type, part_spec, encoding, charset)
-
-
-def _decode_part(raw_bytes: bytes, encoding: str, charset: str) -> str:
-    """Decode raw MIME part bytes using content-transfer-encoding and charset.
-
-    Args:
-        raw_bytes: Raw bytes from IMAP BODY fetch.
-        encoding: Content-Transfer-Encoding (e.g. 'base64', 'quoted-printable').
-        charset: Character set (e.g. 'utf-8', 'iso-8859-1').
-
-    Returns:
-        Decoded text string.
-    """
-    if encoding == "base64":
-        decoded = base64.b64decode(raw_bytes)
-    elif encoding == "quoted-printable":
-        decoded = quopri.decodestring(raw_bytes)
-    else:
-        decoded = raw_bytes
-
-    try:
-        return decoded.decode(charset)
-    except (UnicodeDecodeError, LookupError):
-        return decoded.decode("latin-1")
-
-
-def _bytes_to_str(value: Any) -> str:
-    """Convert bytes to str if needed.
-
-    Args:
-        value: Value to convert.
-
-    Returns:
-        String representation.
-    """
-    if isinstance(value, bytes):
-        return value.decode("ascii", errors="replace")
-    return str(value)
+    return ct
 
 
 def _extract_references(raw_headers: bytes | str) -> list[str]:

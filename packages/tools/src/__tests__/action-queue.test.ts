@@ -118,7 +118,10 @@ type Row = Record<string, unknown>;
  * Creates a minimal fake Supabase client backed by an in-memory store.
  * Supports the chained query patterns used in action-queue.ts:
  *   .from(table).select().eq().single()
+ *   .from(table).select().eq().in().in()
+ *   .from(table).select().eq().eq().in()
  *   .from(table).update().eq()
+ *   .from(table).insert().select().single()
  * @param store - In-memory store keyed by table name, then by row ID
  * @returns A fake SupabaseClient
  */
@@ -127,19 +130,48 @@ function createFakeSupabase(store: Record<string, Record<string, Row>>) {
     from(table: string) {
       const rows = (store[table] ??= {});
 
+      /**
+       * Creates a chainable query builder that accumulates .eq() and .in() filters.
+       * Thenable so it can be awaited directly, and also supports .single().
+       */
+      function createSelectBuilder() {
+        const filters: Array<{ type: "eq" | "in"; col: string; value: unknown }> = [];
+
+        function applyFilters(): Row[] {
+          return Object.values(rows).filter((row) =>
+            filters.every((f) => {
+              if (f.type === "eq") return row[f.col] === f.value;
+              return Array.isArray(f.value) && (f.value as unknown[]).includes(row[f.col]);
+            })
+          );
+        }
+
+        const builder: Record<string, unknown> = {
+          eq(col: string, value: unknown) {
+            filters.push({ type: "eq", col, value });
+            return builder;
+          },
+          in(col: string, values: unknown[]) {
+            filters.push({ type: "in", col, value: values });
+            return builder;
+          },
+          single() {
+            const matched = applyFilters();
+            if (matched.length === 0) return Promise.resolve({ data: null, error: { message: "not found" } });
+            return Promise.resolve({ data: { ...matched[0] }, error: null });
+          },
+          then(resolve: (val: unknown) => void, reject?: (err: unknown) => void) {
+            const result = { data: applyFilters().map((r) => ({ ...r })), error: null };
+            return Promise.resolve(result).then(resolve, reject);
+          },
+        };
+
+        return builder;
+      }
+
       return {
         select(_cols: string) {
-          return {
-            eq(col: string, value: unknown) {
-              return {
-                single: () => {
-                  const row = Object.values(rows).find((r) => r[col] === value);
-                  if (!row) return Promise.resolve({ data: null, error: { message: "not found" } });
-                  return Promise.resolve({ data: { ...row }, error: null });
-                },
-              };
-            },
-          };
+          return createSelectBuilder();
         },
 
         update(values: Row) {
@@ -780,6 +812,612 @@ describe("Batch email actions (Hoodiecrow integration)", () => {
 
       // No DB rows
       expect(Object.keys(store.actions)).toHaveLength(0);
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+});
+
+// ============================================================================
+// SESSION-AWARE INBOX FILTERING (INTEGRATION)
+// ============================================================================
+
+const FILTER_IMAP_PORT = 14_245;
+
+const FILTER_SEED_MESSAGES = [
+  {
+    raw: [
+      "From: Alice <alice@example.com>",
+      "To: testuser@localhost",
+      "Subject: Filter test email 1",
+      "Date: Mon, 10 Mar 2026 09:00:00 +0000",
+      "Message-Id: <filter-msg-001@example.com>",
+      "",
+      "Body of filter test email 1.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Bob <bob@example.com>",
+      "To: testuser@localhost",
+      "Subject: Filter test email 2",
+      "Date: Tue, 11 Mar 2026 10:00:00 +0000",
+      "Message-Id: <filter-msg-002@example.com>",
+      "",
+      "Body of filter test email 2.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Carol <carol@example.com>",
+      "To: testuser@localhost",
+      "Subject: Filter test email 3",
+      "Date: Wed, 12 Mar 2026 11:00:00 +0000",
+      "Message-Id: <filter-msg-003@example.com>",
+      "",
+      "Body of filter test email 3.",
+    ].join("\r\n"),
+  },
+];
+
+function createFilterTestServer() {
+  return hoodiecrow({
+    plugins: [
+      "ID",
+      "SASL-IR",
+      "AUTH-PLAIN",
+      "NAMESPACE",
+      "IDLE",
+      "ENABLE",
+      "CONDSTORE",
+      "LITERALPLUS",
+      "UNSELECT",
+      "SPECIAL-USE",
+      "CREATE-SPECIAL-USE",
+    ],
+    storage: {
+      INBOX: {
+        messages: [...FILTER_SEED_MESSAGES],
+      },
+      "": {
+        separator: "/",
+        folders: {
+          "[Google Mail]": {
+            flags: ["\\Noselect"],
+            folders: {
+              "All Mail": {
+                "special-use": "\\All",
+                messages: [...FILTER_SEED_MESSAGES],
+              },
+              Drafts: { "special-use": "\\Drafts" },
+              "Sent Mail": { "special-use": "\\Sent" },
+              Trash: { "special-use": "\\Trash" },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+const filterImapConfig: ImapConfig = {
+  host: "127.0.0.1",
+  port: FILTER_IMAP_PORT,
+  user: TEST_USER,
+  password: TEST_PASS,
+  secure: false,
+};
+
+describe("Session-aware inbox filtering", () => {
+  let server: ReturnType<typeof hoodiecrow>;
+  /** Map of subject -> real IMAP email ID, resolved in beforeAll */
+  let idBySubject: Record<string, string>;
+
+  beforeAll(async () => {
+    // Start the Hoodiecrow server
+    await new Promise<void>((resolve) => {
+      server = createFilterTestServer();
+      server.listen(FILTER_IMAP_PORT, () => resolve());
+    });
+
+    // Fetch real IMAP email IDs so tests can reference them by subject
+    const client = await createImapConnection(filterImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      idBySubject = {};
+      for (const e of emails) {
+        idBySubject[e.subject] = e.id;
+      }
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  );
+
+  // --------------------------------------------------------------------------
+  // Pending delete_email filters email from list_inbox
+  // --------------------------------------------------------------------------
+
+  it("list_inbox excludes emails with pending delete_email actions", async () => {
+    const client = await createImapConnection(filterImapConfig);
+    try {
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "pd-1": {
+            id: "pd-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: idBySubject["Filter test email 1"] },
+            status: "pending",
+            requires_approval: true,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "list_inbox",
+        arguments: { limit: 10 },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const markdown = (result.result as Record<string, unknown>).markdown as string;
+
+      // First email should be filtered out; others present
+      expect(markdown).not.toContain("Filter test email 1");
+      expect(markdown).toContain("Filter test email 2");
+      expect(markdown).toContain("Filter test email 3");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Pending archive_email filters email from list_inbox
+  // --------------------------------------------------------------------------
+
+  it("list_inbox excludes emails with pending archive_email actions", async () => {
+    const client = await createImapConnection(filterImapConfig);
+    try {
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "pa-1": {
+            id: "pa-1",
+            session_id: "session-1",
+            tool_name: "archive_email",
+            arguments: { email_id: idBySubject["Filter test email 2"] },
+            status: "pending",
+            requires_approval: true,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "list_inbox",
+        arguments: { limit: 10 },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const markdown = (result.result as Record<string, unknown>).markdown as string;
+
+      expect(markdown).toContain("Filter test email 1");
+      expect(markdown).not.toContain("Filter test email 2");
+      expect(markdown).toContain("Filter test email 3");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Pending delete_email filters email from search_emails
+  // --------------------------------------------------------------------------
+
+  it("search_emails excludes emails with pending delete_email actions", async () => {
+    const client = await createImapConnection(filterImapConfig);
+    try {
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "sd-1": {
+            id: "sd-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: idBySubject["Filter test email 1"] },
+            status: "pending",
+            requires_approval: true,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "search_emails",
+        arguments: { query: "filter test" },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const markdown = (result.result as Record<string, unknown>).markdown as string;
+
+      expect(markdown).not.toContain("Filter test email 1");
+      expect(markdown).toContain("Filter test email 2");
+      expect(markdown).toContain("Filter test email 3");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Queued send_email appears in list_inbox as "Queued Outgoing"
+  // --------------------------------------------------------------------------
+
+  it("list_inbox appends queued send_email actions as Queued Outgoing section", async () => {
+    const client = await createImapConnection(filterImapConfig);
+    try {
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "qs-1": {
+            id: "qs-1",
+            session_id: "session-1",
+            tool_name: "send_email",
+            arguments: { to: "alice@example.com", subject: "Re: Meeting notes", body: "See you there." },
+            status: "pending",
+            requires_approval: true,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "list_inbox",
+        arguments: { limit: 10 },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const markdown = (result.result as Record<string, unknown>).markdown as string;
+
+      expect(markdown).toContain("Queued Outgoing");
+      expect(markdown).toContain("alice@example.com");
+      expect(markdown).toContain("Re: Meeting notes");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Pending actions from a different session do NOT filter
+  // --------------------------------------------------------------------------
+
+  it("list_inbox does NOT filter emails from a different session", async () => {
+    const client = await createImapConnection(filterImapConfig);
+    try {
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "other-1": {
+            id: "other-1",
+            session_id: "session-OTHER",
+            tool_name: "delete_email",
+            arguments: { email_id: idBySubject["Filter test email 1"] },
+            status: "pending",
+            requires_approval: true,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "list_inbox",
+        arguments: { limit: 10 },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const markdown = (result.result as Record<string, unknown>).markdown as string;
+
+      // All emails should be present -- different session's actions don't apply
+      expect(markdown).toContain("Filter test email 1");
+      expect(markdown).toContain("Filter test email 2");
+      expect(markdown).toContain("Filter test email 3");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // No pending actions returns full results unchanged
+  // --------------------------------------------------------------------------
+
+  it("list_inbox with no pending actions returns full results unchanged", async () => {
+    const client = await createImapConnection(filterImapConfig);
+    try {
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "list_inbox",
+        arguments: { limit: 10 },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const markdown = (result.result as Record<string, unknown>).markdown as string;
+
+      expect(markdown).toContain("Filter test email 1");
+      expect(markdown).toContain("Filter test email 2");
+      expect(markdown).toContain("Filter test email 3");
+      expect(markdown).not.toContain("Queued Outgoing");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Approved (not just pending) delete actions also filter
+  // --------------------------------------------------------------------------
+
+  it("list_inbox excludes emails with approved delete actions", async () => {
+    const client = await createImapConnection(filterImapConfig);
+    try {
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "ad-1": {
+            id: "ad-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: idBySubject["Filter test email 3"] },
+            status: "approved",
+            requires_approval: true,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "list_inbox",
+        arguments: { limit: 10 },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const markdown = (result.result as Record<string, unknown>).markdown as string;
+
+      expect(markdown).toContain("Filter test email 1");
+      expect(markdown).toContain("Filter test email 2");
+      expect(markdown).not.toContain("Filter test email 3");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+});
+
+// ============================================================================
+// OVERFETCH FOR PENDING ACTIONS (INTEGRATION)
+// ============================================================================
+
+const OVERFETCH_IMAP_PORT = 14_246;
+
+const OVERFETCH_SEED_MESSAGES = [
+  {
+    raw: [
+      "From: Alice <alice@example.com>",
+      "To: testuser@localhost",
+      "Subject: Overfetch email 1",
+      "Date: Mon, 10 Mar 2026 09:00:00 +0000",
+      "Message-Id: <overfetch-msg-001@example.com>",
+      "",
+      "Body of overfetch email 1.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Bob <bob@example.com>",
+      "To: testuser@localhost",
+      "Subject: Overfetch email 2",
+      "Date: Tue, 11 Mar 2026 10:00:00 +0000",
+      "Message-Id: <overfetch-msg-002@example.com>",
+      "",
+      "Body of overfetch email 2.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Carol <carol@example.com>",
+      "To: testuser@localhost",
+      "Subject: Overfetch email 3",
+      "Date: Wed, 12 Mar 2026 11:00:00 +0000",
+      "Message-Id: <overfetch-msg-003@example.com>",
+      "",
+      "Body of overfetch email 3.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Dave <dave@example.com>",
+      "To: testuser@localhost",
+      "Subject: Overfetch email 4",
+      "Date: Thu, 13 Mar 2026 12:00:00 +0000",
+      "Message-Id: <overfetch-msg-004@example.com>",
+      "",
+      "Body of overfetch email 4.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Eve <eve@example.com>",
+      "To: testuser@localhost",
+      "Subject: Overfetch email 5",
+      "Date: Fri, 14 Mar 2026 13:00:00 +0000",
+      "Message-Id: <overfetch-msg-005@example.com>",
+      "",
+      "Body of overfetch email 5.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Frank <frank@example.com>",
+      "To: testuser@localhost",
+      "Subject: Overfetch email 6",
+      "Date: Sat, 15 Mar 2026 14:00:00 +0000",
+      "Message-Id: <overfetch-msg-006@example.com>",
+      "",
+      "Body of overfetch email 6.",
+    ].join("\r\n"),
+  },
+];
+
+function createOverfetchTestServer() {
+  return hoodiecrow({
+    plugins: [
+      "ID",
+      "SASL-IR",
+      "AUTH-PLAIN",
+      "NAMESPACE",
+      "IDLE",
+      "ENABLE",
+      "CONDSTORE",
+      "LITERALPLUS",
+      "UNSELECT",
+      "SPECIAL-USE",
+      "CREATE-SPECIAL-USE",
+    ],
+    storage: {
+      INBOX: {
+        messages: [...OVERFETCH_SEED_MESSAGES],
+      },
+      "": {
+        separator: "/",
+        folders: {
+          "[Google Mail]": {
+            flags: ["\\Noselect"],
+            folders: {
+              "All Mail": {
+                "special-use": "\\All",
+                messages: [...OVERFETCH_SEED_MESSAGES],
+              },
+              Drafts: { "special-use": "\\Drafts" },
+              "Sent Mail": { "special-use": "\\Sent" },
+              Trash: { "special-use": "\\Trash" },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+const overfetchImapConfig: ImapConfig = {
+  host: "127.0.0.1",
+  port: OVERFETCH_IMAP_PORT,
+  user: TEST_USER,
+  password: TEST_PASS,
+  secure: false,
+};
+
+describe("Overfetch for pending actions", () => {
+  let server: ReturnType<typeof hoodiecrow>;
+  /** Map of subject -> real IMAP email ID, resolved in beforeAll */
+  let idBySubject: Record<string, string>;
+
+  beforeAll(async () => {
+    // Start the Hoodiecrow server
+    await new Promise<void>((resolve) => {
+      server = createOverfetchTestServer();
+      server.listen(OVERFETCH_IMAP_PORT, () => resolve());
+    });
+
+    // Fetch real IMAP email IDs so tests can reference them by subject
+    const client = await createImapConnection(overfetchImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      idBySubject = {};
+      for (const e of emails) {
+        idBySubject[e.subject] = e.id;
+      }
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  );
+
+  // --------------------------------------------------------------------------
+  // Overfetch: limit=3 with 3 newest pending returns 3 older emails
+  // --------------------------------------------------------------------------
+
+  it("list_inbox with limit=3 where all 3 newest have pending deletes returns the next 3 older emails", async () => {
+    const client = await createImapConnection(overfetchImapConfig);
+    try {
+      // Emails 4, 5, 6 are the newest (latest dates). Create pending delete actions for them.
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "of-1": {
+            id: "of-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: idBySubject["Overfetch email 4"] },
+            status: "pending",
+            requires_approval: true,
+          },
+          "of-2": {
+            id: "of-2",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: idBySubject["Overfetch email 5"] },
+            status: "pending",
+            requires_approval: true,
+          },
+          "of-3": {
+            id: "of-3",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: idBySubject["Overfetch email 6"] },
+            status: "pending",
+            requires_approval: true,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "list_inbox",
+        arguments: { limit: 3 },
+      };
+
+      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const markdown = (result.result as Record<string, unknown>).markdown as string;
+
+      // The 3 older emails should be present
+      expect(markdown).toContain("Overfetch email 1");
+      expect(markdown).toContain("Overfetch email 2");
+      expect(markdown).toContain("Overfetch email 3");
+
+      // The 3 newest emails (with pending deletes) should be filtered out
+      expect(markdown).not.toContain("Overfetch email 4");
+      expect(markdown).not.toContain("Overfetch email 5");
+      expect(markdown).not.toContain("Overfetch email 6");
     } finally {
       await closeImapConnection(client);
     }

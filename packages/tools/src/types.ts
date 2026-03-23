@@ -93,6 +93,17 @@ export interface UndoResult {
 }
 
 // ============================================================================
+// QUEUED SEND
+// ============================================================================
+
+/** A queued outgoing email awaiting approval or already approved. */
+export interface QueuedSend {
+  to: string;
+  subject: string;
+  status: string; // "pending" | "approved"
+}
+
+// ============================================================================
 // ACTION ROW (DB)
 // ============================================================================
 

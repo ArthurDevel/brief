@@ -12,6 +12,7 @@ export type {
   ToolApprovalConfig,
   ActionInput,
   ActionResult,
+  QueuedSend,
   UndoRecipe,
   UndoResult,
   ActionRow,
@@ -21,5 +22,13 @@ export { toolDefinitions } from "./definitions";
 export type { ToolDefinition } from "./definitions";
 
 export { getDefaultClassification } from "./classification";
-export { classifyAction, handleToolCall, executeAction, undoAction } from "./action-queue";
+export {
+  classifyAction,
+  handleToolCall,
+  executeAction,
+  undoAction,
+  fetchPendingEmailIds,
+  fetchQueuedSends,
+  formatQueuedSends,
+} from "./action-queue";
 export { storeSecret, retrieveSecret, updateSecret, deleteSecret } from "./vault";

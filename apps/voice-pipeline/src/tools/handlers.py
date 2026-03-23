@@ -65,6 +65,15 @@ class UndoRecipe:
 
 
 @dataclass
+class QueuedSend:
+    """A queued outgoing email awaiting approval or already approved."""
+
+    to: str
+    subject: str
+    status: str  # "pending" | "approved"
+
+
+@dataclass
 class UndoResult:
     """Result of an undo operation."""
 
@@ -156,7 +165,7 @@ def execute_action(
             f'Action {action_id} cannot be executed -- status is "{action["status"]}"'
         )
 
-    # Execute the tool (discard message_id -- approved actions are already in the DB)
+    # Execute the tool (None session_id -- skip filtering for approved-action execution)
     result, undo_recipe, _ = _dispatch_tool(
         tool_name=action["tool_name"],
         args=action["arguments"],
@@ -164,6 +173,7 @@ def execute_action(
         smtp_config=smtp_config,
         supabase=supabase,
         user_id=action["user_id"],
+        session_id=None,
     )
 
     # Serialize undo recipe for DB storage
@@ -456,6 +466,7 @@ def _execute_and_store(
         smtp_config=smtp_config,
         supabase=supabase,
         user_id=input.user_id,
+        session_id=input.session_id,
     )
 
     # Merge message_id into arguments for DB storage (used for enrichment later)
@@ -507,6 +518,7 @@ def _dispatch_tool(
     smtp_config: SmtpConfig,
     supabase: Client,
     user_id: str,
+    session_id: str | None = None,
 ) -> tuple[dict[str, Any], UndoRecipe | None, str | None]:
     """Dispatch a tool call to the appropriate handler.
 
@@ -520,6 +532,7 @@ def _dispatch_tool(
         smtp_config: SMTP configuration.
         supabase: Supabase client.
         user_id: The user ID (for memory/feature request operations).
+        session_id: The session ID for filtering pending actions, or None to skip filtering.
 
     Returns:
         Tuple of (result dict, UndoRecipe or None, message_id or None).
@@ -532,6 +545,26 @@ def _dispatch_tool(
 
     if tool_name == "list_inbox":
         limit = args.get("limit", 5)
+
+        # Filter out emails with pending removal actions in this session
+        if session_id is not None:
+            pending_ids = _fetch_pending_email_ids(session_id, supabase)
+            # Overfetch to compensate for filtered-out emails
+            overfetch_limit = limit + len(pending_ids)
+            emails = email_client.with_reconnect(
+                imap_holder, config,
+                lambda c: email_client.list_inbox(c, overfetch_limit),
+            )
+            filtered = [e for e in emails if e.id not in pending_ids][:limit]
+            markdown = format_email_summaries(filtered, "Inbox")
+
+            # Append queued outgoing emails if any exist
+            sends = _fetch_queued_sends(session_id, supabase)
+            if sends:
+                markdown += "\n\n" + _format_queued_sends(sends)
+
+            return {"markdown": markdown}, None, None
+
         emails = email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.list_inbox(c, limit),
@@ -557,6 +590,13 @@ def _dispatch_tool(
             imap_holder, config,
             lambda c: email_client.search_emails(c, args["query"]),
         )
+
+        # Filter out emails with pending removal actions in this session
+        if session_id is not None:
+            pending_ids = _fetch_pending_email_ids(session_id, supabase)
+            filtered = [e for e in emails if e.id not in pending_ids]
+            return {"markdown": format_email_summaries(filtered, "Search Results")}, None, None
+
         return {"markdown": format_email_summaries(emails, "Search Results")}, None, None
 
     if tool_name == "mark_as_read":
@@ -743,3 +783,82 @@ def _handle_feature_request(
     )
 
 
+def _fetch_pending_email_ids(session_id: str, supabase: Client) -> set[str]:
+    """Query the actions table for pending/approved delete and archive actions in a session.
+
+    Selects the arguments column and extracts email_id client-side.
+
+    Args:
+        session_id: The session to query.
+        supabase: Supabase client for DB operations.
+
+    Returns:
+        Set of email_id strings that have pending removal actions.
+    """
+    response = (
+        supabase.table("actions")
+        .select("arguments")
+        .eq("session_id", session_id)
+        .in_("tool_name", ["delete_email", "archive_email"])
+        .in_("status", ["pending", "approved"])
+        .execute()
+    )
+
+    rows = cast(list[dict[str, Any]], response.data or [])
+    return {r["arguments"]["email_id"] for r in rows}
+
+
+def _fetch_queued_sends(session_id: str, supabase: Client) -> list[QueuedSend]:
+    """Query the actions table for pending/approved send_email actions in a session.
+
+    Selects arguments and status columns, extracts to/subject client-side.
+
+    Args:
+        session_id: The session to query.
+        supabase: Supabase client for DB operations.
+
+    Returns:
+        List of QueuedSend objects with to, subject, and status.
+    """
+    response = (
+        supabase.table("actions")
+        .select("arguments, status")
+        .eq("session_id", session_id)
+        .eq("tool_name", "send_email")
+        .in_("status", ["pending", "approved"])
+        .execute()
+    )
+
+    rows = cast(list[dict[str, Any]], response.data or [])
+    return [
+        QueuedSend(
+            to=r["arguments"]["to"],
+            subject=r["arguments"]["subject"],
+            status=r["status"],
+        )
+        for r in rows
+    ]
+
+
+def _format_queued_sends(sends: list[QueuedSend]) -> str:
+    """Format queued outgoing emails as a markdown section.
+
+    Returns an empty string if the list is empty.
+
+    Args:
+        sends: List of QueuedSend objects to format.
+
+    Returns:
+        Markdown string with the queued outgoing section.
+    """
+    if not sends:
+        return ""
+
+    lines = [f"## Queued Outgoing ({len(sends)} emails)", ""]
+
+    for send in sends:
+        lines.append(f"- **To:** {send.to} | **Subject:** {send.subject}")
+        lines.append("  *Status: Awaiting approval*")
+        lines.append("")
+
+    return "\n".join(lines)
