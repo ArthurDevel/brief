@@ -15,6 +15,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import type { ActionRow } from "@dublin/tools/src/types";
+import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 
 // ============================================================================
 // CONSTANTS
@@ -75,45 +76,25 @@ async function undoActionRequest(actionId: string): Promise<Response> {
 // ============================================================================
 
 /**
- * Summarizes action arguments into a short display string.
+ * Extracts the "from" or "to" field from action arguments.
  * @param args - The action arguments object
- * @returns A short summary string
+ * @returns The from/to string, truncated, or "-"
  */
-function summarizeArguments(args: Record<string, unknown>): string {
-  const entries = Object.entries(args);
-  if (entries.length === 0) return "-";
-
-  return entries
-    .map(([key, value]) => {
-      const strValue = typeof value === "string" ? value : JSON.stringify(value);
-      const truncated = strValue.length > 40 ? strValue.substring(0, 40) + "..." : strValue;
-      return `${key}: ${truncated}`;
-    })
-    .join(", ");
+function getContact(args: Record<string, unknown>): string {
+  const value = (args.from ?? args.to) as string | undefined;
+  return value ?? "-";
 }
 
 /**
- * Summarizes action result into a short display string.
- * @param result - The action result object
- * @returns A short summary string
+ * Extracts the subject field from action arguments.
+ * @param args - The action arguments object
+ * @returns The subject string or "-"
  */
-function summarizeResult(result: Record<string, unknown> | null): string {
-  if (!result) return "-";
-
-  const entries = Object.entries(result);
-  if (entries.length === 0) return "-";
-
-  return entries
-    .map(([key, value]) => {
-      if (typeof value === "boolean") return `${key}: ${value}`;
-      if (typeof value === "string") {
-        const truncated = value.length > 30 ? value.substring(0, 30) + "..." : value;
-        return `${key}: ${truncated}`;
-      }
-      return `${key}: ${JSON.stringify(value).substring(0, 30)}`;
-    })
-    .join(", ");
+function getSubject(args: Record<string, unknown>): string {
+  const value = args.subject as string | undefined;
+  return value ?? "-";
 }
+
 
 // ============================================================================
 // COMPONENTS
@@ -145,17 +126,19 @@ function PendingActionsTable({
     <table className="w-full text-left text-sm">
       <thead>
         <tr className="border-b border-gray-200">
-          <th className="pb-2 font-medium text-gray-500">Tool</th>
-          <th className="pb-2 font-medium text-gray-500">Arguments</th>
-          <th className="pb-2 font-medium text-gray-500">Created</th>
-          <th className="pb-2 font-medium text-gray-500">Actions</th>
+          <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Tool</th>
+          <th className="pb-2 font-medium text-gray-500">From / To</th>
+          <th className="pb-2 font-medium text-gray-500">Subject</th>
+          <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Created</th>
+          <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Actions</th>
         </tr>
       </thead>
       <tbody>
         {actions.map((action) => (
           <tr key={action.id} className="border-b border-gray-100">
-            <td className="py-3 font-mono text-xs">{action.toolName}</td>
-            <td className="py-3 text-gray-600">{summarizeArguments(action.arguments)}</td>
+            <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+            <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
+            <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
             <td className="py-3 text-gray-500">
               {new Date(action.createdAt).toLocaleDateString("en-US", DATE_FORMAT)}
             </td>
@@ -207,19 +190,19 @@ function ExecutedActionsTable({
     <table className="w-full text-left text-sm">
       <thead>
         <tr className="border-b border-gray-200">
-          <th className="pb-2 font-medium text-gray-500">Tool</th>
-          <th className="pb-2 font-medium text-gray-500">Arguments</th>
-          <th className="pb-2 font-medium text-gray-500">Result</th>
-          <th className="pb-2 font-medium text-gray-500">Executed</th>
-          <th className="pb-2 font-medium text-gray-500">Actions</th>
+          <th className="w-[12%] pb-2 font-medium text-gray-500">Tool</th>
+          <th className="w-[25%] pb-2 font-medium text-gray-500">From / To</th>
+          <th className="w-[33%] pb-2 font-medium text-gray-500">Subject</th>
+          <th className="w-[15%] pb-2 font-medium text-gray-500">Executed</th>
+          <th className="w-[15%] pb-2 font-medium text-gray-500">Actions</th>
         </tr>
       </thead>
       <tbody>
         {actions.map((action) => (
           <tr key={action.id} className="border-b border-gray-100">
-            <td className="py-3 font-mono text-xs">{action.toolName}</td>
-            <td className="py-3 text-gray-600">{summarizeArguments(action.arguments)}</td>
-            <td className="py-3 text-gray-600">{summarizeResult(action.result)}</td>
+            <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+            <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
+            <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
             <td className="py-3 text-gray-500">
               {action.executedAt
                 ? new Date(action.executedAt).toLocaleDateString("en-US", DATE_FORMAT)

@@ -20,6 +20,7 @@
 export interface ToolDefinition {
   type: "function";
   name: string;
+  label: string;
   description: string;
   parameters: {
     type: "object";
@@ -36,6 +37,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "list_inbox",
+    label: "List Inbox",
     description:
       "List recent emails in the user's inbox. Returns sender, subject, snippet, and date for each email.",
     parameters: {
@@ -52,6 +54,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "read_email",
+    label: "Read Email",
     description: "Read the full content of a specific email by its ID.",
     parameters: {
       type: "object",
@@ -68,6 +71,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "read_thread",
+    label: "Read Thread",
     description:
       "Read an entire email thread/conversation by the ID of any email in the thread. Returns all messages including the user's sent replies, in chronological order. Use this when the user asks about a thread, conversation, or their reply to an email.",
     parameters: {
@@ -85,6 +89,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "search_emails",
+    label: "Search Emails",
     description: "Search emails by query string. Searches subject, sender, and body.",
     parameters: {
       type: "object",
@@ -101,6 +106,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "mark_as_read",
+    label: "Mark as Read",
     description: "Mark an email as read by its ID.",
     parameters: {
       type: "object",
@@ -117,6 +123,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "draft_email",
+    label: "Draft Email",
     description: "Create a new email draft. Returns a draft ID that can be used to send it later.",
     parameters: {
       type: "object",
@@ -132,6 +139,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "delete_email",
+    label: "Delete Email",
     description: "Delete an email by its ID. Moves it to the Trash folder.",
     parameters: {
       type: "object",
@@ -148,6 +156,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "archive_email",
+    label: "Archive Email",
     description: "Archive an email by its ID. Moves it out of the inbox.",
     parameters: {
       type: "object",
@@ -164,6 +173,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "send_email",
+    label: "Send Email",
     description:
       "Send an email. Can send an existing draft by draft_id, or send a new email directly with to, subject, and body.",
     parameters: {
@@ -183,6 +193,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "batch_archive_emails",
+    label: "Archive Multiple Emails",
     description: "Archive multiple emails at once by their IDs. Moves each email out of the inbox.",
     parameters: {
       type: "object",
@@ -200,6 +211,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "batch_delete_emails",
+    label: "Delete Multiple Emails",
     description: "Delete multiple emails at once by their IDs. Moves each email to the Trash folder.",
     parameters: {
       type: "object",
@@ -217,6 +229,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "save_memory",
+    label: "Save Memory",
     description:
       "Save a memory entry about the user. Use this to remember preferences, names, or any info the user wants persisted across calls.",
     parameters: {
@@ -231,6 +244,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     type: "function",
     name: "submit_feature_request",
+    label: "Submit Feature Request",
     description: "Submit a feature request from the user. Stores it for the development team to review.",
     parameters: {
       type: "object",
@@ -244,3 +258,12 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
 ];
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/** Lookup map from tool name to its human-readable label. */
+export const TOOL_LABELS: Record<string, string> = Object.fromEntries(
+  toolDefinitions.map((t) => [t.name, t.label])
+);

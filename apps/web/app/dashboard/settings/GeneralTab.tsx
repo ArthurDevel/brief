@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { UserSettings, MemoryEntry } from "@/lib/types";
 import type { ToolApprovalConfig, ActionClassification } from "@dublin/tools/src/types";
+import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 import type { DeepgramVoice } from "@/app/api/deepgram/voices/route";
 
 // ============================================================================
@@ -584,7 +585,7 @@ export default function GeneralTab() {
           <div className="space-y-3">
             {TOOL_NAMES.map((toolName) => (
               <div key={toolName} className="flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-700">{toolName}</span>
+                <span className="text-sm font-medium text-gray-700">{TOOL_LABELS[toolName] ?? toolName}</span>
                 <select
                   value={toolApprovalConfig[toolName] ?? ""}
                   onChange={(e) =>
