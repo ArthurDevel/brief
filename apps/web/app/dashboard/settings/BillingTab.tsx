@@ -15,7 +15,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Lock, CreditCard, Landmark, Wallet, CircleDollarSign, Check } from "lucide-react";
 import type { UsageInfo, UpgradeResponse } from "@/lib/types";
 
@@ -45,7 +45,7 @@ const PAYMENT_METHODS: { id: PaymentMethod; label: string }[] = [
  * Billing tab showing plan info, usage, plan comparison, and upgrade flow.
  * @returns The billing tab UI
  */
-export default function BillingTab(): JSX.Element {
+export default function BillingTab(): React.ReactElement {
   const [usage, setUsage] = useState<UsageInfo | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -218,7 +218,7 @@ function PaymentModal({
   open: boolean;
   onClose: () => void;
   onSuccess: () => void;
-}): JSX.Element | null {
+}): React.ReactElement | null {
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(
     null,
   );
@@ -418,7 +418,7 @@ function PaymentMethodIcon({
   method,
 }: {
   method: PaymentMethod;
-}): JSX.Element {
+}): React.ReactElement {
   switch (method) {
     case "credit-card":
       return <CreditCard className="h-5 w-5 text-gray-600" />;
