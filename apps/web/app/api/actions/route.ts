@@ -2,18 +2,21 @@
  * API route for listing actions.
  *
  * Returns actions for the authenticated user, optionally filtered by status.
+ * By default, excludes read-only tool actions (e.g. list_inbox, search_emails).
  * Maps snake_case DB columns to camelCase ActionRow DTOs.
  *
  * Responsibilities:
  * - Authenticate the request
  * - Query the actions table with optional status filter
+ * - Exclude read-only actions unless ?includeReadOnly=true
  * - Return array of ActionRow DTOs
  */
 
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
-import type { ActionRow } from "@dublin/tools";
+import type { ActionRow, ToolName } from "@dublin/tools";
+import { getDefaultClassification } from "@dublin/tools";
 
 // ============================================================================
 // MAIN HANDLERS
@@ -34,6 +37,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ActionRow[
   }
 
   const status = request.nextUrl.searchParams.get("status");
+  const includeReadOnly = request.nextUrl.searchParams.get("includeReadOnly") === "true";
 
   let query = supabase
     .from("actions")
@@ -51,7 +55,14 @@ export async function GET(request: NextRequest): Promise<NextResponse<ActionRow[
     return NextResponse.json({ error: error.message } as unknown as ActionRow[], { status: 500 });
   }
 
-  const actions: ActionRow[] = (data ?? []).map(mapActionRow);
+  let actions: ActionRow[] = (data ?? []).map(mapActionRow);
+
+  // Filter out read-only actions unless explicitly requested
+  if (!includeReadOnly) {
+    actions = actions.filter(
+      (a) => getDefaultClassification(a.toolName as ToolName) !== "read_only"
+    );
+  }
 
   return NextResponse.json(actions);
 }

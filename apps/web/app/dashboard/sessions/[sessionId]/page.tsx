@@ -19,6 +19,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import type { SessionDetail, TranscriptEntry } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
+import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 
 // ============================================================================
 // CONSTANTS
@@ -52,44 +53,23 @@ function formatDuration(seconds: number | null): string {
 }
 
 /**
- * Summarizes action arguments into a short display string.
+ * Extracts the "from" or "to" field from action arguments.
  * @param args - The action arguments object
- * @returns A short summary string
+ * @returns The from/to string, truncated, or "-"
  */
-function summarizeArguments(args: Record<string, unknown>): string {
-  const entries = Object.entries(args);
-  if (entries.length === 0) return "-";
-
-  return entries
-    .map(([key, value]) => {
-      const strValue = typeof value === "string" ? value : JSON.stringify(value);
-      const truncated = strValue.length > 40 ? strValue.substring(0, 40) + "..." : strValue;
-      return `${key}: ${truncated}`;
-    })
-    .join(", ");
+function getContact(args: Record<string, unknown>): string {
+  const value = (args.from ?? args.to) as string | undefined;
+  return value ?? "-";
 }
 
 /**
- * Summarizes action result into a short display string.
- * @param result - The action result object
- * @returns A short summary string
+ * Extracts the subject field from action arguments.
+ * @param args - The action arguments object
+ * @returns The subject string or "-"
  */
-function summarizeResult(result: Record<string, unknown> | null): string {
-  if (!result) return "-";
-
-  const entries = Object.entries(result);
-  if (entries.length === 0) return "-";
-
-  return entries
-    .map(([key, value]) => {
-      if (typeof value === "boolean") return `${key}: ${value}`;
-      if (typeof value === "string") {
-        const truncated = value.length > 30 ? value.substring(0, 30) + "..." : value;
-        return `${key}: ${truncated}`;
-      }
-      return `${key}: ${JSON.stringify(value).substring(0, 30)}`;
-    })
-    .join(", ");
+function getSubject(args: Record<string, unknown>): string {
+  const value = args.subject as string | undefined;
+  return value ?? "-";
 }
 
 /**
@@ -172,7 +152,7 @@ function ActionCard({ action }: { action: ActionRow }) {
   return (
     <div className="flex justify-start">
       <div className="border border-gray-300 bg-gray-50 px-4 py-2 text-xs text-gray-600">
-        <span className="font-mono font-medium">{action.toolName}</span>
+        <span className="font-medium">{TOOL_LABELS[action.toolName] ?? action.toolName}</span>
         <span className="ml-2 text-gray-400">({action.status})</span>
       </div>
     </div>
@@ -244,17 +224,19 @@ function ActionsSummary({
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-yellow-200">
-                <th className="pb-2 font-medium text-yellow-700">Tool</th>
-                <th className="pb-2 font-medium text-yellow-700">Arguments</th>
-                <th className="pb-2 font-medium text-yellow-700">Created</th>
-                <th className="pb-2 font-medium text-yellow-700">Actions</th>
+                <th className="whitespace-nowrap pb-2 font-medium text-yellow-700">Tool</th>
+                <th className="pb-2 font-medium text-yellow-700">From / To</th>
+                <th className="pb-2 font-medium text-yellow-700">Subject</th>
+                <th className="whitespace-nowrap pb-2 font-medium text-yellow-700">Created</th>
+                <th className="whitespace-nowrap pb-2 font-medium text-yellow-700">Actions</th>
               </tr>
             </thead>
             <tbody>
               {pendingActions.map((action) => (
                 <tr key={action.id} className="border-b border-yellow-100">
-                  <td className="py-3 font-mono text-xs">{action.toolName}</td>
-                  <td className="py-3 text-gray-600">{summarizeArguments(action.arguments)}</td>
+                  <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                  <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
+                  <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
                   <td className="py-3 text-gray-500">
                     {new Date(action.createdAt).toLocaleDateString("en-US", DATE_FORMAT)}
                   </td>
@@ -292,19 +274,19 @@ function ActionsSummary({
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-gray-200">
-                <th className="pb-2 font-medium text-gray-500">Tool</th>
-                <th className="pb-2 font-medium text-gray-500">Arguments</th>
-                <th className="pb-2 font-medium text-gray-500">Result</th>
-                <th className="pb-2 font-medium text-gray-500">Status</th>
-                <th className="pb-2 font-medium text-gray-500">Actions</th>
+                <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Tool</th>
+                <th className="pb-2 font-medium text-gray-500">From / To</th>
+                <th className="pb-2 font-medium text-gray-500">Subject</th>
+                <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Status</th>
+                <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Actions</th>
               </tr>
             </thead>
             <tbody>
               {completedActions.map((action) => (
                 <tr key={action.id} className="border-b border-gray-100">
-                  <td className="py-3 font-mono text-xs">{action.toolName}</td>
-                  <td className="py-3 text-gray-600">{summarizeArguments(action.arguments)}</td>
-                  <td className="py-3 text-gray-600">{summarizeResult(action.result)}</td>
+                  <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                  <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
+                  <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
                   <td className="py-3">
                     <span
                       className={`px-2 py-0.5 text-xs font-bold ${

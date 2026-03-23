@@ -15,7 +15,8 @@ import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
 import type { SessionDetail, TranscriptEntry } from "@/lib/types";
-import type { ActionRow } from "@dublin/tools";
+import type { ActionRow, ToolName } from "@dublin/tools";
+import { getDefaultClassification } from "@dublin/tools";
 
 // ============================================================================
 // MAIN HANDLERS
@@ -66,7 +67,7 @@ export async function GET(
     return NextResponse.json({ error: actionsError.message }, { status: 500 });
   }
 
-  const actions: ActionRow[] = (actionsData ?? []).map((row) => ({
+  const allActions: ActionRow[] = (actionsData ?? []).map((row) => ({
     id: row.id as string,
     userId: row.user_id as string,
     sessionId: row.session_id as string,
@@ -80,6 +81,11 @@ export async function GET(
     createdAt: row.created_at as string,
     executedAt: (row.executed_at as string) ?? null,
   }));
+
+  // Exclude read-only actions (e.g. list_inbox, search_emails)
+  const actions = allActions.filter(
+    (a) => getDefaultClassification(a.toolName as ToolName) !== "read_only"
+  );
 
   const transcript: TranscriptEntry[] = Array.isArray(session.transcript)
     ? (session.transcript as TranscriptEntry[])

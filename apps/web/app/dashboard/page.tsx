@@ -1,13 +1,14 @@
 /**
  * Dashboard overview page.
  *
- * Shows the most recent session with its pending actions,
- * followed by two previous session summary cards.
+ * Shows the most recent session with all its actions (pending on top,
+ * then chronologically oldest first), followed by two previous session
+ * summary cards.
  *
  * Responsibilities:
  * - Fetch recent sessions from /api/sessions
- * - Fetch pending actions from /api/actions?status=pending
- * - Display most recent session with inline approve/reject
+ * - Fetch all actions from /api/actions
+ * - Display most recent session with inline approve/reject for pending actions
  * - Display previous session cards linking to their detail pages
  */
 
@@ -17,6 +18,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import type { SessionSummary } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
+import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 
 // ============================================================================
 // CONSTANTS
@@ -69,48 +71,89 @@ function formatRelativeTime(dateStr: string): string {
 }
 
 /**
- * Summarizes action arguments into a short display string.
- * @param args - The action arguments object
- * @returns A short summary string
+ * Sorts actions: pending first, then non-pending ordered by createdAt ascending (oldest first).
+ * @param actions - Array of actions to sort
+ * @returns Sorted copy of the array
  */
-function summarizeArguments(args: Record<string, unknown>): string {
-  const entries = Object.entries(args);
-  if (entries.length === 0) return "-";
+function sortActions(actions: ActionRow[]): ActionRow[] {
+  return [...actions].sort((a, b) => {
+    const aIsPending = a.status === "pending" ? 0 : 1;
+    const bIsPending = b.status === "pending" ? 0 : 1;
+    if (aIsPending !== bIsPending) return aIsPending - bIsPending;
+    // Within the same group, sort oldest first
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+  });
+}
 
-  return entries
-    .map(([key, value]) => {
-      const strValue = typeof value === "string" ? value : JSON.stringify(value);
-      const truncated = strValue.length > 40 ? strValue.substring(0, 40) + "..." : strValue;
-      return `${key}: ${truncated}`;
-    })
-    .join(", ");
+/**
+ * Extracts the "from" or "to" field from action arguments.
+ * @param args - The action arguments object
+ * @returns The from/to string, truncated, or "-"
+ */
+function getContact(args: Record<string, unknown>): string {
+  const value = (args.from ?? args.to) as string | undefined;
+  return value ?? "-";
+}
+
+/**
+ * Extracts the subject field from action arguments.
+ * @param args - The action arguments object
+ * @returns The subject string or "-"
+ */
+function getSubject(args: Record<string, unknown>): string {
+  const value = args.subject as string | undefined;
+  return value ?? "-";
 }
 
 // ============================================================================
 // COMPONENTS
 // ============================================================================
 
+/** Status color mapping for action badges. */
+const STATUS_STYLES: Record<string, string> = {
+  approved: "bg-blue-100 text-blue-700",
+  executed: "bg-green-100 text-green-700",
+  rejected: "bg-red-100 text-red-700",
+  undone: "bg-gray-100 text-gray-600",
+};
+
 /**
- * Displays the most recent session with its pending actions.
+ * Renders a colored badge for an action status.
+ * @param props.status - The action status string
+ */
+function StatusBadge({ status }: { status: string }) {
+  const style = STATUS_STYLES[status] ?? "bg-gray-100 text-gray-600";
+  return (
+    <span className={`inline-block px-2 py-0.5 text-xs font-medium capitalize ${style}`}>
+      {status}
+    </span>
+  );
+}
+
+/**
+ * Displays the most recent session with all its actions.
+ * Pending actions show approve/reject buttons; others show their status.
  * @param props.session - The most recent session summary
- * @param props.pendingActions - Pending actions for this session
+ * @param props.actions - All actions for this session, sorted (pending first)
  * @param props.processingId - ID of action currently being processed
  * @param props.onApprove - Callback to approve an action
  * @param props.onReject - Callback to reject an action
  */
 function RecentSessionCard({
   session,
-  pendingActions,
+  actions,
   processingId,
   onApprove,
   onReject,
 }: {
   session: SessionSummary;
-  pendingActions: ActionRow[];
+  actions: ActionRow[];
   processingId: string | null;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
 }) {
+  const pendingCount = actions.filter((a) => a.status === "pending").length;
+
   return (
     <div className="border border-gray-200 bg-white p-6">
       <div className="mb-4 flex items-center justify-between">
@@ -133,15 +176,15 @@ function RecentSessionCard({
         <span>{session.actionCount} action{session.actionCount !== 1 ? "s" : ""}</span>
       </div>
 
-      {/* Pending actions for this session */}
-      {pendingActions.length > 0 ? (
+      {/* Actions for this session */}
+      {actions.length > 0 ? (
         <>
           <h3 className="mb-3 text-sm font-medium text-gray-700">
-            Pending Actions ({pendingActions.length})
+            Actions ({actions.length}){pendingCount > 0 && ` -- ${pendingCount} pending`}
           </h3>
           <div
             className={
-              pendingActions.length > MAX_VISIBLE_ACTIONS
+              actions.length > MAX_VISIBLE_ACTIONS
                 ? "max-h-[440px] overflow-y-auto"
                 : ""
             }
@@ -149,35 +192,39 @@ function RecentSessionCard({
             <table className="w-full text-left text-sm">
               <thead className="sticky top-0 bg-white">
                 <tr className="border-b border-gray-200">
-                  <th className="pb-2 font-medium text-gray-500">Tool</th>
-                  <th className="pb-2 font-medium text-gray-500">Arguments</th>
-                  <th className="pb-2 font-medium text-gray-500">Actions</th>
+                  <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Tool</th>
+                  <th className="pb-2 font-medium text-gray-500">From / To</th>
+                  <th className="pb-2 font-medium text-gray-500">Subject</th>
+                  <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {pendingActions.map((action) => (
+                {actions.map((action) => (
                   <tr key={action.id} className="border-b border-gray-100">
-                    <td className="py-3 font-mono text-xs">{action.toolName}</td>
-                    <td className="py-3 text-gray-600">
-                      {summarizeArguments(action.arguments)}
-                    </td>
+                    <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                    <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
+                    <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
                     <td className="py-3">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => onApprove(action.id)}
-                          disabled={processingId === action.id}
-                          className="bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                        >
-                          {processingId === action.id ? "..." : "Approve"}
-                        </button>
-                        <button
-                          onClick={() => onReject(action.id)}
-                          disabled={processingId === action.id}
-                          className="bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
-                        >
-                          Reject
-                        </button>
-                      </div>
+                      {action.status === "pending" ? (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => onApprove(action.id)}
+                            disabled={processingId === action.id}
+                            className="bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                          >
+                            {processingId === action.id ? "..." : "Approve"}
+                          </button>
+                          <button
+                            onClick={() => onReject(action.id)}
+                            disabled={processingId === action.id}
+                            className="bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      ) : (
+                        <StatusBadge status={action.status} />
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -186,7 +233,7 @@ function RecentSessionCard({
           </div>
         </>
       ) : (
-        <p className="text-sm text-gray-500">No pending actions for this session.</p>
+        <p className="text-sm text-gray-500">No actions for this session.</p>
       )}
     </div>
   );
@@ -232,7 +279,7 @@ function PreviousSessionCard({
 
 export default function DashboardOverviewPage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [pendingActions, setPendingActions] = useState<ActionRow[]>([]);
+  const [allActions, setAllActions] = useState<ActionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -241,7 +288,7 @@ export default function DashboardOverviewPage() {
     try {
       const [sessionsRes, actionsRes] = await Promise.all([
         fetch("/api/sessions"),
-        fetch("/api/actions?status=pending"),
+        fetch("/api/actions"),
       ]);
 
       if (sessionsRes.ok) {
@@ -251,7 +298,7 @@ export default function DashboardOverviewPage() {
 
       if (actionsRes.ok) {
         const actionsData: ActionRow[] = await actionsRes.json();
-        setPendingActions(actionsData);
+        setAllActions(actionsData);
       }
     } catch {
       // Non-fatal for overview
@@ -310,9 +357,9 @@ export default function DashboardOverviewPage() {
   const mostRecent = sessions[0] ?? null;
   const previousSessions = sessions.slice(1, 3);
 
-  // Filter pending actions per session
-  const mostRecentPending = mostRecent
-    ? pendingActions.filter((a) => a.sessionId === mostRecent.id)
+  // Filter actions for the most recent session, sorted: pending first, then oldest first
+  const mostRecentActions = mostRecent
+    ? sortActions(allActions.filter((a) => a.sessionId === mostRecent.id))
     : [];
 
   return (
@@ -328,7 +375,7 @@ export default function DashboardOverviewPage() {
         <div className="mb-6">
           <RecentSessionCard
             session={mostRecent}
-            pendingActions={mostRecentPending}
+            actions={mostRecentActions}
             processingId={processingId}
             onApprove={handleApprove}
             onReject={handleReject}
@@ -347,7 +394,7 @@ export default function DashboardOverviewPage() {
             <PreviousSessionCard
               key={session.id}
               session={session}
-              hasPendingActions={pendingActions.some((a) => a.sessionId === session.id)}
+              hasPendingActions={allActions.some((a) => a.sessionId === session.id && a.status === "pending")}
             />
           ))}
         </div>

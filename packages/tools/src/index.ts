@@ -17,7 +17,7 @@ export type {
   ActionRow,
 } from "./types";
 
-export { toolDefinitions } from "./definitions";
+export { toolDefinitions, TOOL_LABELS } from "./definitions";
 export type { ToolDefinition } from "./definitions";
 
 export { getDefaultClassification } from "./classification";
