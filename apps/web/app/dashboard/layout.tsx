@@ -12,6 +12,7 @@
 
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { CallProvider } from "@/contexts/CallContext";
@@ -51,6 +52,14 @@ function isActive(href: string, pathname: string): boolean {
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const [isFreePlan, setIsFreePlan] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetch("/api/billing/usage")
+      .then((res) => res.json())
+      .then((data) => setIsFreePlan(data.plan === "free"))
+      .catch(() => {});
+  }, []);
 
   return (
     <CallProvider>
@@ -58,7 +67,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <ActiveCallBar />
         <div className="flex flex-1 min-h-0">
         {/* Sidebar */}
-        <aside className="w-64 border-r border-gray-200 bg-white">
+        <aside className="flex w-64 flex-col border-r border-gray-200 bg-white">
           <div className="p-6">
             <h2 className="text-xl font-extrabold tracking-tight text-black">Voice Email</h2>
           </div>
@@ -80,6 +89,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               );
             })}
           </nav>
+
+          {isFreePlan && (
+            <div className="mt-auto px-4 pb-4">
+              <Link
+                href="/dashboard/settings?tab=billing"
+                className="block rounded-lg bg-black px-4 py-3 text-center text-sm font-medium text-white shadow-lg hover:bg-gray-800"
+              >
+                Upgrade to Pro for more calling time
+              </Link>
+            </div>
+          )}
         </aside>
 
         {/* Main content */}
