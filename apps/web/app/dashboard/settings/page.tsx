@@ -1,8 +1,8 @@
 /**
- * Settings page with tabbed navigation for General, Billing, and Feature Requests.
+ * Settings page with tabbed navigation for General, Billing, Feature Requests, and Schedule.
  *
  * Renders a tab bar at the top and conditionally shows the active tab content.
- * Tab state is managed via URL search params (?tab=general|billing|feature-requests).
+ * Tab state is managed via URL search params (?tab=general|billing|feature-requests|schedule).
  *
  * Responsibilities:
  * - Render tab navigation
@@ -16,6 +16,7 @@ import { useSearchParams } from "next/navigation";
 import GeneralTab from "./GeneralTab";
 import BillingTab from "./BillingTab";
 import FeatureRequestsTab from "./FeatureRequestsTab";
+import ScheduleTab from "./ScheduleTab";
 
 // ============================================================================
 // CONSTANTS
@@ -23,6 +24,7 @@ import FeatureRequestsTab from "./FeatureRequestsTab";
 
 const TABS = [
   { id: "general", label: "General" },
+  { id: "schedule", label: "Schedule" },
   { id: "billing", label: "Billing" },
   { id: "feature-requests", label: "Feature Requests" },
 ] as const;
@@ -68,6 +70,7 @@ function SettingsContent() {
       {activeTab === "general" && <GeneralTab />}
       {activeTab === "billing" && <BillingTab />}
       {activeTab === "feature-requests" && <FeatureRequestsTab />}
+      {activeTab === "schedule" && <ScheduleTab />}
     </div>
   );
 }

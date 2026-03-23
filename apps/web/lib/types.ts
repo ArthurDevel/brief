@@ -16,6 +16,30 @@ import type { ToolApprovalConfig, ActionRow } from "@dublin/tools/src/types";
 // USER SETTINGS
 // ============================================================================
 
+/**
+ * Weekly call schedule configuration stored as JSONB in user_settings.
+ * @param timezone - IANA timezone string (e.g. "America/New_York")
+ * @param last_call_at - ISO 8601 timestamp of the last scheduled call (read-only, set by scheduler)
+ * @param monday - "HH:MM" local time or null (no call)
+ * @param tuesday - "HH:MM" local time or null (no call)
+ * @param wednesday - "HH:MM" local time or null (no call)
+ * @param thursday - "HH:MM" local time or null (no call)
+ * @param friday - "HH:MM" local time or null (no call)
+ * @param saturday - "HH:MM" local time or null (no call)
+ * @param sunday - "HH:MM" local time or null (no call)
+ */
+export interface CallSchedule {
+  timezone: string;
+  last_call_at: string | null;
+  monday: string | null;
+  tuesday: string | null;
+  wednesday: string | null;
+  thursday: string | null;
+  friday: string | null;
+  saturday: string | null;
+  sunday: string | null;
+}
+
 /** User configuration as returned by the settings API. Passwords are never exposed. */
 export interface UserSettings {
   imapHost: string;
@@ -31,6 +55,7 @@ export interface UserSettings {
   toolApprovalConfig: ToolApprovalConfig;
   phoneNumber: string | null;
   hasPin: boolean;
+  callSchedule: CallSchedule | null;
 }
 
 /** Payload for updating user settings via PUT. Passwords are optional (only sent when changed). */
@@ -47,6 +72,7 @@ export interface UserSettingsUpdate {
   voiceSpeed: number;
   toolApprovalConfig: ToolApprovalConfig;
   pin?: string;
+  callSchedule?: CallSchedule | null;
 }
 
 // ============================================================================

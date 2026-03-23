@@ -66,6 +66,9 @@ class Settings:
     public_url: str = "http://localhost:7860"
     metered_api_key: str = ""
     recording_enabled: bool = False
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""
 
 
 # ============================================================================
@@ -101,4 +104,7 @@ def load_settings() -> Settings:
         public_url=os.getenv("PUBLIC_URL", "http://localhost:7860"),
         metered_api_key=os.getenv("METERED_API_KEY", ""),
         recording_enabled=os.getenv("RECORDING_ENABLED", "false").lower() == "true",
+        twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
+        twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
+        twilio_phone_number=os.getenv("TWILIO_PHONE_NUMBER", ""),
     )
