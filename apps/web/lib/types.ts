@@ -83,6 +83,12 @@ export interface SessionDetail {
 // BILLING
 // ============================================================================
 
+/** Response from the upgrade API endpoint. 200 includes plan, non-200 includes error. */
+export interface UpgradeResponse {
+  plan: "free" | "pro";
+  error?: string;
+}
+
 /** Current billing period usage information. */
 export interface UsageInfo {
   plan: "free" | "pro";
