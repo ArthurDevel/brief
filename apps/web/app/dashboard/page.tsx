@@ -25,6 +25,7 @@ import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 // ============================================================================
 
 const MAX_VISIBLE_ACTIONS = 10;
+const BULK_KEY = "__bulk__";
 
 const DATE_FORMAT: Intl.DateTimeFormatOptions = {
   month: "short",
@@ -105,6 +106,15 @@ function getSubject(args: Record<string, unknown>): string {
   return value ?? "-";
 }
 
+/**
+ * Small inline spinner for loading states.
+ */
+function Spinner() {
+  return (
+    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+  );
+}
+
 // ============================================================================
 // COMPONENTS
 // ============================================================================
@@ -135,24 +145,29 @@ function StatusBadge({ status }: { status: string }) {
  * Pending actions show approve/reject buttons; others show their status.
  * @param props.session - The most recent session summary
  * @param props.actions - All actions for this session, sorted (pending first)
- * @param props.processingId - ID of action currently being processed
+ * @param props.processingIds - Set of action IDs currently being processed
  * @param props.onApprove - Callback to approve an action
  * @param props.onReject - Callback to reject an action
+ * @param props.onBulk - Callback for bulk approve/reject
  */
 function RecentSessionCard({
   session,
   actions,
-  processingId,
+  processingIds,
   onApprove,
   onReject,
+  onBulk,
 }: {
   session: SessionSummary;
   actions: ActionRow[];
-  processingId: string | null;
+  processingIds: Set<string>;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
+  onBulk: (operation: "approve" | "reject") => void;
 }) {
   const pendingCount = actions.filter((a) => a.status === "pending").length;
+  const isBusy = processingIds.size > 0;
+  const isBulkProcessing = processingIds.has(BULK_KEY);
 
   return (
     <div className="border border-gray-200 bg-white p-6">
@@ -179,9 +194,29 @@ function RecentSessionCard({
       {/* Actions for this session */}
       {actions.length > 0 ? (
         <>
-          <h3 className="mb-3 text-sm font-medium text-gray-700">
-            Actions ({actions.length}){pendingCount > 0 && ` -- ${pendingCount} pending`}
-          </h3>
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-medium text-gray-700">
+              Actions ({actions.length}){pendingCount > 0 && ` -- ${pendingCount} pending`}
+            </h3>
+            {pendingCount > 0 && (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onBulk("approve")}
+                  disabled={isBusy}
+                  className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                >
+                  {isBulkProcessing ? <Spinner /> : "Approve All"}
+                </button>
+                <button
+                  onClick={() => onBulk("reject")}
+                  disabled={isBusy}
+                  className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  {isBulkProcessing ? <Spinner /> : "Reject All"}
+                </button>
+              </div>
+            )}
+          </div>
           <div
             className={
               actions.length > MAX_VISIBLE_ACTIONS
@@ -199,35 +234,38 @@ function RecentSessionCard({
                 </tr>
               </thead>
               <tbody>
-                {actions.map((action) => (
-                  <tr key={action.id} className="border-b border-gray-100">
-                    <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-                    <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
-                    <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
-                    <td className="py-3">
-                      {action.status === "pending" ? (
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => onApprove(action.id)}
-                            disabled={processingId === action.id}
-                            className="bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                          >
-                            {processingId === action.id ? "..." : "Approve"}
-                          </button>
-                          <button
-                            onClick={() => onReject(action.id)}
-                            disabled={processingId === action.id}
-                            className="bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
-                          >
-                            Reject
-                          </button>
-                        </div>
-                      ) : (
-                        <StatusBadge status={action.status} />
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {actions.map((action) => {
+                  const isProcessing = processingIds.has(action.id) || isBulkProcessing;
+                  return (
+                    <tr key={action.id} className="border-b border-gray-100">
+                      <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                      <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
+                      <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
+                      <td className="py-3">
+                        {action.status === "pending" ? (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => onApprove(action.id)}
+                              disabled={isProcessing}
+                              className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                            >
+                              {isProcessing ? <Spinner /> : "Approve"}
+                            </button>
+                            <button
+                              onClick={() => onReject(action.id)}
+                              disabled={isProcessing}
+                              className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <StatusBadge status={action.status} />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -281,8 +319,28 @@ export default function DashboardOverviewPage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [allActions, setAllActions] = useState<ActionRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Adds an ID to the processing set.
+   * @param id - The action ID to mark as processing
+   */
+  const addProcessing = (id: string) => {
+    setProcessingIds((prev) => new Set(prev).add(id));
+  };
+
+  /**
+   * Removes an ID from the processing set.
+   * @param id - The action ID to remove from processing
+   */
+  const removeProcessing = (id: string) => {
+    setProcessingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
 
   const loadData = useCallback(async () => {
     try {
@@ -312,7 +370,7 @@ export default function DashboardOverviewPage() {
   }, [loadData]);
 
   const handleApprove = async (actionId: string) => {
-    setProcessingId(actionId);
+    addProcessing(actionId);
     try {
       const res = await fetch(`/api/actions/${actionId}/approve`, { method: "POST" });
       if (!res.ok) {
@@ -324,12 +382,12 @@ export default function DashboardOverviewPage() {
     } catch {
       setError("Failed to approve action");
     } finally {
-      setProcessingId(null);
+      removeProcessing(actionId);
     }
   };
 
   const handleReject = async (actionId: string) => {
-    setProcessingId(actionId);
+    addProcessing(actionId);
     try {
       const res = await fetch(`/api/actions/${actionId}/reject`, { method: "POST" });
       if (!res.ok) {
@@ -341,7 +399,40 @@ export default function DashboardOverviewPage() {
     } catch {
       setError("Failed to reject action");
     } finally {
-      setProcessingId(null);
+      removeProcessing(actionId);
+    }
+  };
+
+  /**
+   * Bulk operation: approves or rejects all pending actions for the most recent session.
+   * @param operation - "approve" or "reject"
+   */
+  const handleBulk = async (operation: "approve" | "reject") => {
+    const mostRecentSession = sessions[0];
+    if (!mostRecentSession) return;
+
+    const pending = allActions.filter(
+      (a) => a.sessionId === mostRecentSession.id && a.status === "pending"
+    );
+    if (pending.length === 0) return;
+
+    addProcessing(BULK_KEY);
+    try {
+      for (const action of pending) {
+        const endpoint = operation === "approve" ? "approve" : "reject";
+        const res = await fetch(`/api/actions/${action.id}/${endpoint}`, { method: "POST" });
+
+        if (!res.ok) {
+          const body = await res.json();
+          setError(body.error ?? `Failed to ${operation} action`);
+          break;
+        }
+      }
+      await loadData();
+    } catch {
+      setError(`Failed to ${operation} actions`);
+    } finally {
+      removeProcessing(BULK_KEY);
     }
   };
 
@@ -376,9 +467,10 @@ export default function DashboardOverviewPage() {
           <RecentSessionCard
             session={mostRecent}
             actions={mostRecentActions}
-            processingId={processingId}
+            processingIds={processingIds}
             onApprove={handleApprove}
             onReject={handleReject}
+            onBulk={handleBulk}
           />
         </div>
       ) : (
