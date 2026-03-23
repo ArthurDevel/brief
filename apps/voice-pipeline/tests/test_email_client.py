@@ -7,6 +7,8 @@ not the TypeScript package.
 
 from __future__ import annotations
 
+import time
+
 from imapclient import IMAPClient
 
 from src.tools.email_client import (
@@ -89,6 +91,13 @@ class TestListInbox:
 
         assert "arthurdevel" in npm.snippet
         assert "<" not in npm.snippet
+
+    def test_fetching_20_emails_completes_within_2_seconds(self, imap_client: IMAPClient):
+        start = time.monotonic()
+        list_inbox(imap_client, 20)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 2.0, f"list_inbox(20) took {elapsed:.2f}s, expected < 2s"
 
 
 # --------------------------------------------------------------------------
@@ -185,7 +194,7 @@ class TestArchiveEmail:
         before = list_inbox(imap_client, 10)
         target = next(e for e in before if e.subject == "Weekly standup notes")
 
-        undo = archive_email(imap_client, target.id)
+        undo, _message_id = archive_email(imap_client, target.id)
         assert undo["operation"] == "move_email"
         assert "All Mail" in undo["params"]["from"]
         assert undo["params"]["to"] == "INBOX"
@@ -203,7 +212,7 @@ class TestDeleteEmail:
         before = list_inbox(imap_client, 10)
         target = next(e for e in before if e.subject == "Lunch tomorrow?")
 
-        undo = delete_email(imap_client, target.id)
+        undo, _message_id = delete_email(imap_client, target.id)
         assert undo["operation"] == "move_email"
         assert "Trash" in undo["params"]["from"]
         assert undo["params"]["to"] == "INBOX"

@@ -21,6 +21,7 @@ import type {
   ActionInput,
   ActionResult,
   ActionRow,
+  QueuedSend,
   UndoRecipe,
   UndoResult,
 } from "./types";
@@ -126,14 +127,15 @@ export async function executeAction(
     throw new Error(`Action ${actionId} cannot be executed -- status is "${action.status}"`);
   }
 
-  // Execute the tool
+  // Execute the tool (null sessionId -- skip filtering for approved-action execution)
   const { result, undoRecipe } = await dispatchTool(
     action.tool_name as ToolName,
     action.arguments,
     imapClient,
     smtpConfig,
     supabase,
-    action.user_id
+    action.user_id,
+    null
   );
 
   // Update the action row with result + undo recipe
@@ -278,7 +280,8 @@ async function executeAndStore(
     imapClient,
     smtpConfig,
     supabase,
-    input.userId
+    input.userId,
+    input.sessionId
   );
 
   const { data, error } = await supabase
@@ -425,6 +428,7 @@ async function handleBatchDelete(
  * @param smtpConfig - SMTP configuration
  * @param supabase - Supabase client
  * @param userId - The user ID (for memory/feature request operations)
+ * @param sessionId - The session ID for filtering pending actions, or null to skip filtering
  * @returns The result data and undo recipe
  */
 async function dispatchTool(
@@ -433,7 +437,8 @@ async function dispatchTool(
   imapClient: ImapFlow,
   smtpConfig: SmtpConfig,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  sessionId: string | null
 ): Promise<{ result: Record<string, unknown>; undoRecipe: UndoRecipe | null }> {
   // Lazy import to avoid circular dependencies
   const { listInbox, searchEmails, readEmail, readThread, markAsRead, archiveEmail, deleteEmail, moveEmail } =
@@ -444,6 +449,24 @@ async function dispatchTool(
   switch (toolName) {
     case "list_inbox": {
       const limit = (args.limit as number) ?? 5;
+
+      // Filter out emails with pending removal actions in this session
+      if (sessionId !== null) {
+        const pendingIds = await fetchPendingEmailIds(sessionId, supabase);
+        // Overfetch to compensate for filtered-out emails
+        const emails = await listInbox(imapClient, limit + pendingIds.size);
+        const filtered = emails.filter((e) => !pendingIds.has(e.id)).slice(0, limit);
+        let markdown = formatEmailSummaries(filtered, "Inbox");
+
+        // Append queued outgoing emails if any exist
+        const sends = await fetchQueuedSends(sessionId, supabase);
+        if (sends.length > 0) {
+          markdown += "\n\n" + formatQueuedSends(sends);
+        }
+
+        return { result: { markdown }, undoRecipe: null };
+      }
+
       const emails = await listInbox(imapClient, limit);
       return { result: { markdown: formatEmailSummaries(emails, "Inbox") }, undoRecipe: null };
     }
@@ -460,6 +483,14 @@ async function dispatchTool(
 
     case "search_emails": {
       const emails = await searchEmails(imapClient, args.query as string);
+
+      // Filter out emails with pending removal actions in this session
+      if (sessionId !== null) {
+        const pendingIds = await fetchPendingEmailIds(sessionId, supabase);
+        const filtered = emails.filter((e) => !pendingIds.has(e.id));
+        return { result: { markdown: formatEmailSummaries(filtered, "Search Results") }, undoRecipe: null };
+      }
+
       return { result: { markdown: formatEmailSummaries(emails, "Search Results") }, undoRecipe: null };
     }
 
@@ -623,4 +654,80 @@ async function dispatchUndo(
     default:
       throw new Error(`Unknown undo operation: ${(recipe as UndoRecipe).operation}`);
   }
+}
+
+/**
+ * Queries the actions table for pending/approved delete_email and archive_email
+ * actions in a given session. Returns the set of email_ids being acted on.
+ * @param sessionId - The session to query
+ * @param supabase - Supabase client for DB operations
+ * @returns Set of email_id strings that have pending removal actions
+ */
+export async function fetchPendingEmailIds(
+  sessionId: string,
+  supabase: SupabaseClient
+): Promise<Set<string>> {
+  const { data: rows, error } = await supabase
+    .from("actions")
+    .select("arguments")
+    .eq("session_id", sessionId)
+    .in("tool_name", ["delete_email", "archive_email"])
+    .in("status", ["pending", "approved"]);
+
+  if (error) {
+    throw new Error(`Failed to fetch pending email ids: ${error.message}`);
+  }
+
+  return new Set((rows ?? []).map((r: { arguments: Record<string, unknown> }) => r.arguments.email_id as string));
+}
+
+/**
+ * Queries the actions table for pending/approved send_email actions in a
+ * given session. Returns the to, subject, and status for each.
+ * @param sessionId - The session to query
+ * @param supabase - Supabase client for DB operations
+ * @returns Array of QueuedSend objects
+ */
+export async function fetchQueuedSends(
+  sessionId: string,
+  supabase: SupabaseClient
+): Promise<QueuedSend[]> {
+  const { data: rows, error } = await supabase
+    .from("actions")
+    .select("arguments, status")
+    .eq("session_id", sessionId)
+    .eq("tool_name", "send_email")
+    .in("status", ["pending", "approved"]);
+
+  if (error) {
+    throw new Error(`Failed to fetch queued sends: ${error.message}`);
+  }
+
+  return (rows ?? []).map((r: { arguments: Record<string, unknown>; status: string }) => ({
+    to: r.arguments.to as string,
+    subject: r.arguments.subject as string,
+    status: r.status,
+  }));
+}
+
+/**
+ * Formats queued outgoing emails as a markdown section.
+ * Returns an empty string if the list is empty.
+ * @param sends - Array of QueuedSend objects to format
+ * @returns Markdown string with the queued outgoing section
+ */
+export function formatQueuedSends(sends: QueuedSend[]): string {
+  if (sends.length === 0) {
+    return "";
+  }
+
+  const lines: string[] = [`## Queued Outgoing (${sends.length} emails)`, ""];
+
+  for (const send of sends) {
+    lines.push(`- **To:** ${send.to} | **Subject:** ${send.subject}`);
+    lines.push(`  *Status: Awaiting approval*`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
 }
