@@ -54,6 +54,7 @@ from src.langfuse_client import shutdown_langfuse_client
 from src.langfuse_observer import LangfuseObserver
 from src.tracked_services import UsageTracker
 from src.pipeline import create_pipeline
+from src.scheduler import start_scheduler
 from src.session import end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
 from src.tools.email_client import close_imap_connection, create_imap_connection
@@ -422,7 +423,23 @@ async def lifespan(app: FastAPI):
 
     logger.info("[server] Creating SmallWebRTCRequestHandler with ice_servers={}", ice_servers)
     _webrtc_handler = SmallWebRTCRequestHandler(ice_servers=ice_servers)
+
+    # Start the scheduled-call background loop (only if Twilio credentials are set)
+    scheduler_task = await start_scheduler(
+        settings,
+        supabase_factory=lambda: create_service_client(settings),
+    )
+
     yield
+
+    # Cancel the scheduler task if it was started
+    if scheduler_task is not None:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("[server] Scheduler task cancelled")
 
     # Finalize any sessions that were still active when the server was killed
     for sid, info in list(_live_pipeline_sessions.items()):
@@ -668,6 +685,44 @@ async def twilio_verify_pin(request: Request) -> Response:
 
     logger.info("[twilio] Incorrect PIN for user %s, attempt %d", user_id, attempt)
     twiml = build_twiml_gather_pin(user_id, attempt=next_attempt)
+    return Response(content=twiml, media_type="text/xml")
+
+
+@app.post("/twilio/scheduled-call")
+async def twilio_scheduled_call(request: Request) -> Response:
+    """Handle Twilio callback for scheduled outbound calls.
+
+    Validates the internal API key from query params, then returns
+    TwiML to connect the answered call to the media stream pipeline.
+    Twilio sends this callback as form-encoded POST when the callee answers.
+    """
+    token = request.query_params.get("token", "")
+    user_id = request.query_params.get("userId", "")
+
+    settings = load_settings()
+
+    if not token or token != settings.internal_api_key:
+        logger.warning("[twilio] Scheduled call: invalid or missing token")
+        return Response(content="Unauthorized", status_code=401)
+
+    if not user_id:
+        twiml = build_twiml_reject("Missing user identifier. Goodbye.")
+        return Response(content=twiml, media_type="text/xml")
+
+    # Parse form data (Twilio sends application/x-www-form-urlencoded)
+    await request.form()
+
+    # Build stream URL from settings.public_url (same logic as verify-pin)
+    stream_url = f"wss://{request.url.hostname}/twilio-stream"
+
+    public_url = settings.public_url
+    if public_url and public_url != f"http://localhost:{settings.port}":
+        ws_scheme = "wss" if public_url.startswith("https") else "ws"
+        host = public_url.split("://", 1)[1].rstrip("/")
+        stream_url = f"{ws_scheme}://{host}/twilio-stream"
+
+    logger.info("[twilio] Scheduled call answered for user %s, connecting stream", user_id)
+    twiml = build_twiml_connect(stream_url, user_id)
     return Response(content=twiml, media_type="text/xml")
 
 
