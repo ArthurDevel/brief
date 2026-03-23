@@ -25,6 +25,7 @@ import {
   fetchEmailMetaByUid,
 } from "@dublin/email";
 import type { ActionRow } from "@dublin/tools";
+import { getDefaultClassification } from "@dublin/tools/src/classification";
 
 /** IMAP client type derived from createImapConnection return value. */
 type ImapClient = Awaited<ReturnType<typeof createImapConnection>>;
@@ -170,8 +171,17 @@ export async function POST(
     );
   }
 
+  // Filter out read-only actions (same as the dashboard)
+  const visibleActions = actions.filter(
+    (a) => getDefaultClassification(a.toolName) !== "read_only"
+  );
+
+  if (visibleActions.length === 0) {
+    return NextResponse.json({ emailSent: false });
+  }
+
   // Send the summary email
-  await sendSessionSummary(userData.user.email, sessionId, actions);
+  await sendSessionSummary(userData.user.email, sessionId, visibleActions);
 
   return NextResponse.json({ emailSent: true });
 }
