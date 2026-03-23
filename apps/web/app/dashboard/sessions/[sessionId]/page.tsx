@@ -1,14 +1,14 @@
 /**
  * Session detail page -- transcript and actions for a single call session.
  *
- * Shows a header with session metadata (date, duration), an actions summary
- * with approve/reject/undo controls, followed by the transcript entries
- * styled by role, interleaved with action cards.
+ * Shows a header with session metadata (date, duration), a unified actions
+ * table with approve/reject/undo controls and bulk actions, followed by
+ * the transcript entries styled by role, interleaved with action cards.
  *
  * Responsibilities:
  * - Fetch session detail from /api/sessions/[id]
  * - Display session header with metadata
- * - Display actions summary with pending/completed sections and bulk actions
+ * - Display unified actions table (pending first, then completed) with bulk actions
  * - Display transcript entries styled by role (user/assistant)
  * - Display actions interleaved in the timeline
  */
@@ -32,6 +32,9 @@ const DATE_FORMAT: Intl.DateTimeFormatOptions = {
   hour: "2-digit",
   minute: "2-digit",
 };
+
+const BULK_KEY = "__bulk__";
+const MAX_VISIBLE_ROWS = 10;
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -73,13 +76,36 @@ function getSubject(args: Record<string, unknown>): string {
 }
 
 /**
- * Sends a POST request to an action endpoint and reloads session data.
+ * Sends a POST request to an action endpoint.
  * @param actionId - The action ID
  * @param endpoint - The endpoint suffix (approve, reject, undo)
  * @returns The response
  */
 async function postActionRequest(actionId: string, endpoint: string): Promise<Response> {
   return fetch(`/api/actions/${actionId}/${endpoint}`, { method: "POST" });
+}
+
+/**
+ * Sorts actions: pending first, then by createdAt ascending.
+ * @param actions - Array of actions to sort
+ * @returns Sorted copy of the array
+ */
+function sortActions(actions: ActionRow[]): ActionRow[] {
+  return [...actions].sort((a, b) => {
+    const aIsPending = a.status === "pending" ? 0 : 1;
+    const bIsPending = b.status === "pending" ? 0 : 1;
+    if (aIsPending !== bIsPending) return aIsPending - bIsPending;
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+  });
+}
+
+/**
+ * Small inline spinner for loading states.
+ */
+function Spinner() {
+  return (
+    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+  );
 }
 
 // ============================================================================
@@ -159,166 +185,142 @@ function ActionCard({ action }: { action: ActionRow }) {
   );
 }
 
+/** Status color mapping for action badges. */
+const STATUS_STYLES: Record<string, string> = {
+  executed: "bg-green-100 text-green-700",
+  rejected: "bg-red-100 text-red-700",
+  undone: "bg-yellow-100 text-yellow-700",
+};
+
 /**
- * Actions summary section showing pending and completed actions with controls.
+ * Unified actions table showing all actions sorted with pending first.
+ * Pending rows show approve/reject buttons, completed rows show status badge + optional undo.
  * @param props.actions - All actions for this session
- * @param props.processingId - ID of the action currently being processed, or "bulk" for bulk ops
+ * @param props.processingIds - Set of action IDs currently being processed
  * @param props.onApprove - Callback to approve a single action
  * @param props.onReject - Callback to reject a single action
  * @param props.onUndo - Callback to undo a single action
- * @param props.onApproveAll - Callback to approve all pending actions
- * @param props.onRejectAll - Callback to reject all pending actions
+ * @param props.onBulk - Callback for bulk approve/reject
  */
 function ActionsSummary({
   actions,
-  processingId,
+  processingIds,
   onApprove,
   onReject,
   onUndo,
-  onApproveAll,
-  onRejectAll,
+  onBulk,
 }: {
   actions: ActionRow[];
-  processingId: string | null;
+  processingIds: Set<string>;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onUndo: (id: string) => void;
-  onApproveAll: () => void;
-  onRejectAll: () => void;
+  onBulk: (operation: "approve" | "reject") => void;
 }) {
-  const pendingActions = actions.filter((a) => a.status === "pending");
-  const completedActions = actions.filter(
-    (a) => a.status === "executed" || a.status === "undone" || a.status === "rejected"
-  );
-
   if (actions.length === 0) return null;
 
-  const isBulkProcessing = processingId === "bulk";
+  const sorted = sortActions(actions);
+  const pendingCount = actions.filter((a) => a.status === "pending").length;
+  const isBulkProcessing = processingIds.has(BULK_KEY);
+  const isBusy = processingIds.size > 0;
 
   return (
-    <div className="mb-8 space-y-6">
-      {/* Pending actions */}
-      {pendingActions.length > 0 && (
-        <div className="border border-yellow-200 bg-yellow-50 p-6">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-yellow-800">
-              Pending Actions ({pendingActions.length})
-            </h2>
-            <div className="flex gap-2">
-              <button
-                onClick={onApproveAll}
-                disabled={isBulkProcessing}
-                className="bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
-              >
-                {isBulkProcessing ? "..." : "Approve All"}
-              </button>
-              <button
-                onClick={onRejectAll}
-                disabled={isBulkProcessing}
-                className="bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
-              >
-                {isBulkProcessing ? "..." : "Reject All"}
-              </button>
-            </div>
+    <div className="mb-8 border border-gray-200 bg-white p-6">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-700">
+          Actions ({actions.length}){pendingCount > 0 && ` -- ${pendingCount} pending`}
+        </h2>
+        {pendingCount > 0 && (
+          <div className="flex gap-2">
+            <button
+              onClick={() => onBulk("approve")}
+              disabled={isBusy}
+              className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+            >
+              {isBulkProcessing ? <Spinner /> : "Approve All"}
+            </button>
+            <button
+              onClick={() => onBulk("reject")}
+              disabled={isBusy}
+              className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {isBulkProcessing ? <Spinner /> : "Reject All"}
+            </button>
           </div>
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-yellow-200">
-                <th className="whitespace-nowrap pb-2 font-medium text-yellow-700">Tool</th>
-                <th className="pb-2 font-medium text-yellow-700">From / To</th>
-                <th className="pb-2 font-medium text-yellow-700">Subject</th>
-                <th className="whitespace-nowrap pb-2 font-medium text-yellow-700">Created</th>
-                <th className="whitespace-nowrap pb-2 font-medium text-yellow-700">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pendingActions.map((action) => (
-                <tr key={action.id} className="border-b border-yellow-100">
-                  <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-                  <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
-                  <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
-                  <td className="py-3 text-gray-500">
-                    {new Date(action.createdAt).toLocaleDateString("en-US", DATE_FORMAT)}
-                  </td>
-                  <td className="py-3">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => onApprove(action.id)}
-                        disabled={processingId !== null}
-                        className="bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                      >
-                        {processingId === action.id ? "..." : "Approve"}
-                      </button>
-                      <button
-                        onClick={() => onReject(action.id)}
-                        disabled={processingId !== null}
-                        className="bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
-                      >
-                        {processingId === action.id ? "..." : "Reject"}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+        )}
+      </div>
+      <div className={sorted.length > MAX_VISIBLE_ROWS ? "max-h-[440px] overflow-y-auto" : ""}>
+      <table className="w-full text-left text-sm">
+        <thead className="sticky top-0 bg-white">
+          <tr className="border-b border-gray-200">
+            <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Tool</th>
+            <th className="pb-2 font-medium text-gray-500">From / To</th>
+            <th className="pb-2 font-medium text-gray-500">Subject</th>
+            <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Status</th>
+            <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((action) => {
+            const isProcessing = processingIds.has(action.id) || isBulkProcessing;
+            const isPending = action.status === "pending";
 
-      {/* Completed actions */}
-      {completedActions.length > 0 && (
-        <div className="border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-sm font-semibold text-gray-700">
-            Completed Actions ({completedActions.length})
-          </h2>
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-gray-200">
-                <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Tool</th>
-                <th className="pb-2 font-medium text-gray-500">From / To</th>
-                <th className="pb-2 font-medium text-gray-500">Subject</th>
-                <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Status</th>
-                <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {completedActions.map((action) => (
-                <tr key={action.id} className="border-b border-gray-100">
-                  <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-                  <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
-                  <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
-                  <td className="py-3">
+            return (
+              <tr key={action.id} className="border-b border-gray-100">
+                <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
+                <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
+                <td className="py-3">
+                  {isPending ? (
+                    <span className="bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
+                      pending
+                    </span>
+                  ) : (
                     <span
                       className={`px-2 py-0.5 text-xs font-bold ${
-                        action.status === "executed"
-                          ? "bg-green-100 text-green-700"
-                          : action.status === "undone"
-                            ? "bg-yellow-100 text-yellow-700"
-                            : "bg-red-100 text-red-700"
+                        STATUS_STYLES[action.status] ?? "bg-gray-100 text-gray-600"
                       }`}
                     >
                       {action.status}
                     </span>
-                  </td>
-                  <td className="py-3">
-                    {action.undoRecipe && action.status === "executed" ? (
+                  )}
+                </td>
+                <td className="py-3">
+                  {isPending ? (
+                    <div className="flex gap-2">
                       <button
-                        onClick={() => onUndo(action.id)}
-                        disabled={processingId !== null}
-                        className="bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
+                        onClick={() => onApprove(action.id)}
+                        disabled={isProcessing}
+                        className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
                       >
-                        {processingId === action.id ? "..." : "Undo"}
+                        {processingIds.has(action.id) ? <Spinner /> : "Approve"}
                       </button>
-                    ) : (
-                      <span className="text-xs text-gray-400">-</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+                      <button
+                        onClick={() => onReject(action.id)}
+                        disabled={isProcessing}
+                        className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  ) : action.undoRecipe && action.status === "executed" ? (
+                    <button
+                      onClick={() => onUndo(action.id)}
+                      disabled={isProcessing}
+                      className="inline-flex items-center gap-1 bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
+                    >
+                      {processingIds.has(action.id) ? <Spinner /> : "Undo"}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-gray-400">-</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      </div>
     </div>
   );
 }
@@ -334,8 +336,28 @@ export default function SessionDetailPage() {
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const emailActionHandled = useRef(false);
+
+  /**
+   * Adds an ID to the processing set.
+   * @param id - The action ID to mark as processing
+   */
+  const addProcessing = (id: string) => {
+    setProcessingIds((prev) => new Set(prev).add(id));
+  };
+
+  /**
+   * Removes an ID from the processing set.
+   * @param id - The action ID to remove from processing
+   */
+  const removeProcessing = (id: string) => {
+    setProcessingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
 
   const loadSession = useCallback(async () => {
     try {
@@ -369,7 +391,7 @@ export default function SessionDetailPage() {
     router.replace(`/dashboard/sessions/${params.sessionId}`);
 
     if (actionId === "all") {
-      handleBulk(action);
+      handleBulk(action as "approve" | "reject");
     } else {
       handleAction(actionId, action);
     }
@@ -381,7 +403,7 @@ export default function SessionDetailPage() {
    * @param endpoint - The API endpoint suffix
    */
   const handleAction = async (actionId: string, endpoint: string) => {
-    setProcessingId(actionId);
+    addProcessing(actionId);
     try {
       const res = await postActionRequest(actionId, endpoint);
       if (!res.ok) {
@@ -393,34 +415,34 @@ export default function SessionDetailPage() {
     } catch {
       setError(`Failed to ${endpoint} action`);
     } finally {
-      setProcessingId(null);
+      removeProcessing(actionId);
     }
   };
 
   /**
-   * Processes all pending actions with the given endpoint (approve or reject).
-   * @param endpoint - "approve" or "reject"
+   * Processes all pending actions with the given operation (approve or reject).
+   * @param operation - "approve" or "reject"
    */
-  const handleBulk = async (endpoint: string) => {
+  const handleBulk = async (operation: "approve" | "reject") => {
     if (!session) return;
     const pending = session.actions.filter((a) => a.status === "pending");
     if (pending.length === 0) return;
 
-    setProcessingId("bulk");
+    addProcessing(BULK_KEY);
     try {
       for (const action of pending) {
-        const res = await postActionRequest(action.id, endpoint);
+        const res = await postActionRequest(action.id, operation);
         if (!res.ok) {
           const body = await res.json();
-          setError(body.error ?? `Failed to ${endpoint} action ${action.toolName}`);
+          setError(body.error ?? `Failed to ${operation} action ${action.toolName}`);
           break;
         }
       }
       await loadSession();
     } catch {
-      setError(`Failed to ${endpoint} all actions`);
+      setError(`Failed to ${operation} all actions`);
     } finally {
-      setProcessingId(null);
+      removeProcessing(BULK_KEY);
     }
   };
 
@@ -475,12 +497,11 @@ export default function SessionDetailPage() {
 
       <ActionsSummary
         actions={session.actions}
-        processingId={processingId}
+        processingIds={processingIds}
         onApprove={(id) => handleAction(id, "approve")}
         onReject={(id) => handleAction(id, "reject")}
         onUndo={(id) => handleAction(id, "undo")}
-        onApproveAll={() => handleBulk("approve")}
-        onRejectAll={() => handleBulk("reject")}
+        onBulk={handleBulk}
       />
 
       {/* Timeline */}
