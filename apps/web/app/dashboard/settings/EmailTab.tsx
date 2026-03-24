@@ -74,15 +74,12 @@ interface TestResult {
 }
 
 /**
- * Tests IMAP and SMTP connections with the provided credentials.
- * @param data - Connection parameters to test
+ * Tests IMAP and SMTP connections using stored credentials on the server.
  * @returns Per-protocol test results
  */
-async function testConnection(data: Record<string, unknown>): Promise<TestResult> {
+async function testConnection(): Promise<TestResult> {
   const res = await fetch("/api/user/settings/test-connection", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
   });
   if (!res.ok) {
     const body = await res.json();
@@ -244,24 +241,7 @@ export default function EmailTab() {
     }
 
     try {
-      // Step 1: Test connection (only if new passwords were provided)
-      if (imapPw && smtpPw) {
-        const result = await testConnection({
-          imapHost: imapH, imapPort: imapP, imapUser: imapU, imapPassword: imapPw,
-          smtpHost: smtpH, smtpPort: smtpP, smtpUser: smtpU, smtpPassword: smtpPw,
-        });
-
-        const errors: string[] = [];
-        if (!result.imap.ok) errors.push(`IMAP: ${result.imap.error}`);
-        if (!result.smtp.ok) errors.push(`SMTP: ${result.smtp.error}`);
-        if (errors.length > 0) {
-          setError(errors.join(" | "));
-          setSaving(false);
-          return;
-        }
-      }
-
-      // Step 2: Save settings
+      // Step 1: Save settings
       const payload: Record<string, unknown> = {
         imapHost: imapH, imapPort: imapP, imapUser: imapU,
         smtpHost: smtpH, smtpPort: smtpP, smtpUser: smtpU,
@@ -278,6 +258,21 @@ export default function EmailTab() {
         setImapPassword("");
         setSmtpPassword("");
       }
+
+      // Step 2: Test connection using stored credentials
+      const result = await testConnection();
+      if (!result.imap.ok || !result.smtp.ok) {
+        const parts: string[] = [];
+        if (!result.imap.ok) parts.push("receiving emails");
+        if (!result.smtp.ok) parts.push("sending emails");
+        setError(
+          `Your settings were saved, but we could not connect for ${parts.join(" and ")}. `
+          + "Please double-check your email address and app password."
+        );
+        setSaving(false);
+        return;
+      }
+
       setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");

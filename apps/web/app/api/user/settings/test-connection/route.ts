@@ -1,11 +1,12 @@
 /**
- * Tests IMAP and SMTP connections with the provided credentials.
+ * Tests IMAP and SMTP connections using stored credentials.
  *
- * Attempts to connect to both servers and returns success/failure for each.
- * Used by the Email settings tab to validate credentials before saving.
+ * Fetches the user's saved settings and passwords from Vault,
+ * then attempts to connect to both servers.
  *
  * Responsibilities:
  * - Authenticate the request via Supabase session
+ * - Load IMAP/SMTP config + passwords from DB and Vault
  * - Test IMAP connection via createImapConnection
  * - Test SMTP connection via testSmtpConnection
  * - Return per-protocol success/error results
@@ -13,23 +14,13 @@
 
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase/client";
+import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
 import { createImapConnection, closeImapConnection, testSmtpConnection } from "@dublin/email";
+import { retrieveSecret } from "@dublin/tools";
 
 // ============================================================================
 // TYPES
 // ============================================================================
-
-interface TestConnectionRequest {
-  imapHost: string;
-  imapPort: number;
-  imapUser: string;
-  imapPassword: string;
-  smtpHost: string;
-  smtpPort: number;
-  smtpUser: string;
-  smtpPassword: string;
-}
 
 interface TestResult {
   imap: { ok: boolean; error?: string };
@@ -41,11 +32,11 @@ interface TestResult {
 // ============================================================================
 
 /**
- * Tests IMAP and SMTP connections with the provided credentials.
- * @param request - JSON body with IMAP/SMTP host, port, user, password
+ * Tests IMAP and SMTP connections using the user's stored credentials.
+ * @param _request - The incoming request (no body needed)
  * @returns TestResult with per-protocol success/error
  */
-export async function POST(request: NextRequest): Promise<NextResponse<TestResult | { error: string }>> {
+export async function POST(_request: NextRequest): Promise<NextResponse<TestResult | { error: string }>> {
   const cookieStore = await cookies();
   const supabase = createServerSupabaseClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();
@@ -54,16 +45,36 @@ export async function POST(request: NextRequest): Promise<NextResponse<TestResul
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body: TestConnectionRequest = await request.json();
+  // Fetch stored settings
+  const { data: settings, error: fetchError } = await supabase
+    .from("user_settings")
+    .select("imap_host, imap_port, imap_user, imap_password_secret_id, smtp_host, smtp_port, smtp_user, smtp_password_secret_id")
+    .eq("user_id", user.id)
+    .single();
+
+  if (fetchError || !settings) {
+    return NextResponse.json({ error: "No email settings found. Please save your settings first." }, { status: 400 });
+  }
+
+  if (!settings.imap_password_secret_id || !settings.smtp_password_secret_id) {
+    return NextResponse.json({ error: "Missing stored passwords. Please re-enter your credentials." }, { status: 400 });
+  }
+
+  // Retrieve passwords from Vault
+  const serviceClient = createServiceRoleClient();
+  const [imapPassword, smtpPassword] = await Promise.all([
+    retrieveSecret(serviceClient, settings.imap_password_secret_id),
+    retrieveSecret(serviceClient, settings.smtp_password_secret_id),
+  ]);
 
   // Test both connections in parallel
   const [imapResult, smtpResult] = await Promise.all([
-    testImap(body),
+    testImap(settings.imap_host, settings.imap_port, settings.imap_user, imapPassword),
     testSmtpConnection({
-      host: body.smtpHost,
-      port: body.smtpPort,
-      user: body.smtpUser,
-      password: body.smtpPassword,
+      host: settings.smtp_host,
+      port: settings.smtp_port,
+      user: settings.smtp_user,
+      password: smtpPassword,
     }),
   ]);
 
@@ -76,17 +87,15 @@ export async function POST(request: NextRequest): Promise<NextResponse<TestResul
 
 /**
  * Tests an IMAP connection by connecting and immediately logging out.
- * @param config - IMAP connection parameters
+ * @param host - IMAP server hostname
+ * @param port - IMAP server port
+ * @param user - IMAP username
+ * @param password - IMAP password (decrypted)
  * @returns Object with ok flag and optional error message
  */
-async function testImap(config: TestConnectionRequest): Promise<{ ok: boolean; error?: string }> {
+async function testImap(host: string, port: number, user: string, password: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const client = await createImapConnection({
-      host: config.imapHost,
-      port: config.imapPort,
-      user: config.imapUser,
-      password: config.imapPassword,
-    });
+    const client = await createImapConnection({ host, port, user, password });
     await closeImapConnection(client);
     return { ok: true };
   } catch (err) {
