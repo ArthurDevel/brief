@@ -626,6 +626,7 @@ function VaultNotice() {
         <a href="https://supabase.com/" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">
           Supabase Vault
         </a>
+. Your emails are never stored on our servers.
       </span>
     </div>
   );
