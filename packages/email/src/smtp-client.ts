@@ -95,6 +95,30 @@ export async function deleteDraft(client: ImapFlow, draftUid: string): Promise<v
   }
 }
 
+/**
+ * Tests an SMTP connection by calling nodemailer's verify().
+ * @param config - SMTP server connection parameters
+ * @returns Object with ok flag and optional error message
+ */
+export async function testSmtpConnection(config: SmtpConfig): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const transport = nodemailer.createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.port === 465,
+      auth: {
+        user: config.user,
+        pass: config.password,
+      },
+    });
+    await transport.verify();
+    transport.close();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "SMTP connection failed" };
+  }
+}
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================

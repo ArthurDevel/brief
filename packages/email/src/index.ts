@@ -23,6 +23,6 @@ export {
   fetchEmailMetaByUid,
 } from "./imap-client";
 
-export { sendEmail, saveDraft, deleteDraft } from "./smtp-client";
+export { sendEmail, saveDraft, deleteDraft, testSmtpConnection } from "./smtp-client";
 
 export { formatEmailSummaries, formatEmail, formatThread } from "./markdown-formatter";

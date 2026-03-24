@@ -14,6 +14,7 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import GeneralTab from "./GeneralTab";
+import EmailTab from "./EmailTab";
 import BillingTab from "./BillingTab";
 import FeatureRequestsTab from "./FeatureRequestsTab";
 import ScheduleTab from "./ScheduleTab";
@@ -24,6 +25,7 @@ import ScheduleTab from "./ScheduleTab";
 
 const TABS = [
   { id: "general", label: "General" },
+  { id: "email", label: "Email" },
   { id: "schedule", label: "Schedule" },
   { id: "billing", label: "Billing" },
   { id: "feature-requests", label: "Feature Requests" },
@@ -68,6 +70,7 @@ function SettingsContent() {
 
       {/* Tab content */}
       {activeTab === "general" && <GeneralTab />}
+      {activeTab === "email" && <EmailTab />}
       {activeTab === "billing" && <BillingTab />}
       {activeTab === "feature-requests" && <FeatureRequestsTab />}
       {activeTab === "schedule" && <ScheduleTab />}
