@@ -1,13 +1,14 @@
 /**
  * Email settings tab -- provider selection, IMAP/SMTP configuration.
  *
- * Lets the user pick a provider (Gmail, Outlook, Custom) which pre-fills
- * known host/port values and shows provider-specific setup instructions.
+ * Lets the user pick a provider (Gmail, Outlook, Custom). For Gmail/Outlook,
+ * input fields are embedded inline in the setup instructions. For Custom,
+ * full IMAP and SMTP sections are shown.
  * A single Save button tests the connection before persisting.
  *
  * Responsibilities:
- * - Render provider selector with setup instructions
- * - Render IMAP and SMTP configuration forms
+ * - Render provider selector with inline setup instructions
+ * - Render full IMAP/SMTP forms for Custom provider
  * - Test connection before saving via /api/user/settings/test-connection
  * - Save email settings via /api/user/settings
  */
@@ -113,19 +114,24 @@ export default function EmailTab() {
   // Provider
   const [provider, setProvider] = useState<Provider>("gmail");
 
-  // IMAP state
+  // Shared fields for Gmail/Outlook (single email + password)
+  const [email, setEmail] = useState("");
+  const [appPassword, setAppPassword] = useState("");
+
+  // IMAP state (Custom only)
   const [imapHost, setImapHost] = useState("");
   const [imapPort, setImapPort] = useState(993);
   const [imapUser, setImapUser] = useState("");
   const [imapPassword, setImapPassword] = useState("");
-  const [hasImapPassword, setHasImapPassword] = useState(false);
 
-  // SMTP state
+  // SMTP state (Custom only)
   const [smtpHost, setSmtpHost] = useState("");
   const [smtpPort, setSmtpPort] = useState(587);
   const [smtpUser, setSmtpUser] = useState("");
   const [smtpPassword, setSmtpPassword] = useState("");
-  const [hasSmtpPassword, setHasSmtpPassword] = useState(false);
+
+  // Tracks whether passwords already exist on the server
+  const [hasPassword, setHasPassword] = useState(false);
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -138,15 +144,23 @@ export default function EmailTab() {
     async function load() {
       try {
         const settings = await fetchSettings();
-        setImapHost(settings.imapHost);
-        setImapPort(settings.imapPort);
-        setImapUser(settings.imapUser);
-        setHasImapPassword(settings.hasImapPassword);
-        setSmtpHost(settings.smtpHost);
-        setSmtpPort(settings.smtpPort);
-        setSmtpUser(settings.smtpUser);
-        setHasSmtpPassword(settings.hasSmtpPassword);
-        setProvider(detectProvider(settings.imapHost));
+        const detected = detectProvider(settings.imapHost);
+        setProvider(detected);
+
+        if (detected !== "custom") {
+          // Gmail/Outlook: single email + password
+          setEmail(settings.imapUser);
+          setHasPassword(settings.hasImapPassword);
+        } else {
+          // Custom: separate IMAP/SMTP fields
+          setImapHost(settings.imapHost);
+          setImapPort(settings.imapPort);
+          setImapUser(settings.imapUser);
+          setSmtpHost(settings.smtpHost);
+          setSmtpPort(settings.smtpPort);
+          setSmtpUser(settings.smtpUser);
+          setHasPassword(settings.hasImapPassword && settings.hasSmtpPassword);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load settings");
       } finally {
@@ -161,50 +175,80 @@ export default function EmailTab() {
   // ============================================================================
 
   /**
-   * Applies a provider preset, filling in known host/port values.
-   * Keeps user/password fields untouched.
+   * Switches the provider, resets fields, and applies presets.
    * @param newProvider - The provider to switch to
    */
   function handleProviderChange(newProvider: Provider) {
     setProvider(newProvider);
     setError(null);
     setSaved(false);
-    const preset = PROVIDER_PRESETS[newProvider];
-    setImapHost(preset.imapHost);
-    setImapPort(preset.imapPort);
-    setSmtpHost(preset.smtpHost);
-    setSmtpPort(preset.smtpPort);
 
-    // For Gmail and Outlook, SMTP user is the same as IMAP user
     if (newProvider !== "custom") {
-      setSmtpUser(imapUser);
+      const preset = PROVIDER_PRESETS[newProvider];
+      setImapHost(preset.imapHost);
+      setImapPort(preset.imapPort);
+      setSmtpHost(preset.smtpHost);
+      setSmtpPort(preset.smtpPort);
+    } else {
+      setImapHost("");
+      setImapPort(993);
+      setSmtpHost("");
+      setSmtpPort(587);
     }
   }
 
   /**
    * Tests the connection, then saves if successful.
-   * Shows specific errors for IMAP/SMTP failures.
+   * For Gmail/Outlook, uses the shared email + appPassword for both protocols.
+   * For Custom, uses separate IMAP/SMTP fields.
    */
   async function handleSave() {
     setSaving(true);
     setError(null);
     setSaved(false);
 
-    // Require passwords for a connection test
-    const needsImapPassword = !hasImapPassword && !imapPassword;
-    const needsSmtpPassword = !hasSmtpPassword && !smtpPassword;
-    if (needsImapPassword || needsSmtpPassword) {
-      setError("Please enter passwords for both IMAP and SMTP.");
+    // Build the connection params based on provider
+    let imapH: string, imapP: number, imapU: string, imapPw: string;
+    let smtpH: string, smtpP: number, smtpU: string, smtpPw: string;
+
+    if (provider !== "custom") {
+      const preset = PROVIDER_PRESETS[provider];
+      imapH = preset.imapHost;
+      imapP = preset.imapPort;
+      imapU = email;
+      imapPw = appPassword;
+      smtpH = preset.smtpHost;
+      smtpP = preset.smtpPort;
+      smtpU = email;
+      smtpPw = appPassword;
+    } else {
+      imapH = imapHost;
+      imapP = imapPort;
+      imapU = imapUser;
+      imapPw = imapPassword;
+      smtpH = smtpHost;
+      smtpP = smtpPort;
+      smtpU = smtpUser;
+      smtpPw = smtpPassword;
+    }
+
+    // Require passwords
+    const needsPassword = !hasPassword && !imapPw;
+    const needsSmtpPassword = !hasPassword && !smtpPw;
+    if (needsPassword || needsSmtpPassword) {
+      setError(provider !== "custom"
+        ? "Please enter your app password."
+        : "Please enter passwords for both IMAP and SMTP.");
       setSaving(false);
       return;
     }
 
     try {
       // Step 1: Test connection (only if new passwords were provided)
-      if (imapPassword && smtpPassword) {
+      if (imapPw && smtpPw) {
         const result = await testConnection({
-          imapHost, imapPort, imapUser, imapPassword,
-          smtpHost, smtpPort, smtpUser, smtpPassword,
+          imapHost: imapH, imapPort: imapP, imapUser: imapU, imapPassword: imapPw,
+          smtpHost: smtpH, smtpPort: smtpP, smtpUser: smtpU, smtpPassword: smtpPw,
         });
 
         const errors: string[] = [];
@@ -219,18 +263,21 @@ export default function EmailTab() {
 
       // Step 2: Save settings
       const payload: Record<string, unknown> = {
-        imapHost, imapPort, imapUser,
-        smtpHost, smtpPort, smtpUser,
+        imapHost: imapH, imapPort: imapP, imapUser: imapU,
+        smtpHost: smtpH, smtpPort: smtpP, smtpUser: smtpU,
       };
-      if (imapPassword) payload.imapPassword = imapPassword;
-      if (smtpPassword) payload.smtpPassword = smtpPassword;
+      if (imapPw) payload.imapPassword = imapPw;
+      if (smtpPw) payload.smtpPassword = smtpPw;
 
       await saveSettings(payload);
 
-      if (imapPassword) setHasImapPassword(true);
-      if (smtpPassword) setHasSmtpPassword(true);
-      setImapPassword("");
-      setSmtpPassword("");
+      setHasPassword(true);
+      if (provider !== "custom") {
+        setAppPassword("");
+      } else {
+        setImapPassword("");
+        setSmtpPassword("");
+      }
       setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
@@ -269,9 +316,37 @@ export default function EmailTab() {
           ))}
         </div>
 
-        {/* Provider-specific instructions */}
-        {provider === "gmail" && <ProviderInstructions provider="gmail" />}
-        {provider === "outlook" && <ProviderInstructions provider="outlook" />}
+        {/* Gmail inline instructions */}
+        {provider === "gmail" && (
+          <GmailInstructions
+            email={email}
+            onEmailChange={setEmail}
+            appPassword={appPassword}
+            onAppPasswordChange={setAppPassword}
+            hasPassword={hasPassword}
+            saving={saving}
+            saved={saved}
+            error={error}
+            onSave={handleSave}
+          />
+        )}
+
+        {/* Outlook inline instructions */}
+        {provider === "outlook" && (
+          <OutlookInstructions
+            email={email}
+            onEmailChange={setEmail}
+            appPassword={appPassword}
+            onAppPasswordChange={setAppPassword}
+            hasPassword={hasPassword}
+            saving={saving}
+            saved={saved}
+            error={error}
+            onSave={handleSave}
+          />
+        )}
+
+        {/* Custom hint */}
         {provider === "custom" && (
           <p className="mt-4 text-sm text-gray-500">
             Enter your IMAP and SMTP server details below.
@@ -279,96 +354,158 @@ export default function EmailTab() {
         )}
       </section>
 
-      {/* Error banner */}
-      {error && (
+      {/* Custom: error banner + full IMAP/SMTP sections */}
+      {provider === "custom" && error && (
         <div className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      {/* IMAP Configuration */}
-      <section className="border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-bold text-black">IMAP (Incoming Mail)</h2>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <InputField
-            label="Host"
-            value={imapHost}
-            onChange={setImapHost}
-            placeholder="imap.example.com"
-            disabled={provider !== "custom"}
-          />
-          <InputField
-            label="Port"
-            type="number"
-            value={String(imapPort)}
-            onChange={(v) => setImapPort(Number(v))}
-            disabled={provider !== "custom"}
-          />
-          <InputField
-            label="Email"
-            value={imapUser}
-            onChange={(v) => {
-              setImapUser(v);
-              // Sync SMTP user for known providers
-              if (provider !== "custom") setSmtpUser(v);
-            }}
-            placeholder="you@example.com"
-          />
-          <InputField
-            label={hasImapPassword
-              ? `${provider === "gmail" ? "App Password" : "Password"} (leave blank to keep current)`
-              : provider === "gmail" ? "App Password" : "Password"}
-            type="password"
-            value={imapPassword}
-            onChange={setImapPassword}
-            placeholder={hasImapPassword ? "********" : provider === "gmail" ? "16-character app password" : "App password"}
-          />
-          <VaultNotice />
-        </div>
-      </section>
+      {provider === "custom" && (
+        <>
+          <section className="border border-gray-200 bg-white p-6">
+            <h2 className="mb-4 text-lg font-bold text-black">IMAP (Incoming Mail)</h2>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <InputField label="Host" value={imapHost} onChange={setImapHost} placeholder="imap.example.com" />
+              <InputField label="Port" type="number" value={String(imapPort)} onChange={(v) => setImapPort(Number(v))} />
+              <InputField label="Email" value={imapUser} onChange={setImapUser} placeholder="you@example.com" />
+              <div>
+                <InputField
+                  label={hasPassword ? "Password (leave blank to keep current)" : "Password"}
+                  type="password"
+                  value={imapPassword}
+                  onChange={setImapPassword}
+                  placeholder={hasPassword ? "********" : "App password"}
+                />
+                <VaultNotice />
+              </div>
+            </div>
+          </section>
 
-      {/* SMTP Configuration */}
-      <section className="border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-bold text-black">SMTP (Outgoing Mail)</h2>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <InputField
-            label="Host"
-            value={smtpHost}
-            onChange={setSmtpHost}
-            placeholder="smtp.example.com"
-            disabled={provider !== "custom"}
-          />
-          <InputField
-            label="Port"
-            type="number"
-            value={String(smtpPort)}
-            onChange={(v) => setSmtpPort(Number(v))}
-            disabled={provider !== "custom"}
-          />
-          <InputField
-            label="Email"
-            value={smtpUser}
-            onChange={setSmtpUser}
-            placeholder="you@example.com"
-          />
-          <InputField
-            label={hasSmtpPassword
-              ? `${provider === "gmail" ? "App Password" : "Password"} (leave blank to keep current)`
-              : provider === "gmail" ? "App Password" : "Password"}
-            type="password"
-            value={smtpPassword}
-            onChange={setSmtpPassword}
-            placeholder={hasSmtpPassword ? "********" : provider === "gmail" ? "16-character app password" : "App password"}
-          />
-          <VaultNotice />
-        </div>
-      </section>
+          <section className="border border-gray-200 bg-white p-6">
+            <h2 className="mb-4 text-lg font-bold text-black">SMTP (Outgoing Mail)</h2>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <InputField label="Host" value={smtpHost} onChange={setSmtpHost} placeholder="smtp.example.com" />
+              <InputField label="Port" type="number" value={String(smtpPort)} onChange={(v) => setSmtpPort(Number(v))} />
+              <InputField label="Email" value={smtpUser} onChange={setSmtpUser} placeholder="you@example.com" />
+              <div>
+                <InputField
+                  label={hasPassword ? "Password (leave blank to keep current)" : "Password"}
+                  type="password"
+                  value={smtpPassword}
+                  onChange={setSmtpPassword}
+                  placeholder={hasPassword ? "********" : "App password"}
+                />
+                <VaultNotice />
+              </div>
+            </div>
+          </section>
+        </>
+      )}
 
-      {/* Save */}
-      <div className="flex items-center gap-3">
+      {/* Save (Custom only -- Gmail/Outlook have it inline) */}
+      {provider === "custom" && (
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-black px-6 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+          >
+            {saving ? "Testing connection..." : "Test & Save"}
+          </button>
+          {saved && (
+            <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
+              Connection verified and saved
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// HELPER COMPONENTS
+// ============================================================================
+
+interface ProviderInstructionsProps {
+  email: string;
+  onEmailChange: (value: string) => void;
+  appPassword: string;
+  onAppPasswordChange: (value: string) => void;
+  hasPassword: boolean;
+  saving: boolean;
+  saved: boolean;
+  error: string | null;
+  onSave: () => void;
+}
+
+/**
+ * Gmail setup instructions with inline email and app password fields.
+ */
+function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, saving, saved, error, onSave }: ProviderInstructionsProps) {
+  return (
+    <div className="mt-4 text-sm text-gray-600">
+      <ol className="list-decimal list-inside space-y-4">
+        <li>
+          Enter your Gmail address
+          <div className="mt-1.5 ml-5">
+            <InlineInput
+              value={email}
+              onChange={onEmailChange}
+              placeholder="you@gmail.com"
+            />
+          </div>
+        </li>
+        <li>
+          Make sure{" "}
+          <a
+            href="https://myaccount.google.com/signinoptions/two-step-verification"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 underline"
+          >
+            2-Step Verification
+          </a>
+          {" "}is enabled on your Google Account
+        </li>
+        <li>
+          Go to{" "}
+          <a
+            href="https://myaccount.google.com/apppasswords"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 underline"
+          >
+            App passwords
+          </a>
+          {" "}and create a new one (type a name, e.g. &quot;Mail&quot;)
+        </li>
+        <li>
+          {hasPassword ? "Paste your new app password (leave blank to keep current)" : "Paste your app password"}
+          <div className="mt-1.5 ml-5">
+            <InlineInput
+              value={appPassword}
+              onChange={onAppPasswordChange}
+              placeholder={hasPassword ? "********" : "16-character app password"}
+              type="password"
+            />
+            <VaultNotice />
+          </div>
+        </li>
+      </ol>
+
+      {error && (
+        <div className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-5 flex items-center gap-3">
         <button
           type="button"
-          onClick={handleSave}
+          onClick={onSave}
           disabled={saving}
           className="bg-black px-6 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
         >
@@ -384,54 +521,23 @@ export default function EmailTab() {
   );
 }
 
-// ============================================================================
-// HELPER COMPONENTS
-// ============================================================================
-
 /**
- * Renders provider-specific setup instructions.
- * @param provider - "gmail" or "outlook"
+ * Outlook setup instructions with inline email and app password fields.
  */
-function ProviderInstructions({ provider }: { provider: "gmail" | "outlook" }) {
-  if (provider === "gmail") {
-    return (
-      <div className="mt-4 space-y-2 text-sm text-gray-600">
-        <p className="font-medium text-gray-800">Setup instructions for Gmail:</p>
-        <ol className="list-decimal list-inside space-y-1">
-          <li>
-            Make sure{" "}
-            <a
-              href="https://myaccount.google.com/signinoptions/two-step-verification"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-600 underline"
-            >
-              2-Step Verification
-            </a>
-            {" "}is enabled on your Google Account
-          </li>
-          <li>
-            Go to{" "}
-            <a
-              href="https://myaccount.google.com/apppasswords"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-600 underline"
-            >
-              App passwords
-            </a>
-          </li>
-          <li>Create a new app password (select &quot;Mail&quot; or type a custom name)</li>
-          <li>Copy the 16-character password and paste it below</li>
-        </ol>
-      </div>
-    );
-  }
-
+function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, saving, saved, error, onSave }: ProviderInstructionsProps) {
   return (
-    <div className="mt-4 space-y-2 text-sm text-gray-600">
-      <p className="font-medium text-gray-800">Setup instructions for Outlook / Microsoft 365:</p>
-      <ol className="list-decimal list-inside space-y-1">
+    <div className="mt-4 text-sm text-gray-600">
+      <ol className="list-decimal list-inside space-y-4">
+        <li>
+          Enter your Outlook email address
+          <div className="mt-1.5 ml-5">
+            <InlineInput
+              value={email}
+              onChange={onEmailChange}
+              placeholder="you@outlook.com"
+            />
+          </div>
+        </li>
         <li>
           Sign in to your{" "}
           <a
@@ -466,12 +572,45 @@ function ProviderInstructions({ provider }: { provider: "gmail" | "outlook" }) {
             App passwords
           </a>
           {" "}and create a new one
+          <p className="mt-2 ml-5 text-xs text-gray-400">
+            For work/school accounts, your admin may need to enable IMAP access.
+          </p>
         </li>
-        <li>Copy the generated password and paste it below</li>
+        <li>
+          {hasPassword ? "Paste your new app password (leave blank to keep current)" : "Paste your app password"}
+          <div className="mt-1.5 ml-5">
+            <InlineInput
+              value={appPassword}
+              onChange={onAppPasswordChange}
+              placeholder={hasPassword ? "********" : "App password"}
+              type="password"
+            />
+            <VaultNotice />
+          </div>
+        </li>
       </ol>
-      <p className="mt-1 text-xs text-gray-400">
-        For work/school accounts, your admin may need to enable IMAP access.
-      </p>
+
+      {error && (
+        <div className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-5 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="bg-black px-6 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+        >
+          {saving ? "Testing connection..." : "Test & Save"}
+        </button>
+        {saved && (
+          <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
+            Connection verified and saved
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -492,16 +631,34 @@ function VaultNotice() {
   );
 }
 
+interface InlineInputProps {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+}
+
+function InlineInput({ value, onChange, placeholder, type = "text" }: InlineInputProps) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full max-w-sm border border-gray-300 px-3 py-1.5 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+    />
+  );
+}
+
 interface InputFieldProps {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   type?: string;
-  disabled?: boolean;
 }
 
-function InputField({ label, value, onChange, placeholder, type = "text", disabled = false }: InputFieldProps) {
+function InputField({ label, value, onChange, placeholder, type = "text" }: InputFieldProps) {
   return (
     <div>
       <label className="mb-1 block text-sm font-medium text-gray-700">{label}</label>
@@ -510,8 +667,7 @@ function InputField({ label, value, onChange, placeholder, type = "text", disabl
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        disabled={disabled}
-        className="w-full border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black disabled:bg-gray-100 disabled:text-gray-500"
+        className="w-full border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
       />
     </div>
   );

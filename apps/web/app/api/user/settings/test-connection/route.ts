@@ -6,16 +6,15 @@
  *
  * Responsibilities:
  * - Authenticate the request via Supabase session
- * - Test IMAP connection via ImapFlow
- * - Test SMTP connection via nodemailer verify()
+ * - Test IMAP connection via createImapConnection
+ * - Test SMTP connection via testSmtpConnection
  * - Return per-protocol success/error results
  */
 
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
-import { createImapConnection, closeImapConnection } from "@dublin/email";
-import nodemailer from "nodemailer";
+import { createImapConnection, closeImapConnection, testSmtpConnection } from "@dublin/email";
 
 // ============================================================================
 // TYPES
@@ -60,7 +59,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<TestResul
   // Test both connections in parallel
   const [imapResult, smtpResult] = await Promise.all([
     testImap(body),
-    testSmtp(body),
+    testSmtpConnection({
+      host: body.smtpHost,
+      port: body.smtpPort,
+      user: body.smtpUser,
+      password: body.smtpPassword,
+    }),
   ]);
 
   return NextResponse.json({ imap: imapResult, smtp: smtpResult });
@@ -87,29 +91,5 @@ async function testImap(config: TestConnectionRequest): Promise<{ ok: boolean; e
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "IMAP connection failed" };
-  }
-}
-
-/**
- * Tests an SMTP connection by calling nodemailer's verify().
- * @param config - SMTP connection parameters
- * @returns Object with ok flag and optional error message
- */
-async function testSmtp(config: TestConnectionRequest): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const transport = nodemailer.createTransport({
-      host: config.smtpHost,
-      port: config.smtpPort,
-      secure: config.smtpPort === 465,
-      auth: {
-        user: config.smtpUser,
-        pass: config.smtpPassword,
-      },
-    });
-    await transport.verify();
-    transport.close();
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "SMTP connection failed" };
   }
 }
