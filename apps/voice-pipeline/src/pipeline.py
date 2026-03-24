@@ -44,8 +44,9 @@ from src.cost_tracker import CostTracker
 from src.langfuse_observer import LangfuseObserver
 from src.tracked_services import TrackedDeepgramTTSService, TrackedOpenAILLMService, UsageTracker
 from src.prompt import build_system_prompt
-from src.session import ActiveSession, SmtpConfig, UserContext
+from src.session import ActiveSession, SmtpConfig, UserContext, get_last_session_end_time
 from src.tools.definitions import get_tool_definitions
+from src.tools.email_client import count_emails_since, count_unread_emails
 from src.tools.handlers import ActionInput, handle_tool_call
 
 
@@ -159,10 +160,31 @@ def create_pipeline(
         sample_rate=sample_rate,
     )
 
+    # -- Fetch email count for greeting --
+    email_context: str | None = None
+    try:
+        last_ended_at = get_last_session_end_time(session.user_id, supabase)
+        if last_ended_at is None:
+            count = count_unread_emails(imap_holder["client"])
+            if count > 0:
+                email_context = f"This is the user's first call. They have {count} unread emails in their inbox."
+            else:
+                email_context = "This is the user's first call. They have no unread emails."
+        else:
+            since_date = last_ended_at.date()
+            count = count_emails_since(imap_holder["client"], since_date)
+            if count > 0:
+                email_context = f"You have {count} new emails since the last call."
+            else:
+                email_context = "No new emails since the last call."
+    except Exception:
+        logger.warning("[pipeline] Failed to fetch email count for greeting, skipping")
+
     # -- Build system prompt and LLM context --
     system_prompt = build_system_prompt(
         user_context.memory_entries,
         user_context.tool_approval_config,
+        email_context=email_context,
     )
 
     tools = get_tool_definitions()
