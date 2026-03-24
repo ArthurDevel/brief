@@ -1,7 +1,7 @@
 /**
- * General settings tab -- email config, phone, PIN, voice, tool approvals, memory.
+ * General settings tab -- phone, PIN, voice, tool approvals, memory.
  *
- * - Text input sections (IMAP, SMTP, phone, PIN): show a Save button when there are pending changes
+ * - Text input sections (phone, PIN): show a Save button when there are pending changes
  * - Selectors, sliders, dropdowns (voice, speed, tool approvals): auto-save on change
  * - Memory entries: save/delete immediately via their own buttons
  */
@@ -112,14 +112,6 @@ async function deleteMemoryEntry(id: string): Promise<void> {
 
 export default function GeneralTab() {
   // Form state
-  const [imapHost, setImapHost] = useState("");
-  const [imapPort, setImapPort] = useState(993);
-  const [imapUser, setImapUser] = useState("");
-  const [imapPassword, setImapPassword] = useState("");
-  const [smtpHost, setSmtpHost] = useState("");
-  const [smtpPort, setSmtpPort] = useState(587);
-  const [smtpUser, setSmtpUser] = useState("");
-  const [smtpPassword, setSmtpPassword] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [pin, setPin] = useState("");
   const [voicePreference, setVoicePreference] = useState(DEFAULT_VOICE);
@@ -131,13 +123,9 @@ export default function GeneralTab() {
   const [toolApprovalConfig, setToolApprovalConfig] = useState<ToolApprovalConfig>({});
   const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([]);
   const [newMemoryContent, setNewMemoryContent] = useState("");
-  const [hasImapPassword, setHasImapPassword] = useState(false);
-  const [hasSmtpPassword, setHasSmtpPassword] = useState(false);
   const [hasPin, setHasPin] = useState(false);
 
   // Saved state for detecting pending text changes
-  const [savedImap, setSavedImap] = useState({ host: "", port: 993, user: "" });
-  const [savedSmtp, setSavedSmtp] = useState({ host: "", port: 587, user: "" });
   const [savedPhone, setSavedPhone] = useState("");
 
   // UI state
@@ -148,15 +136,11 @@ export default function GeneralTab() {
 
   // Ref to always have latest form values for auto-save without stale closures
   const formRef = useRef({
-    imapHost: "", imapPort: 993, imapUser: "",
-    smtpHost: "", smtpPort: 587, smtpUser: "",
     voicePreference: DEFAULT_VOICE, voiceSpeed: 1.0,
     toolApprovalConfig: {} as ToolApprovalConfig,
   });
   // Keep ref in sync
   formRef.current = {
-    imapHost, imapPort, imapUser,
-    smtpHost, smtpPort, smtpUser,
     voicePreference, voiceSpeed,
     toolApprovalConfig,
   };
@@ -166,12 +150,6 @@ export default function GeneralTab() {
   const autoSave = useCallback(async (overrides?: Record<string, unknown>, section?: string) => {
     const f = formRef.current;
     const payload: Record<string, unknown> = {
-      imapHost: f.imapHost,
-      imapPort: f.imapPort,
-      imapUser: f.imapUser,
-      smtpHost: f.smtpHost,
-      smtpPort: f.smtpPort,
-      smtpUser: f.smtpUser,
       voicePreference: f.voicePreference,
       voiceSpeed: f.voiceSpeed,
       toolApprovalConfig: f.toolApprovalConfig,
@@ -199,22 +177,12 @@ export default function GeneralTab() {
           fetchVoices(),
         ]);
         setVoices(voiceList);
-        setImapHost(settings.imapHost);
-        setImapPort(settings.imapPort);
-        setImapUser(settings.imapUser);
-        setHasImapPassword(settings.hasImapPassword);
-        setSmtpHost(settings.smtpHost);
-        setSmtpPort(settings.smtpPort);
-        setSmtpUser(settings.smtpUser);
-        setHasSmtpPassword(settings.hasSmtpPassword);
         setPhoneNumber(settings.phoneNumber ?? "");
         setHasPin(settings.hasPin);
         setVoicePreference(settings.voicePreference);
         setVoiceSpeed(settings.voiceSpeed ?? 1.0);
         setToolApprovalConfig(settings.toolApprovalConfig);
         setMemoryEntries(memory);
-        setSavedImap({ host: settings.imapHost, port: settings.imapPort, user: settings.imapUser });
-        setSavedSmtp({ host: settings.smtpHost, port: settings.smtpPort, user: settings.smtpUser });
         setSavedPhone(settings.phoneNumber ?? "");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load settings");
@@ -236,46 +204,10 @@ export default function GeneralTab() {
   }, []);
 
   // Pending change detection
-  const imapDirty = imapHost !== savedImap.host || imapPort !== savedImap.port || imapUser !== savedImap.user || imapPassword !== "";
-  const smtpDirty = smtpHost !== savedSmtp.host || smtpPort !== savedSmtp.port || smtpUser !== savedSmtp.user || smtpPassword !== "";
   const phoneDirty = phoneNumber !== savedPhone;
   const pinDirty = pin !== "";
 
   // Section save handlers
-  async function handleSaveImap() {
-    setSavingSection("imap");
-    setError(null);
-    try {
-      const payload: Record<string, unknown> = { imapHost, imapPort, imapUser };
-      if (imapPassword) payload.imapPassword = imapPassword;
-      await autoSave(payload, "imap");
-      setSavedImap({ host: imapHost, port: imapPort, user: imapUser });
-      if (imapPassword) setHasImapPassword(true);
-      setImapPassword("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save IMAP settings");
-    } finally {
-      setSavingSection(null);
-    }
-  }
-
-  async function handleSaveSmtp() {
-    setSavingSection("smtp");
-    setError(null);
-    try {
-      const payload: Record<string, unknown> = { smtpHost, smtpPort, smtpUser };
-      if (smtpPassword) payload.smtpPassword = smtpPassword;
-      await autoSave(payload, "smtp");
-      setSavedSmtp({ host: smtpHost, port: smtpPort, user: smtpUser });
-      if (smtpPassword) setHasSmtpPassword(true);
-      setSmtpPassword("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save SMTP settings");
-    } finally {
-      setSavingSection(null);
-    }
-  }
-
   async function handleSavePhone() {
     setSavingSection("phone");
     setError(null);
@@ -407,54 +339,6 @@ export default function GeneralTab() {
       )}
 
       <div className="space-y-8">
-        {/* IMAP Configuration */}
-        <section className="border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-bold text-black">IMAP Configuration</h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <InputField label="Host" value={imapHost} onChange={setImapHost} placeholder="imap.gmail.com" />
-            <InputField label="Port" type="number" value={String(imapPort)} onChange={(v) => setImapPort(Number(v))} />
-            <InputField label="User" value={imapUser} onChange={setImapUser} placeholder="you@gmail.com" />
-            <InputField
-              label={hasImapPassword ? "Password (leave blank to keep current)" : "Password"}
-              type="password"
-              value={imapPassword}
-              onChange={setImapPassword}
-              placeholder={hasImapPassword ? "********" : "App password"}
-            />
-          </div>
-          <div className="mt-4 flex justify-end">
-            {imapDirty ? (
-              <SectionSaveButton onClick={handleSaveImap} saving={savingSection === "imap"} />
-            ) : savedSection === "imap" ? (
-              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
-            ) : null}
-          </div>
-        </section>
-
-        {/* SMTP Configuration */}
-        <section className="border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-bold text-black">SMTP Configuration</h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <InputField label="Host" value={smtpHost} onChange={setSmtpHost} placeholder="smtp.gmail.com" />
-            <InputField label="Port" type="number" value={String(smtpPort)} onChange={(v) => setSmtpPort(Number(v))} />
-            <InputField label="User" value={smtpUser} onChange={setSmtpUser} placeholder="you@gmail.com" />
-            <InputField
-              label={hasSmtpPassword ? "Password (leave blank to keep current)" : "Password"}
-              type="password"
-              value={smtpPassword}
-              onChange={setSmtpPassword}
-              placeholder={hasSmtpPassword ? "********" : "App password"}
-            />
-          </div>
-          <div className="mt-4 flex justify-end">
-            {smtpDirty ? (
-              <SectionSaveButton onClick={handleSaveSmtp} saving={savingSection === "smtp"} />
-            ) : savedSection === "smtp" ? (
-              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
-            ) : null}
-          </div>
-        </section>
-
         {/* Phone Number */}
         <section className="border border-gray-200 bg-white p-6">
           <h2 className="mb-4 text-lg font-bold text-black">Phone Number</h2>
