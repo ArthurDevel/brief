@@ -119,6 +119,11 @@ class TestSearchEmails:
         results = search_emails(imap_client, "nonexistent-query-xyz")
         assert results == []
 
+    def test_gmail_style_from_query(self, imap_client: IMAPClient):
+        results = search_emails(imap_client, "from:bob@example.com")
+        assert len(results) == 1
+        assert results[0].subject == "Invoice #1234"
+
 
 # --------------------------------------------------------------------------
 # read_email

@@ -33,6 +33,7 @@ from imapclient import IMAPClient
 from markdownify import markdownify
 
 from src.session import ImapConfig, SmtpConfig
+from src.tools.query_translator import translate_query
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +223,8 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
     """
     client.select_folder("INBOX", readonly=True)
 
-    uids = client.search(["OR", "SUBJECT", query, "FROM", query])  # type: ignore[arg-type]
+    criteria = translate_query(query)
+    uids = client.search(criteria)  # type: ignore[arg-type]
     if not uids:
         return []
 
