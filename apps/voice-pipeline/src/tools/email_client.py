@@ -45,6 +45,7 @@ T = TypeVar("T")
 # ============================================================================
 
 SNIPPET_LENGTH = 100
+PARTIAL_FETCH_BYTES = 8192
 
 
 def resolve_special_use_folder(client: IMAPClient, flag: bytes) -> str:
@@ -234,8 +235,9 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
 def _fetch_summaries(client: IMAPClient, uids: list[int]) -> list[EmailSummary]:
     """Fetch email summaries in a single IMAP call.
 
-    Fetches ENVELOPE, BODYSTRUCTURE, and BODY.PEEK[TEXT] in one batch,
-    then extracts snippets locally without additional round trips.
+    Uses a partial fetch (first PARTIAL_FETCH_BYTES bytes) for BODY.PEEK[TEXT]
+    to avoid downloading full email bodies. If no text snippet can be extracted,
+    falls back to using the subject line as snippet.
 
     Args:
         client: Connected IMAPClient.
@@ -244,13 +246,15 @@ def _fetch_summaries(client: IMAPClient, uids: list[int]) -> list[EmailSummary]:
     Returns:
         List of EmailSummary in reverse chronological order.
     """
-    fetch_data = client.fetch(uids, ["ENVELOPE", "BODYSTRUCTURE", "BODY.PEEK[TEXT]"])
+    fetch_data = client.fetch(uids, ["ENVELOPE", "BODYSTRUCTURE", f"BODY.PEEK[TEXT]<0.{PARTIAL_FETCH_BYTES}>"])
 
     messages: list[EmailSummary] = []
     for uid, data in fetch_data.items():
         envelope: Any = data.get(b"ENVELOPE")
         if not envelope:
             continue
+
+        subject = _decode_header(envelope.subject)
 
         # Extract snippet from batch-fetched text body
         bodystructure = data.get(b"BODYSTRUCTURE")
@@ -263,10 +267,14 @@ def _fetch_summaries(client: IMAPClient, uids: list[int]) -> list[EmailSummary]:
                     break
             snippet = _extract_snippet_from_raw_text(raw_text, bodystructure)
 
+        # Fall back to subject if no text snippet could be extracted
+        if not snippet:
+            snippet = subject[:SNIPPET_LENGTH]
+
         messages.append(EmailSummary(
             id=str(uid),
             from_addr=_format_address(envelope.from_),
-            subject=_decode_header(envelope.subject),
+            subject=subject,
             snippet=snippet,
             date=_format_date(envelope.date),
         ))
