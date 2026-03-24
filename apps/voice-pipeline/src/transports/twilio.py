@@ -32,6 +32,7 @@ from pipecat.frames.frames import (
     OutputAudioRawFrame,
     StartFrame,
 )
+from pipecat.pipeline.task import PipelineTask
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.transports.base_transport import BaseTransport, TransportParams
@@ -94,6 +95,15 @@ class TwilioInputTransport(BaseInputTransport):
         self._websocket = websocket
         self._transport = transport
         self._receive_task: Optional[asyncio.Task] = None
+        self._pipeline_task: Optional[PipelineTask] = None
+
+    def set_pipeline_task(self, task: PipelineTask) -> None:
+        """Set the pipeline task to cancel on disconnect.
+
+        Args:
+            task: The PipelineTask to cancel when the Twilio stream ends.
+        """
+        self._pipeline_task = task
 
     async def start(self, frame: StartFrame) -> None:
         """Start the input transport and kick off the WebSocket read loop.
@@ -154,6 +164,13 @@ class TwilioInputTransport(BaseInputTransport):
 
         # Signal pipeline to shut down
         await self.push_frame(EndFrame())
+
+        # Cancel the pipeline task directly so cleanup runs immediately,
+        # mirroring the WebRTC on_client_disconnected handler. Without this,
+        # EndFrame can get stuck downstream and the session lingers for minutes.
+        if self._pipeline_task:
+            logger.info("[twilio] Read loop exited, cancelling pipeline task")
+            await self._pipeline_task.cancel()
 
     async def _handle_message(self, raw: str) -> bool:
         """Process a single Twilio WebSocket message.

@@ -80,7 +80,10 @@ class AudioFrameWatchdog(FrameProcessor):
             self._last_audio_time = time.monotonic()
             self._monitor_task = asyncio.create_task(self._monitor_loop())
 
-        if isinstance(frame, (EndFrame, CancelFrame)):
+        # Only stop the monitor on CancelFrame (pipeline is truly shutting down).
+        # EndFrame may get stuck downstream and never complete the shutdown,
+        # so the watchdog stays active as a safety net.
+        if isinstance(frame, CancelFrame):
             self._stop_monitor()
 
         if isinstance(frame, InputAudioRawFrame):

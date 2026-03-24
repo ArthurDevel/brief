@@ -776,6 +776,10 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         transport, user_context, settings, supabase, transport_type="twilio"
     )
 
+    # Let the input transport cancel the pipeline when the caller hangs up,
+    # mirroring WebRTC's on_client_disconnected handler.
+    transport.input().set_pipeline_task(task)
+
     async def _send_greeting():
         await asyncio.sleep(0.5)
         await task.queue_frames([LLMRunFrame()])

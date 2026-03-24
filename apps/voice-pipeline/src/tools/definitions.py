@@ -41,7 +41,7 @@ def get_tool_definitions() -> list[dict]:
                     "properties": {
                         "limit": {
                             "type": "number",
-                            "description": "Maximum number of emails to return. Defaults to 5.",
+                            "description": "Maximum number of emails to return. Defaults to 20.",
                         },
                     },
                 },
@@ -90,7 +90,12 @@ def get_tool_definitions() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "search_emails",
-                "description": "Search emails by query string. Searches subject, sender, and body.",
+                "description": (
+                    "Search emails via IMAP. Supports Gmail-style operators: "
+                    "from:, to:, subject:, before:YYYY-MM-DD, after:YYYY-MM-DD, "
+                    "has:attachment, is:unread. Plain keywords search subject and sender. "
+                    "Multiple terms are ANDed together."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {

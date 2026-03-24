@@ -544,7 +544,7 @@ def _dispatch_tool(
     config: ImapConfig = imap_holder["config"]
 
     if tool_name == "list_inbox":
-        limit = args.get("limit", 5)
+        limit = args.get("limit", 20)
 
         # Filter out emails with pending removal actions in this session
         if session_id is not None:

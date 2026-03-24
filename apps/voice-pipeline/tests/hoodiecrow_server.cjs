@@ -124,6 +124,21 @@ const SEED_MESSAGES = [
       "--npm-boundary--",
     ].join("\r\n"),
   },
+  // Multipart email with no parseable body parts (only boundary markers, no content)
+  {
+    raw: [
+      "From: Broken Sender <broken@example.com>",
+      "To: testuser@localhost",
+      "Subject: Unparseable body email",
+      "Date: Thu, 13 Mar 2026 09:45:00 +0000",
+      "Message-Id: <msg-unparseable@example.com>",
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/alternative; boundary="empty-boundary"',
+      "",
+      "--empty-boundary",
+      "--empty-boundary--",
+    ].join("\r\n"),
+  },
 ];
 
 const THREAD_MSG_1 = {
