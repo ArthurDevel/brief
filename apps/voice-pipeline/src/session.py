@@ -140,6 +140,37 @@ def start_session(user_id: str, supabase: Client) -> ActiveSession:
     )
 
 
+def get_last_session_end_time(user_id: str, supabase: Client) -> datetime | None:
+    """Get the end time of the user's most recent completed session.
+
+    Args:
+        user_id: The user to look up.
+        supabase: Supabase client for DB operations.
+
+    Returns:
+        The ended_at datetime of the last completed session, or None if no sessions exist.
+    """
+    response = (
+        supabase.table("sessions")
+        .select("ended_at")
+        .eq("user_id", user_id)
+        .not_.is_("ended_at", "null")
+        .order("ended_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return None
+
+    data = cast(list[dict[str, Any]], response.data)
+    ended_at_str = str(data[0]["ended_at"])
+
+    logger.debug("[session] Last session end time for user %s: %s", user_id, ended_at_str)
+
+    return datetime.fromisoformat(ended_at_str)
+
+
 def add_transcript_entry(session: ActiveSession, role: Literal["user", "assistant"], text: str) -> None:
     """Append a transcript entry and immediately flush the full transcript to the database.
 

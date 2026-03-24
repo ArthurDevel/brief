@@ -24,7 +24,7 @@ import email.policy
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from email.message import EmailMessage
 from typing import Any, Callable, TypeVar, cast
 
@@ -227,6 +227,38 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
         return []
 
     return _fetch_summaries(client, uids)
+
+
+def count_emails_since(client: IMAPClient, since: date) -> int:
+    """Count the number of emails in the inbox received since a given date.
+
+    Note: IMAP SINCE is date-granular (not time-granular). It includes all
+    emails from the given date onward, ignoring the time component.
+
+    Args:
+        client: Connected IMAPClient.
+        since: The date from which to count emails (inclusive).
+
+    Returns:
+        Number of emails since the given date.
+    """
+    client.select_folder("INBOX", readonly=True)
+    uids = client.search(["SINCE", since])  # type: ignore[arg-type]
+    return len(uids)
+
+
+def count_unread_emails(client: IMAPClient) -> int:
+    """Count the number of unread emails in the inbox.
+
+    Args:
+        client: Connected IMAPClient.
+
+    Returns:
+        Number of unread (UNSEEN) emails.
+    """
+    client.select_folder("INBOX", readonly=True)
+    uids = client.search(["UNSEEN"])  # type: ignore[arg-type]
+    return len(uids)
 
 
 def _fetch_summaries(client: IMAPClient, uids: list[int]) -> list[EmailSummary]:

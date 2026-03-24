@@ -63,13 +63,15 @@ ALL_TOOLS: list[dict[str, str]] = [
 def build_system_prompt(
     memory_entries: list[MemoryEntry],
     tool_approval_config: dict[str, str],
+    email_context: str | None = None,
 ) -> str:
-    """Assemble BASE_INSTRUCTIONS + user memory section + tool behavior section.
+    """Assemble BASE_INSTRUCTIONS + user memory section + email context + tool behavior section.
 
     Args:
         memory_entries: User's persistent memory entries from the database.
         tool_approval_config: User's per-tool approval overrides
             (tool_name -> classification string).
+        email_context: Optional sentence about new/unread emails for the greeting.
 
     Returns:
         The full system prompt string.
@@ -80,6 +82,10 @@ def build_system_prompt(
     if memory_entries:
         memory_lines = "\n".join(f"- {entry.content}" for entry in memory_entries)
         sections.append(f"You remember the following about this user:\n{memory_lines}")
+
+    # Add email context for greeting (between memory and tool behavior)
+    if email_context:
+        sections.append(f"When you greet the user, briefly mention this:\n{email_context}")
 
     # Add tool behavior section
     sections.append(_build_tool_behavior_section(tool_approval_config))
