@@ -16,7 +16,7 @@ import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
 import { storeSecret, updateSecret } from "@dublin/tools";
-import type { UserSettings } from "@/lib/types";
+import type { UserSettings, CallSchedule } from "@/lib/types";
 import type { ToolApprovalConfig } from "@dublin/tools/src/types";
 
 // ============================================================================
@@ -54,6 +54,7 @@ function mapRowToSettings(row: Record<string, unknown>): UserSettings {
     toolApprovalConfig: (row.tool_approval_config as ToolApprovalConfig) ?? {},
     phoneNumber: (row.phone_number as string) ?? null,
     hasPin: !!row.pin_hash,
+    callSchedule: (row.call_schedule as CallSchedule) ?? null,
   };
 }
 
@@ -100,6 +101,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse<UserSetti
       toolApprovalConfig: {},
       phoneNumber: null,
       hasPin: false,
+      callSchedule: null,
     };
     return NextResponse.json(defaults);
   }
@@ -133,6 +135,16 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
     voice_config: { voice: body.voicePreference, speed: body.voiceSpeed },
     tool_approval_config: body.toolApprovalConfig,
   };
+
+  // Persist call schedule if provided, stripping last_call_at so the frontend cannot overwrite the dedup guard
+  if (body.callSchedule !== undefined) {
+    if (body.callSchedule === null) {
+      upsertData.call_schedule = null;
+    } else {
+      const { last_call_at: _stripped, ...scheduleWithoutDedup } = body.callSchedule;
+      upsertData.call_schedule = scheduleWithoutDedup;
+    }
+  }
 
   // Fetch existing settings to check for pre-existing secret IDs
   const { data: existing } = await supabase

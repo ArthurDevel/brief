@@ -11,4 +11,5 @@ bcrypt
 httpx
 langfuse
 markdownify
+twilio
 pyright
