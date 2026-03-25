@@ -327,13 +327,13 @@ export default function GeneralTab() {
   // ============================================================================
 
   if (loading) {
-    return <p className="text-gray-500">Loading...</p>;
+    return <p className="text-[var(--text-secondary)]">Loading...</p>;
   }
 
   return (
     <div>
       {error && (
-        <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="mb-6 border border-red-200 bg-red-50 p-4 text-[13px] text-red-700">
           {error}
         </div>
       )}
@@ -341,7 +341,7 @@ export default function GeneralTab() {
       <div className="space-y-8">
         {/* Phone Number */}
         <section className="border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-bold text-black">Phone Number</h2>
+          <h2 >Phone Number</h2>
           <InputField
             label="Your phone number (for caller ID authentication)"
             value={phoneNumber}
@@ -352,14 +352,14 @@ export default function GeneralTab() {
             {phoneDirty ? (
               <SectionSaveButton onClick={handleSavePhone} saving={savingSection === "phone"} />
             ) : savedSection === "phone" ? (
-              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>
             ) : null}
           </div>
         </section>
 
         {/* PIN */}
         <section className="border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-bold text-black">PIN</h2>
+          <h2 >PIN</h2>
           <InputField
             label={hasPin ? "Change PIN (4-6 digits, leave blank to keep current)" : "Set PIN (4-6 digits)"}
             type="password"
@@ -371,7 +371,7 @@ export default function GeneralTab() {
             {pinDirty ? (
               <SectionSaveButton onClick={handleSavePin} saving={savingSection === "pin"} />
             ) : savedSection === "pin" ? (
-              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>
             ) : null}
           </div>
         </section>
@@ -379,11 +379,11 @@ export default function GeneralTab() {
         {/* Voice Preference */}
         <section className="border border-gray-200 bg-white p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-bold text-black">Voice Preference</h2>
-            {savedSection === "voice" && <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>}
+            <h2 >Voice Preference</h2>
+            {savedSection === "voice" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
           </div>
           {voices.length === 0 ? (
-            <p className="text-sm text-gray-500">Loading voices...</p>
+            <p className="text-[13px] text-[var(--text-secondary)]">Loading voices...</p>
           ) : (
             <div className="space-y-3 max-h-80 overflow-y-auto">
               {voices.map((voice) => (
@@ -404,8 +404,8 @@ export default function GeneralTab() {
                     className="accent-black"
                   />
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-gray-900 capitalize">{voice.name}</span>
-                    <span className="ml-2 text-xs text-gray-500">
+                    <span className="text-[13px] font-medium  capitalize">{voice.name}</span>
+                    <span className="ml-2 text-xs text-[var(--text-secondary)]">
                       English ({voice.accent} accent)
                     </span>
                   </div>
@@ -416,7 +416,7 @@ export default function GeneralTab() {
                         e.preventDefault();
                         handlePlayPreview(voice.canonicalName, voice.sampleUrl!);
                       }}
-                      className="shrink-0 border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                      className="shrink-0 border border-gray-300 px-3 py-1 text-xs text-[var(--text-secondary)] hover:bg-gray-50"
                     >
                       {playingVoice === voice.canonicalName ? "Stop" : "Preview"}
                     </button>
@@ -430,11 +430,11 @@ export default function GeneralTab() {
         {/* Voice Speed */}
         <section className="border border-gray-200 bg-white p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-bold text-black">Voice Speed</h2>
-            {savedSection === "speed" && <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>}
+            <h2 >Voice Speed</h2>
+            {savedSection === "speed" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-500 w-10">1x</span>
+            <span className="text-[13px] text-[var(--text-secondary)] w-10">1x</span>
             <input
               type="range"
               min={1}
@@ -444,13 +444,13 @@ export default function GeneralTab() {
               onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
               className="flex-1 accent-black"
             />
-            <span className="text-sm text-gray-500 w-12">1.5x</span>
-            <span className="text-sm font-medium text-gray-900 w-12 text-right">{voiceSpeed.toFixed(2)}x</span>
+            <span className="text-[13px] text-[var(--text-secondary)] w-12">1.5x</span>
+            <span className="text-[13px] font-medium  w-12 text-right">{voiceSpeed.toFixed(2)}x</span>
             <button
               type="button"
               onClick={handleSpeedPreview}
               disabled={!voices.find((v) => v.canonicalName === voicePreference)?.sampleUrl}
-              className="shrink-0 border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+              className="shrink-0 border border-gray-300 px-3 py-1 text-xs text-[var(--text-secondary)] hover:bg-gray-50 disabled:opacity-50"
             >
               {previewingSpeed ? "Stop" : "Preview"}
             </button>
@@ -460,23 +460,23 @@ export default function GeneralTab() {
         {/* Tool Approval Toggles */}
         <section className="border border-gray-200 bg-white p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-bold text-black">Tool Approval Settings</h2>
-            {savedSection === "tools" && <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>}
+            <h2 >Tool Approval Settings</h2>
+            {savedSection === "tools" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
           </div>
-          <p className="mb-4 text-sm text-gray-500">
+          <p className="mb-4 text-[13px] text-[var(--text-secondary)]">
             Control which actions require manual approval. &quot;send_email&quot; always requires approval.
           </p>
           <div className="space-y-3">
             {TOOL_NAMES.map((toolName) => (
               <div key={toolName} className="flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-700">{TOOL_LABELS[toolName] ?? toolName}</span>
+                <span className="text-[13px] font-medium text-[var(--text-secondary)]">{TOOL_LABELS[toolName] ?? toolName}</span>
                 <select
                   value={toolApprovalConfig[toolName] ?? ""}
                   onChange={(e) =>
                     handleToolApprovalChange(toolName, e.target.value as ActionClassification)
                   }
                   disabled={toolName === "send_email"}
-                  className="border border-gray-300 px-3 py-1.5 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black disabled:bg-gray-100 disabled:text-gray-500"
+                  className="border border-gray-300 px-3 py-1.5 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black disabled:bg-gray-100 disabled:text-[var(--text-secondary)]"
                 >
                   <option value="">Default</option>
                   {CLASSIFICATION_OPTIONS.map((opt) => (
@@ -492,8 +492,8 @@ export default function GeneralTab() {
 
         {/* Memory Entries */}
         <section className="border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-bold text-black">Memory Entries</h2>
-          <p className="mb-4 text-sm text-gray-500">
+          <h2 >Memory Entries</h2>
+          <p className="mb-4 text-[13px] text-[var(--text-secondary)]">
             Things the assistant remembers about you across calls.
           </p>
 
@@ -503,12 +503,12 @@ export default function GeneralTab() {
               onChange={(e) => setNewMemoryContent(e.target.value)}
               placeholder="Add something for the assistant to remember..."
               rows={2}
-              className="flex-1 border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+              className="flex-1 border border-gray-300 px-3 py-2 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
             />
             <button
               type="button"
               onClick={handleAddMemoryEntry}
-              className="self-end border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              className="self-end border border-gray-300 px-4 py-2 text-[13px] text-[var(--text-secondary)] hover:bg-gray-50"
             >
               Add
             </button>
@@ -517,18 +517,18 @@ export default function GeneralTab() {
           <div className="space-y-3">
             {memoryEntries.map((entry) => (
               <div key={entry.id} className="flex items-start gap-2 border border-gray-200 p-3">
-                <p className="flex-1 whitespace-pre-wrap text-sm text-gray-700">{entry.content}</p>
+                <p className="flex-1 whitespace-pre-wrap text-[13px] text-[var(--text-secondary)]">{entry.content}</p>
                 <button
                   type="button"
                   onClick={() => handleDeleteMemoryEntry(entry.id)}
-                  className="shrink-0 border border-red-300 px-3 py-1 text-sm text-red-700 hover:bg-red-50"
+                  className="shrink-0 border border-red-300 px-3 py-1 text-[13px] text-red-700 hover:bg-red-50"
                 >
                   Delete
                 </button>
               </div>
             ))}
             {memoryEntries.length === 0 && (
-              <p className="text-sm text-gray-400">No memory entries yet.</p>
+              <p className="text-[13px] ">No memory entries yet.</p>
             )}
           </div>
         </section>
@@ -547,7 +547,7 @@ function SectionSaveButton({ onClick, saving }: { onClick: () => void; saving: b
       type="button"
       onClick={onClick}
       disabled={saving}
-      className="bg-black px-4 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+      className="bg-black px-4 py-1.5 text-[13px] font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
     >
       {saving ? "Saving..." : "Save"}
     </button>
@@ -565,13 +565,13 @@ interface InputFieldProps {
 function InputField({ label, value, onChange, placeholder, type = "text" }: InputFieldProps) {
   return (
     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">{label}</label>
+      <label className="mb-1 block text-[13px] font-medium text-[var(--text-secondary)]">{label}</label>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+        className="w-full border border-gray-300 px-3 py-2 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
       />
     </div>
   );

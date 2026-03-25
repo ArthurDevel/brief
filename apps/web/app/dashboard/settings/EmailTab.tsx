@@ -286,24 +286,24 @@ export default function EmailTab() {
   // ============================================================================
 
   if (loading) {
-    return <p className="text-gray-500">Loading...</p>;
+    return <p className="text-[var(--text-secondary)]">Loading...</p>;
   }
 
   return (
     <div className="space-y-8">
       {/* Provider Selector */}
       <section className="border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-bold text-black">Email Provider</h2>
+        <h2 >Email Provider</h2>
         <div className="flex gap-0">
           {PROVIDERS.map((p) => (
             <button
               key={p.id}
               type="button"
               onClick={() => handleProviderChange(p.id)}
-              className={`px-5 py-2 text-sm font-medium border transition-colors ${
+              className={`px-5 py-2 text-[13px] font-medium border transition-colors ${
                 provider === p.id
                   ? "bg-black text-white border-black"
-                  : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                  : "bg-white text-[var(--text-secondary)] border-gray-300 hover:bg-gray-50"
               } ${p.id === "gmail" ? "rounded-l" : ""} ${p.id === "custom" ? "rounded-r" : ""} ${p.id !== "gmail" ? "-ml-px" : ""}`}
             >
               {p.label}
@@ -343,7 +343,7 @@ export default function EmailTab() {
 
         {/* Custom hint */}
         {provider === "custom" && (
-          <p className="mt-4 text-sm text-gray-500">
+          <p className="mt-4 text-[13px] text-[var(--text-secondary)]">
             Enter your IMAP and SMTP server details below.
           </p>
         )}
@@ -351,7 +351,7 @@ export default function EmailTab() {
 
       {/* Custom: error banner + full IMAP/SMTP sections */}
       {provider === "custom" && error && (
-        <div className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="border border-red-200 bg-red-50 p-4 text-[13px] text-red-700">
           {error}
         </div>
       )}
@@ -359,7 +359,7 @@ export default function EmailTab() {
       {provider === "custom" && (
         <>
           <section className="border border-gray-200 bg-white p-6">
-            <h2 className="mb-4 text-lg font-bold text-black">IMAP (Incoming Mail)</h2>
+            <h2 >IMAP (Incoming Mail)</h2>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <InputField label="Host" value={imapHost} onChange={setImapHost} placeholder="imap.example.com" />
               <InputField label="Port" type="number" value={String(imapPort)} onChange={(v) => setImapPort(Number(v))} />
@@ -378,7 +378,7 @@ export default function EmailTab() {
           </section>
 
           <section className="border border-gray-200 bg-white p-6">
-            <h2 className="mb-4 text-lg font-bold text-black">SMTP (Outgoing Mail)</h2>
+            <h2 >SMTP (Outgoing Mail)</h2>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <InputField label="Host" value={smtpHost} onChange={setSmtpHost} placeholder="smtp.example.com" />
               <InputField label="Port" type="number" value={String(smtpPort)} onChange={(v) => setSmtpPort(Number(v))} />
@@ -405,12 +405,12 @@ export default function EmailTab() {
             type="button"
             onClick={handleSave}
             disabled={saving}
-            className="bg-black px-6 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+            className="bg-black px-6 py-2 text-[13px] font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
           >
             {saving ? "Testing connection..." : "Test & Save"}
           </button>
           {saved && (
-            <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
+            <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
               Connection verified and saved
             </span>
           )}
@@ -441,7 +441,7 @@ interface ProviderInstructionsProps {
  */
 function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, saving, saved, error, onSave }: ProviderInstructionsProps) {
   return (
-    <div className="mt-4 text-sm text-gray-600">
+    <div className="mt-4 text-[13px] text-[var(--text-secondary)]">
       <ol className="list-decimal list-inside space-y-4">
         <li>
           Enter your Gmail address
@@ -492,7 +492,7 @@ function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordCha
       </ol>
 
       {error && (
-        <div className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="mt-4 border border-red-200 bg-red-50 p-3 text-[13px] text-red-700">
           {error}
         </div>
       )}
@@ -502,12 +502,12 @@ function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordCha
           type="button"
           onClick={onSave}
           disabled={saving}
-          className="bg-black px-6 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+          className="bg-black px-6 py-2 text-[13px] font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
         >
           {saving ? "Testing connection..." : "Test & Save"}
         </button>
         {saved && (
-          <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
+          <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
             Connection verified and saved
           </span>
         )}
@@ -521,7 +521,7 @@ function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordCha
  */
 function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, saving, saved, error, onSave }: ProviderInstructionsProps) {
   return (
-    <div className="mt-4 text-sm text-gray-600">
+    <div className="mt-4 text-[13px] text-[var(--text-secondary)]">
       <ol className="list-decimal list-inside space-y-4">
         <li>
           Enter your Outlook email address
@@ -567,7 +567,7 @@ function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordC
             App passwords
           </a>
           {" "}and create a new one
-          <p className="mt-2 ml-5 text-xs text-gray-400">
+          <p className="mt-2 ml-5 text-xs ">
             For work/school accounts, your admin may need to enable IMAP access.
           </p>
         </li>
@@ -586,7 +586,7 @@ function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordC
       </ol>
 
       {error && (
-        <div className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="mt-4 border border-red-200 bg-red-50 p-3 text-[13px] text-red-700">
           {error}
         </div>
       )}
@@ -596,12 +596,12 @@ function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordC
           type="button"
           onClick={onSave}
           disabled={saving}
-          className="bg-black px-6 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+          className="bg-black px-6 py-2 text-[13px] font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
         >
           {saving ? "Testing connection..." : "Test & Save"}
         </button>
         {saved && (
-          <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
+          <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
             Connection verified and saved
           </span>
         )}
@@ -612,13 +612,13 @@ function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordC
 
 function VaultNotice() {
   return (
-    <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-1">
+    <div className="flex items-center gap-1.5 text-xs  mt-1">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3 shrink-0">
         <path fillRule="evenodd" d="M8 1a3.5 3.5 0 0 0-3.5 3.5V7A1.5 1.5 0 0 0 3 8.5v5A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5v-5A1.5 1.5 0 0 0 11.5 7V4.5A3.5 3.5 0 0 0 8 1Zm2 6V4.5a2 2 0 1 0-4 0V7h4Z" clipRule="evenodd" />
       </svg>
       <span>
         Encrypted using{" "}
-        <a href="https://supabase.com/" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">
+        <a href="https://supabase.com/" target="_blank" rel="noopener noreferrer" className="underline hover:text-[var(--text-secondary)]">
           Supabase Vault
         </a>
 . Your emails are never stored on our servers.
@@ -641,7 +641,7 @@ function InlineInput({ value, onChange, placeholder, type = "text" }: InlineInpu
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full max-w-sm border border-gray-300 px-3 py-1.5 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+      className="w-full max-w-sm border border-gray-300 px-3 py-1.5 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
     />
   );
 }
@@ -657,13 +657,13 @@ interface InputFieldProps {
 function InputField({ label, value, onChange, placeholder, type = "text" }: InputFieldProps) {
   return (
     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">{label}</label>
+      <label className="mb-1 block text-[13px] font-medium text-[var(--text-secondary)]">{label}</label>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+        className="w-full border border-gray-300 px-3 py-2 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
       />
     </div>
   );

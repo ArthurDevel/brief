@@ -271,17 +271,17 @@ export default function ScheduleTab() {
   // ============================================================================
 
   if (loading) {
-    return <p className="text-gray-500">Loading...</p>;
+    return <p className="text-[var(--text-secondary)]">Loading...</p>;
   }
 
   if (!formState) {
-    return <p className="text-gray-500">Loading...</p>;
+    return <p className="text-[var(--text-secondary)]">Loading...</p>;
   }
 
   return (
     <div>
       {error && (
-        <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="mb-6 border border-red-200 bg-red-50 p-4 text-[13px] text-red-700">
           {error}
         </div>
       )}
@@ -290,9 +290,9 @@ export default function ScheduleTab() {
         {/* Timezone */}
         <section className="border border-gray-200 bg-white p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-bold text-black">Timezone</h2>
+            <h2 >Timezone</h2>
             {savedSection === "timezone" && (
-              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>
             )}
           </div>
           <select
@@ -301,7 +301,7 @@ export default function ScheduleTab() {
               handleTimezoneChange(e.target.value);
               setSavedSection(null);
             }}
-            className="w-full border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+            className="w-full border border-gray-300 px-3 py-2 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
           >
             {TIMEZONES.map((tz) => (
               <option key={tz} value={tz}>
@@ -309,7 +309,7 @@ export default function ScheduleTab() {
               </option>
             ))}
           </select>
-          <p className="mt-2 text-xs text-gray-500">
+          <p className="mt-2 text-xs text-[var(--text-secondary)]">
             All scheduled call times are in this timezone.
           </p>
         </section>
@@ -317,12 +317,12 @@ export default function ScheduleTab() {
         {/* Weekly Schedule */}
         <section className="border border-gray-200 bg-white p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-bold text-black">Weekly Schedule</h2>
+            <h2 >Weekly Schedule</h2>
             {savedSection === "schedule" && (
-              <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>
             )}
           </div>
-          <p className="mb-4 text-sm text-gray-500">
+          <p className="mb-4 text-[13px] text-[var(--text-secondary)]">
             Enable a day and pick the time you want to be called.
           </p>
 
@@ -382,7 +382,7 @@ function DayRow({ label, config, onToggle, onTimeChange }: DayRowProps) {
       </button>
 
       {/* Day label */}
-      <span className="w-28 text-sm font-medium text-gray-900">{label}</span>
+      <span className="w-28 text-[13px] font-medium ">{label}</span>
 
       {/* Time picker */}
       <input
@@ -390,7 +390,7 @@ function DayRow({ label, config, onToggle, onTimeChange }: DayRowProps) {
         value={config.time}
         onChange={(e) => onTimeChange(e.target.value)}
         disabled={!config.enabled}
-        className="border border-gray-300 px-3 py-1.5 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black disabled:bg-gray-100 disabled:text-gray-400"
+        className="border border-gray-300 px-3 py-1.5 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black disabled:bg-gray-100 disabled:"
       />
     </div>
   );

@@ -17,17 +17,18 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { CallProvider } from "@/contexts/CallContext";
 import ActiveCallBar from "@/components/ActiveCallBar";
+import { Home, Phone, Activity, Clock, Settings } from "lucide-react";
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Overview" },
-  { href: "/dashboard/call", label: "Call" },
-  { href: "/dashboard/actions", label: "Actions" },
-  { href: "/dashboard/sessions", label: "Sessions" },
-  { href: "/dashboard/settings", label: "Settings" },
+  { href: "/dashboard", label: "Overview", icon: Home },
+  { href: "/dashboard/call", label: "Call", icon: Phone },
+  { href: "/dashboard/actions", label: "Actions", icon: Activity },
+  { href: "/dashboard/sessions", label: "Sessions", icon: Clock },
+  { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ] as const;
 
 // ============================================================================
@@ -66,52 +67,57 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className="flex flex-col h-screen">
         <ActiveCallBar />
         <div className="flex flex-1 min-h-0">
+        
         {/* Sidebar */}
-        <aside className="flex w-64 flex-col border-r border-gray-200 bg-white">
-          <div className="p-6">
-            <h2 className="text-xl font-extrabold tracking-tight text-black">Voice Email</h2>
+        <aside className="sidebar" style={{ width: 240, background: "var(--bg-sidebar)", borderRight: "1px solid var(--border-color)", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+          <div style={{ padding: "24px 16px 8px 24px", display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: "28px", fontWeight: "400", fontFamily: "var(--font-ibm-plex-serif), serif", letterSpacing: "-0.5px", color: "var(--text-primary)" }}>
+              Voice Email
+            </span>
           </div>
-          <nav className="px-4 pb-6">
+
+          <div style={{ flex: 1, padding: "16px 12px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
             {NAV_ITEMS.map((item) => {
               const active = isActive(item.href, pathname);
+              const Icon = item.icon;
               return (
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`block px-3 py-2 text-sm font-medium ${
+                  className={`flex items-center gap-2 mb-[2px] px-[12px] py-[8px] text-[13px] rounded-none transition-all duration-150 ${
                     active
-                      ? "bg-gray-100 text-black font-bold"
-                      : "text-gray-600 hover:bg-gray-50 hover:text-black"
+                      ? "text-[var(--accent-color)] font-semibold"
+                      : "text-[var(--text-secondary)] font-medium hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
                   }`}
+                  style={{ textDecoration: "none", background: active ? "rgba(46, 160, 67, 0.1)" : "transparent" }}
                 >
+                  <Icon size={16} strokeWidth={1.75} />
                   {item.label}
                 </Link>
               );
             })}
-          </nav>
+          </div>
 
           {isFreePlan && (
-            <div className="mt-auto px-4 pb-4">
-              <Link
-                href="/dashboard/settings?tab=billing"
-                className="block rounded-lg bg-black px-4 py-3 text-center text-sm font-medium text-white shadow-lg hover:bg-gray-800"
-              >
-                Upgrade to Pro for more calling time
-              </Link>
+            <div style={{ padding: "12px 0" }}>
+              <div style={{ margin: "0 12px 8px", padding: "8px 10px", fontSize: 12, background: "var(--btn-primary-bg)", borderRadius: 0, textAlign: "center" }}>
+                <Link
+                  href="/dashboard/settings?tab=billing"
+                  style={{ color: "var(--btn-primary-text)", textDecoration: "none", display: "block", fontWeight: 500 }}
+                  className="hover:opacity-80 transition-opacity"
+                >
+                  Upgrade to Pro
+                </Link>
+              </div>
             </div>
           )}
         </aside>
 
         {/* Main content */}
-        <main
-          className="flex-1 overflow-auto p-8"
-          style={{
-            backgroundImage: "radial-gradient(#d4d4d8 1px, transparent 1px)",
-            backgroundSize: "24px 24px",
-          }}
-        >
+        <main className="flex-1 flex flex-col min-h-0 bg-[var(--bg-main)]">
           {children}
         </main>
+        
         </div>
       </div>
     </CallProvider>

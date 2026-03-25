@@ -54,22 +54,26 @@ export default function CallPage() {
   // ============================================================================
 
   return (
-    <div>
-      <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Browser Call</h1>
+    <div className="flex-1 flex flex-col h-full">
+      <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Browser Call</h1>
+        <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Place a direct call from your browser.</p>
+      </div>
 
-      {error && (
-        <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+        {error && (
+          <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {error}
+          </div>
+        )}
 
-      {/* QR code to add the phone number as a contact */}
-      {qrDataUrl && (
-        <section className="mb-6 border border-gray-200 bg-white p-6">
-          <h2 className="mb-2 text-lg font-bold text-black">Call from your phone</h2>
-          <p className="mb-4 text-sm text-gray-500">
-            Scan this QR code to add the number to your contacts.
-          </p>
+        {/* QR code to add the phone number as a contact */}
+        {qrDataUrl && (
+          <section className="settings-panel">
+            <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Call from your phone</h2>
+            <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "0 0 20px 0" }}>
+              Scan this QR code to add the number to your contacts.
+            </p>
           <div className="flex flex-col items-start gap-2">
             <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
             <span className="text-xs text-gray-400">{PHONE_NUMBER}</span>
@@ -77,31 +81,29 @@ export default function CallPage() {
         </section>
       )}
 
-      <section className="border border-gray-200 bg-white p-6">
-        <p className="mb-4 text-sm text-gray-500">
+      {/* Browser call component card */}
+      <section className="settings-panel">
+        <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Call from browser</h2>
+        <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "0 0 20px 0" }}>
           Voice connection via the Pipecat pipeline (Deepgram STT + OpenRouter LLM + Deepgram TTS). Uses WebRTC.
         </p>
 
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-gray-700">{status}</span>
+        <div className="settings-actions">
+          <span className="text-[13px] font-medium text-[var(--text-secondary)] mr-4">{status}</span>
 
           {!callActive ? (
-            <button
-              onClick={startCall}
-              className="bg-green-600 px-6 py-2 text-sm font-medium text-white hover:bg-green-700"
-            >
+            <button onClick={startCall}>
               Start Call
             </button>
           ) : (
-            <button
-              onClick={endCall}
-              className="bg-red-600 px-6 py-2 text-sm font-medium text-white hover:bg-red-700"
-            >
+            <button onClick={endCall} style={{ background: "#d73a49" }}>
               End Call
             </button>
           )}
         </div>
       </section>
+      
+      </div>
     </div>
   );
 }

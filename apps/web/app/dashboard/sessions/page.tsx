@@ -74,56 +74,66 @@ export default function HistoryPage() {
 
   if (loading) {
     return (
-      <div>
-        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">History</h1>
-        <p className="text-gray-500">Loading...</p>
+      <div className="flex-1 flex flex-col h-full">
+        <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>History</h1>
+          <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Past call sessions and interactions.</p>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+          <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div>
-      <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">History</h1>
+    <div className="flex-1 flex flex-col h-full">
+      <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>History</h1>
+        <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Past call sessions and interactions.</p>
+      </div>
 
-      {error && (
-        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+        {error && (
+          <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
+            {error}
+          </div>
+        )}
 
-      {sessions.length === 0 ? (
-        <p className="text-gray-500">No call sessions yet.</p>
-      ) : (
-        <div className="border border-gray-200 bg-white p-6">
-          <table className="w-full text-left text-sm">
+        {sessions.length === 0 ? (
+          <p className="text-[13px] text-[var(--text-secondary)]">No call sessions yet.</p>
+        ) : (
+          <div className="settings-panel">
+            <table className="w-full text-left text-[13px]">
             <thead>
-              <tr className="border-b border-gray-200">
-                <th className="pb-2 font-medium text-gray-500">Date/Time</th>
-                <th className="pb-2 font-medium text-gray-500">Duration</th>
-                <th className="pb-2 font-medium text-gray-500">Actions</th>
+              <tr className="border-b border-[var(--border-color)]">
+                <th className="pb-2 font-medium text-[var(--text-secondary)]">Date/Time</th>
+                <th className="pb-2 font-medium text-[var(--text-secondary)]">Duration</th>
+                <th className="pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
               </tr>
             </thead>
             <tbody>
               {sessions.map((session) => (
-                <tr key={session.id} className="border-b border-gray-100">
-                  <td className="py-3">
+                <tr key={session.id} className="border-b border-[var(--border-color)]">
+                  <td className="py-3 text-[13px]">
                     <Link
                       href={`/dashboard/sessions/${session.id}`}
-                      className="font-medium text-black hover:underline"
+                      className="font-medium text-[var(--text-primary)] hover:underline"
                     >
                       {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
                     </Link>
                   </td>
-                  <td className="py-3 text-gray-600">
+                  <td className="py-3 text-[var(--text-secondary)]">
                     {formatDuration(session.durationSeconds)}
                   </td>
-                  <td className="py-3 text-gray-600">{session.actionCount}</td>
+                  <td className="py-3 text-[var(--text-secondary)]">{session.actionCount}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+      </div>
     </div>
   );
 }

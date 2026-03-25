@@ -91,32 +91,32 @@ export default function FeatureRequestsTab() {
   // ============================================================================
 
   if (loading) {
-    return <p className="text-gray-500">Loading...</p>;
+    return <p className="text-[var(--text-secondary)]">Loading...</p>;
   }
 
   return (
     <div>
       {error && (
-        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
+        <div className="mb-6 bg-red-50 p-4 text-[13px] text-red-700">
           {error}
         </div>
       )}
 
       {/* Submit form */}
       <div className="mb-8 border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-bold text-black">Submit a Request</h2>
+        <h2 >Submit a Request</h2>
         <form onSubmit={handleSubmit} className="flex gap-3">
           <input
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Describe the feature you'd like..."
-            className="flex-1 border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+            className="flex-1 border border-gray-300 px-3 py-2 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
           />
           <button
             type="submit"
             disabled={submitting || !description.trim()}
-            className="bg-black px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+            className="bg-black px-4 py-2 text-[13px] font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
           >
             {submitting ? "Submitting..." : "Submit"}
           </button>
@@ -125,25 +125,25 @@ export default function FeatureRequestsTab() {
 
       {/* Requests table */}
       <div className="border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-bold text-black">
+        <h2 >
           Your Requests ({requests.length})
         </h2>
 
         {requests.length === 0 ? (
-          <p className="text-sm text-gray-500">No feature requests yet.</p>
+          <p className="text-[13px] text-[var(--text-secondary)]">No feature requests yet.</p>
         ) : (
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-left text-[13px]">
             <thead>
               <tr className="border-b border-gray-200">
-                <th className="pb-2 font-medium text-gray-500">Description</th>
-                <th className="pb-2 font-medium text-gray-500">Source</th>
-                <th className="pb-2 font-medium text-gray-500">Date</th>
+                <th className="pb-2 font-medium text-[var(--text-secondary)]">Description</th>
+                <th className="pb-2 font-medium text-[var(--text-secondary)]">Source</th>
+                <th className="pb-2 font-medium text-[var(--text-secondary)]">Date</th>
               </tr>
             </thead>
             <tbody>
               {requests.map((req) => (
                 <tr key={req.id} className="border-b border-gray-100">
-                  <td className="py-3 text-gray-800">{req.description}</td>
+                  <td className="py-3 ">{req.description}</td>
                   <td className="py-3">
                     <span
                       className={`inline-block px-2 py-0.5 text-xs font-bold ${
@@ -155,7 +155,7 @@ export default function FeatureRequestsTab() {
                       {req.source}
                     </span>
                   </td>
-                  <td className="py-3 text-gray-500">
+                  <td className="py-3 text-[var(--text-secondary)]">
                     {new Date(req.createdAt).toLocaleDateString("en-US", DATE_FORMAT)}
                   </td>
                 </tr>

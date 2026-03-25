@@ -1,1 +1,69 @@
 @import "tailwindcss";
+
+@import "tailwindcss";
+
+:root {
+  --bg-main: #ffffff;
+  --bg-sidebar: #f7f7f8;
+  --bg-surface: #ffffff;
+  --bg-hover: #f1f3f5;
+  --bg-active: #e9ecef;
+  --border-color: #eaeaea;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --accent-color: #2ea043;
+  --btn-primary-bg: #111111;
+  --btn-primary-text: #ffffff;
+  --btn-primary-hover: #333333;
+}
+
+.dark {
+  --bg-main: #0a0a0a;
+  --bg-sidebar: #111111;
+  --bg-surface: #171717;
+  --bg-hover: #262626;
+  --bg-active: #333333;
+  --border-color: #333333;
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --accent-color: #3fb950;
+  --btn-primary-bg: #ececec;
+  --btn-primary-text: #111111;
+  --btn-primary-hover: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  line-height: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.settings-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.settings-panel h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 10px;
+}
