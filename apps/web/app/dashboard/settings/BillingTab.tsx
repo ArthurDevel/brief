@@ -25,7 +25,7 @@ import type { UsageInfo, UpgradeResponse } from "@/lib/types";
 
 const PLANS = [
   { name: "Free", hours: 1, price: "$0/month" },
-  { name: "Pro", hours: 5, price: "$20/month" },
+  { name: "Pro", hours: 6, price: "$20/month" },
 ];
 
 type PaymentMethod = "credit-card" | "ideal" | "bancontact" | "paypal";
@@ -323,7 +323,7 @@ function PaymentModal({
             <div>
               <p className="text-[13px] font-medium text-[var(--text-primary)]">Pro Plan</p>
               <p className="text-xs text-[var(--text-secondary)]">
-                5h voice calls per month
+                6h voice calls per month
               </p>
             </div>
             <p className="text-[13px] font-medium text-[var(--text-primary)]">$20/month</p>
