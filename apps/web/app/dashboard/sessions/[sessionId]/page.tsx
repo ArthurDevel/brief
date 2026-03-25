@@ -215,6 +215,7 @@ const STATUS_STYLES: Record<string, string> = {
   executed: "bg-green-100 text-green-700",
   rejected: "bg-red-100 text-red-700",
   undone: "bg-yellow-100 text-yellow-700",
+  failed: "bg-orange-100 text-orange-700",
 };
 
 /**
@@ -307,6 +308,7 @@ function ActionsSummary({
                       className={`px-2 py-0.5 text-xs font-bold ${
                         STATUS_STYLES[action.status] ?? "bg-gray-100 text-gray-600"
                       }`}
+                      title={action.status === "failed" ? (action.result?.error as string) : undefined}
                     >
                       {action.status}
                     </span>
@@ -440,7 +442,20 @@ export default function SessionDetailPage() {
       const res = await postActionRequest(actionId, endpoint);
       if (!res.ok) {
         const body = await res.json();
-        setError(body.error ?? `Failed to ${endpoint} action`);
+        const errorMessage = body.error ?? `Failed to ${endpoint} action`;
+
+        // Update the action in local state to show failed status inline
+        setSession((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            actions: prev.actions.map((a) =>
+              a.id === actionId
+                ? { ...a, status: "failed" as ActionRow["status"], result: { error: errorMessage } }
+                : a
+            ),
+          };
+        });
         return;
       }
       await loadSession();
@@ -461,21 +476,15 @@ export default function SessionDetailPage() {
     if (pending.length === 0) return;
 
     addProcessing(BULK_KEY);
-    try {
-      for (const action of pending) {
-        const res = await postActionRequest(action.id, operation);
-        if (!res.ok) {
-          const body = await res.json();
-          setError(body.error ?? `Failed to ${operation} action ${action.toolName}`);
-          break;
-        }
+    for (const action of pending) {
+      try {
+        await postActionRequest(action.id, operation);
+      } catch {
+        // Continue to next action -- failed ones are marked in the DB by the API
       }
-      await loadSession();
-    } catch {
-      setError(`Failed to ${operation} all actions`);
-    } finally {
-      removeProcessing(BULK_KEY);
     }
+    await loadSession();
+    removeProcessing(BULK_KEY);
   };
 
   if (loading) {
