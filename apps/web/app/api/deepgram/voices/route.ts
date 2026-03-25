@@ -44,6 +44,21 @@ export interface DeepgramVoice {
 }
 
 // ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const ALLOWED_VOICES = [
+  "aura-2-andromeda-en",
+  "aura-2-delia-en",
+  "aura-2-mars-en",
+  "aura-2-electra-en",
+  "aura-2-odysseus-en",
+  "aura-2-orpheus-en",
+  "aura-2-vesta-en",
+  "aura-2-zeus-en",
+];
+
+// ============================================================================
 // MAIN HANDLER
 // ============================================================================
 
@@ -70,7 +85,7 @@ export async function GET(): Promise<NextResponse<DeepgramVoice[] | { error: str
 
   // Filter to aura-2 voices only and map to simplified format
   const voices: DeepgramVoice[] = data.tts
-    .filter((model) => model.architecture === "aura-2" && model.canonical_name.endsWith("-en"))
+    .filter((model) => ALLOWED_VOICES.includes(model.canonical_name))
     .map((model) => ({
       name: model.name,
       canonicalName: model.canonical_name,
@@ -82,7 +97,7 @@ export async function GET(): Promise<NextResponse<DeepgramVoice[] | { error: str
 
   if (voices.length === 0) {
     throw new Error(
-      `No aura-2 voices found. Deepgram returned ${data.tts?.length ?? 0} TTS models total. ` +
+      `No allowed voices found. Deepgram returned ${data.tts?.length ?? 0} TTS models total. ` +
       `Check that the API key has access to aura-2 voices.`
     );
   }

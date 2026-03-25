@@ -19,7 +19,8 @@ import type { DeepgramVoice } from "@/app/api/deepgram/voices/route";
 // CONSTANTS
 // ============================================================================
 
-const DEFAULT_VOICE = "aura-2-helena-en";
+const DEFAULT_VOICE = "aura-2-andromeda-en";
+const DEFAULT_SPEED = 1.2;
 
 const TOOL_NAMES = [
   "mark_as_read",
@@ -154,7 +155,7 @@ export default function GeneralTab() {
   const [phone, setPhone] = useState<PhoneFormState>({ number: "", countryCode: "" });
   const [pin, setPin] = useState("");
   const [voicePreference, setVoicePreference] = useState(DEFAULT_VOICE);
-  const [voiceSpeed, setVoiceSpeed] = useState(1.0);
+  const [voiceSpeed, setVoiceSpeed] = useState(DEFAULT_SPEED);
   const [voices, setVoices] = useState<DeepgramVoice[]>([]);
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
   const [previewingSpeed, setPreviewingSpeed] = useState(false);
@@ -176,7 +177,7 @@ export default function GeneralTab() {
 
   // Ref to always have latest form values for auto-save without stale closures
   const formRef = useRef({
-    voicePreference: DEFAULT_VOICE, voiceSpeed: 1.0,
+    voicePreference: DEFAULT_VOICE, voiceSpeed: DEFAULT_SPEED,
     toolApprovalConfig: {} as ToolApprovalConfig,
   });
   // Keep ref in sync
