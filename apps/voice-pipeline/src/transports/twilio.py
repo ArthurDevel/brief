@@ -28,11 +28,14 @@ from starlette.websockets import WebSocketState
 from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
+    Frame,
     InputAudioRawFrame,
+    InterruptionFrame,
     OutputAudioRawFrame,
     StartFrame,
 )
 from pipecat.pipeline.task import PipelineTask
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.transports.base_transport import BaseTransport, TransportParams
@@ -244,6 +247,21 @@ class TwilioOutputTransport(BaseOutputTransport):
         """
         await super().start(frame)
         await self.set_transport_ready(frame)
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        """Process frames, sending a Twilio clear event on interruption.
+
+        Pipecat's BaseOutputTransport clears internal buffers on InterruptionFrame,
+        but Twilio's media server has its own audio buffer. We must also send a
+        "clear" event so Twilio stops playing already-buffered audio.
+
+        Args:
+            frame: The pipeline frame to process.
+            direction: The direction of frame flow.
+        """
+        await super().process_frame(frame, direction)
+        if isinstance(frame, InterruptionFrame):
+            await self.send_clear()
 
     _audio_log_once = False
 
