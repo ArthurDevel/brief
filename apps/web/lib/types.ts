@@ -123,6 +123,7 @@ export interface SessionSummary {
   endedAt: string | null;
   durationSeconds: number | null;
   actionCount: number;
+  pendingActionCount: number;
 }
 
 /** Full session detail with transcript and actions. */

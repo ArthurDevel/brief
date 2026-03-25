@@ -1,9 +1,9 @@
 /**
- * Browser-based voice call page.
+ * Voice call page with two ways to start a conversation.
  *
  * Consumes the shared CallContext for all call state and actions.
- * The actual WebRTC session lifecycle is managed by CallProvider
- * (wrapped at the dashboard layout level).
+ * The session lifecycle is managed by CallProvider (wrapped at the
+ * dashboard layout level).
  *
  * Responsibilities:
  * - Render call UI (start/end buttons, status, errors)
@@ -16,6 +16,7 @@
 
 import { useState, useEffect } from "react";
 import { useCall } from "@/contexts/CallContext";
+import { Smartphone, Monitor } from "lucide-react";
 import * as QRCode from "qrcode";
 import type { UserSettings, CompanyPhone, UserPhone } from "@/lib/types";
 
@@ -126,8 +127,8 @@ export default function CallPage() {
   return (
     <div className="flex-1 flex flex-col h-full">
       <div className="page-header">
-        <h1>Browser Call</h1>
-        <p>Place a direct call from your browser.</p>
+        <h1>Call</h1>
+        <p>Start a voice conversation with your assistant.</p>
       </div>
 
       <div className="page-content">
@@ -137,68 +138,84 @@ export default function CallPage() {
           </div>
         )}
 
-        {/* Phone QR code section */}
-        {!userPhone ? (
-          // User has no phone number set
-          <section className="settings-panel">
-            <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Call from your phone</h2>
-            <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
-              Set your phone number in{" "}
-              <a href="/dashboard/settings" style={{ color: "var(--text-primary)", textDecoration: "underline" }}>Settings</a>{" "}
-              to see the number you can call from your phone.
-            </p>
-          </section>
-        ) : matchedCompanyPhone && qrDataUrl ? (
-          // Match found -- show QR code
-          <section className="settings-panel">
-            <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Call from your phone</h2>
-            <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "0 0 20px 0" }}>
-              Scan this QR code to add the number to your contacts.
-            </p>
-            <div className="flex flex-col items-start gap-2">
-              <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
-              <span className="text-xs text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
+        <div className="flex flex-col gap-6">
+
+          {/* Phone card */}
+          <section className="flex flex-col gap-4 p-6 md:p-8 border border-[var(--border-color)] bg-[var(--bg-surface)]">
+            <div className="w-12 h-12 bg-blue-100/60 flex items-center justify-center shrink-0">
+              <Smartphone className="w-5 h-5 text-blue-600" strokeWidth={2.5} />
+            </div>
+
+            <div className="flex flex-col">
+              <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">Call from your phone</h3>
+
+              {!userPhone ? (
+                <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
+                  Add your phone number in{" "}
+                  <a href="/dashboard/settings" className="text-[var(--text-primary)] underline">Settings</a>{" "}
+                  to get a number you can call directly.
+                </p>
+              ) : matchedCompanyPhone && qrDataUrl ? (
+                <>
+                  <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
+                    Scan this QR code to save the number to your contacts, then call it anytime.
+                  </p>
+                  <div className="flex flex-col items-start gap-2">
+                    <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                    <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-red-600 mb-2">
+                    Your country is not yet supported.
+                  </p>
+                  <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
+                    Phone calls are currently available in:{" "}
+                    {companyPhones.length > 0
+                      ? companyPhones.map((p) => p.label).join(", ")
+                      : "no countries configured yet"}
+                    .
+                  </p>
+                </>
+              )}
             </div>
           </section>
-        ) : (
-          // No match -- show supported countries
-          <section className="settings-panel">
-            <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Call from your phone</h2>
-            <p className="mb-2 text-sm font-medium text-red-600">
-              Your country is currently not supported.
-            </p>
-            <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
-              Phone calls are currently available in:{" "}
-              {companyPhones.length > 0
-                ? companyPhones.map((p) => p.label).join(", ")
-                : "no countries configured yet"}
-              .
-            </p>
+
+          {/* Browser call card */}
+          <section className="flex flex-col gap-4 p-6 md:p-8 border border-[var(--border-color)] bg-[var(--bg-surface)]">
+            <div className="w-12 h-12 bg-purple-100/60 flex items-center justify-center shrink-0">
+              <Monitor className="w-5 h-5 text-purple-600" strokeWidth={2.5} />
+            </div>
+
+            <div className="flex flex-col">
+              <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">Call from your browser</h3>
+              <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
+                Start a voice conversation directly from this page. No app or phone needed.
+              </p>
+
+              <div className="flex items-center gap-4">
+                {!callActive ? (
+                  <button
+                    onClick={startCall}
+                    className="flex items-center justify-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-5 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition"
+                  >
+                    Start Call
+                  </button>
+                ) : (
+                  <button
+                    onClick={endCall}
+                    className="flex items-center justify-center gap-2 bg-red-600 text-white px-5 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-red-700 transition"
+                  >
+                    End Call
+                  </button>
+                )}
+                <span className="text-[13px] font-medium text-[var(--text-secondary)]">{status}</span>
+              </div>
+            </div>
           </section>
-        )}
 
-      {/* Browser call component card */}
-      <section className="settings-panel">
-        <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Call from browser</h2>
-        <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "0 0 20px 0" }}>
-          Voice connection via the Pipecat pipeline (Deepgram STT + OpenRouter LLM + Deepgram TTS). Uses WebRTC.
-        </p>
-
-        <div className="settings-actions">
-          <span className="text-[13px] font-medium text-[var(--text-secondary)] mr-4">{status}</span>
-
-          {!callActive ? (
-            <button onClick={startCall}>
-              Start Call
-            </button>
-          ) : (
-            <button onClick={endCall} style={{ background: "#d73a49" }}>
-              End Call
-            </button>
-          )}
         </div>
-      </section>
-      
       </div>
     </div>
   );

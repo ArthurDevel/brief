@@ -13,7 +13,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { ChevronRight } from "lucide-react";
 import type { SessionSummary } from "@/lib/types";
 
 // ============================================================================
@@ -52,6 +53,7 @@ function formatDuration(seconds: number | null): string {
 // ============================================================================
 
 export default function HistoryPage() {
+  const router = useRouter();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -110,23 +112,34 @@ export default function HistoryPage() {
                 <th className="pb-2 font-medium text-[var(--text-secondary)]">Date/Time</th>
                 <th className="pb-2 font-medium text-[var(--text-secondary)]">Duration</th>
                 <th className="pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
+                <th className="pb-2 font-medium text-[var(--text-secondary)]"></th>
+                <th className="pb-2 w-8"></th>
               </tr>
             </thead>
             <tbody>
               {sessions.map((session) => (
-                <tr key={session.id} className="border-b border-[var(--border-color)]">
-                  <td className="py-3 text-[13px]">
-                    <Link
-                      href={`/dashboard/sessions/${session.id}`}
-                      className="font-medium text-[var(--text-primary)] hover:underline"
-                    >
-                      {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
-                    </Link>
+                <tr
+                  key={session.id}
+                  onClick={() => router.push(`/dashboard/sessions/${session.id}`)}
+                  className="border-b border-[var(--border-color)] cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
+                >
+                  <td className="py-3 text-[13px] font-medium text-[var(--text-primary)]">
+                    {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
                   </td>
                   <td className="py-3 text-[var(--text-secondary)]">
                     {formatDuration(session.durationSeconds)}
                   </td>
                   <td className="py-3 text-[var(--text-secondary)]">{session.actionCount}</td>
+                  <td className="py-3">
+                    {session.pendingActionCount > 0 && (
+                      <span style={{ color: "#d29922", fontWeight: 500, fontSize: 13 }}>
+                        Pending actions
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-3 text-[var(--text-secondary)]">
+                    <ChevronRight size={16} />
+                  </td>
                 </tr>
               ))}
             </tbody>
