@@ -71,6 +71,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Sidebar */}
         <aside className="sidebar">
           <div style={{ padding: "24px 16px 8px 24px", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, backgroundColor: "black", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-ibm-plex-serif), serif", fontSize: "18px", lineHeight: 1, paddingTop: 2 }}>
+              B
+            </div>
             <span style={{ fontSize: "28px", fontWeight: "400", fontFamily: "var(--font-ibm-plex-serif), serif", letterSpacing: "-0.5px", color: "var(--text-primary)" }}>
               BrewDock
             </span>
