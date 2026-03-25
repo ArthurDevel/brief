@@ -11,6 +11,8 @@
 
 "use client";
 
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Auth } from "@supabase/auth-ui-react";
 import { ThemeSupa } from "@supabase/auth-ui-shared";
 import { createBrowserClient } from "@/lib/supabase/client";
@@ -21,6 +23,18 @@ import { createBrowserClient } from "@/lib/supabase/client";
 
 export default function LoginForm() {
   const supabase = createBrowserClient();
+  const router = useRouter();
+
+  // Redirect to dashboard when the user signs in
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN") {
+        router.push("/dashboard");
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [supabase, router]);
 
   return (
     <Auth
