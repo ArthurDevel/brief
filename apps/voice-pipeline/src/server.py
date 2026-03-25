@@ -287,13 +287,15 @@ async def _cleanup_session(
     if session_ended:
         try:
             url = f"{settings.web_app_url}/api/sessions/{session.session_id}/end-of-session"
+            hook_start = asyncio.get_event_loop().time()
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
                     url,
                     headers={"Authorization": f"Bearer {settings.internal_api_key}"},
                 )
                 response.raise_for_status()
-                logger.info("[server] End-of-session hook completed for session %s", session.session_id)
+                elapsed_ms = (asyncio.get_event_loop().time() - hook_start) * 1000
+                logger.info("[server] End-of-session hook completed for session %s in %.0fms", session.session_id, elapsed_ms)
         except BaseException as exc:
             logger.warning("[server] End-of-session hook failed for session %s: %s", session.session_id, exc)
 
