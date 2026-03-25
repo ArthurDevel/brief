@@ -418,6 +418,38 @@ describe("Action queue (Hoodiecrow integration)", () => {
   // Guard rails
   // --------------------------------------------------------------------------
 
+  // --------------------------------------------------------------------------
+  // Execute action with dispatch error marks action as "failed"
+  // --------------------------------------------------------------------------
+
+  it("marks action as failed with error message when dispatch throws", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const { store, supabase } = makePendingAction("a-fail", "archive_email", {
+        email_id: "99999", // non-existent email -- dispatchTool will throw
+        source_folder: "INBOX",
+      });
+
+      // executeAction should re-throw so the caller can return a 500
+      await expect(
+        executeAction("a-fail", supabase, client, DUMMY_SMTP_CONFIG),
+      ).rejects.toThrow();
+
+      // Action row should be updated to "failed" with the error message in result
+      const action = store.actions["a-fail"];
+      expect(action.status).toBe("failed");
+      expect(action.result).toBeDefined();
+      expect((action.result as Record<string, unknown>).error).toEqual(expect.any(String));
+      expect(((action.result as Record<string, unknown>).error as string).length).toBeGreaterThan(0);
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Guard rails
+  // --------------------------------------------------------------------------
+
   it("rejects execution of an already-executed action", async () => {
     const store: Record<string, Record<string, Row>> = {
       actions: {

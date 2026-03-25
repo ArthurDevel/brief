@@ -128,15 +128,33 @@ export async function executeAction(
   }
 
   // Execute the tool (null sessionId -- skip filtering for approved-action execution)
-  const { result, undoRecipe } = await dispatchTool(
-    action.tool_name as ToolName,
-    action.arguments,
-    imapClient,
-    smtpConfig,
-    supabase,
-    action.user_id,
-    null
-  );
+  // Only dispatch errors trigger the "failed" transition. Infrastructure errors
+  // (DB load/update failures) are transient and the action stays in its current state.
+  let result: Record<string, unknown>;
+  let undoRecipe: UndoRecipe | null;
+  try {
+    ({ result, undoRecipe } = await dispatchTool(
+      action.tool_name as ToolName,
+      action.arguments,
+      imapClient,
+      smtpConfig,
+      supabase,
+      action.user_id,
+      null
+    ));
+  } catch (dispatchError) {
+    const errorMessage = dispatchError instanceof Error ? dispatchError.message : String(dispatchError);
+
+    await supabase
+      .from("actions")
+      .update({
+        status: "failed",
+        result: { error: errorMessage },
+      })
+      .eq("id", actionId);
+
+    throw dispatchError;
+  }
 
   // Update the action row with result + undo recipe
   const { error: updateError } = await supabase

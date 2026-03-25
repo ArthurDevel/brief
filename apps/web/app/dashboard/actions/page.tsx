@@ -342,7 +342,7 @@ export default function ActionsPage() {
   };
 
   const pendingActions = actions.filter((a) => a.status === "pending");
-  const executedActions = actions.filter((a) => a.status === "executed" || a.status === "undone");
+  const executedActions = actions.filter((a) => a.status === "executed" || a.status === "undone" || a.status === "failed");
 
   if (loading) {
     return (
