@@ -17,6 +17,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
+import { Clock, Timer, Zap } from "lucide-react";
 import type { SessionDetail, TranscriptEntry } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
@@ -35,6 +36,30 @@ const DATE_FORMAT: Intl.DateTimeFormatOptions = {
 
 const BULK_KEY = "__bulk__";
 const MAX_VISIBLE_ROWS = 10;
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Formats a relative time description (e.g. "2 hours ago", "yesterday").
+ * @param dateStr - ISO date string
+ * @returns Human-readable relative time
+ */
+function formatRelativeTime(dateStr: string): string {
+  const now = new Date();
+  const date = new Date(dateStr);
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return "Yesterday";
+  return `${diffDays} days ago`;
+}
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -493,23 +518,21 @@ export default function SessionDetailPage() {
       </div>
 
       <div className="page-content">
-        {/* Session header */}
-        <div className="settings-panel mb-6">
-        <div className="flex gap-8 text-[13px] text-[var(--text-primary)]">
-          <div>
-            <span className="font-medium text-[var(--text-secondary)]">Date: </span>
-            {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
-          </div>
-          <div>
-            <span className="font-medium text-[var(--text-secondary)]">Duration: </span>
+        {/* Session metadata badges */}
+        <div className="mb-6 flex gap-2">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+            <Clock size={12} />
+            {formatRelativeTime(session.startedAt)}
+          </span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+            <Timer size={12} />
             {formatDuration(session.durationSeconds)}
-          </div>
-          <div>
-            <span className="font-medium text-[var(--text-secondary)]">Actions: </span>
-            {session.actions.length}
-          </div>
+          </span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+            <Zap size={12} />
+            {session.actions.length} action{session.actions.length !== 1 ? "s" : ""}
+          </span>
         </div>
-      </div>
 
       {/* Actions summary with controls */}
       {error && (
