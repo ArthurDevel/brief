@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -61,8 +62,7 @@ from src.tools.email_client import close_imap_connection, create_imap_connection
 from src.transports.twilio import TwilioTransport, TwilioParams
 from src import session_logger
 
-
-from loguru import logger
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -389,14 +389,14 @@ async def lifespan(app: FastAPI):
     # Fetch TURN/STUN servers so the server-side peer connection can traverse NAT
     settings = load_settings()
     session_logger.install()
-    logger.info("[server] METERED_API_KEY present: {}", bool(settings.metered_api_key))
+    logger.info("[server] METERED_API_KEY present: %s", bool(settings.metered_api_key))
     ice_servers = None
     if settings.metered_api_key:
         try:
             ice_servers = await _fetch_ice_servers(settings.metered_api_key)
-            logger.info("[server] Loaded {} ICE servers from Metered: {}", len(ice_servers), ice_servers)
+            logger.info("[server] Loaded %d ICE servers from Metered: %s", len(ice_servers), ice_servers)
         except Exception as exc:
-            logger.exception("[server] Failed to fetch ICE servers at startup: {}", exc)
+            logger.exception("[server] Failed to fetch ICE servers at startup: %s", exc)
     else:
         logger.warning("[server] No METERED_API_KEY set, skipping TURN server setup")
 
@@ -406,22 +406,22 @@ async def lifespan(app: FastAPI):
             from aioice import Connection as AioIceConnection
             from aiortc.rtcicetransport import connection_kwargs
             ice_kwargs = connection_kwargs(ice_servers)
-            logger.info("[server] TURN test: aioice kwargs = {}", ice_kwargs)
+            logger.info("[server] TURN test: aioice kwargs = %s", ice_kwargs)
             test_conn = AioIceConnection(ice_controlling=True, **ice_kwargs)
             await test_conn.gather_candidates()
             candidates = test_conn.local_candidates
             for c in candidates:
-                logger.info("[server] TURN test candidate: type={} host={}:{} transport={}", c.type, c.host, c.port, c.transport)
+                logger.info("[server] TURN test candidate: type=%s host=%s:%s transport=%s", c.type, c.host, c.port, c.transport)
             relay_count = sum(1 for c in candidates if c.type == "relay")
             if relay_count == 0:
-                logger.error("[server] TURN test: NO relay candidates -- TURN relay will NOT work")
+                logger.error("[server] TURN test: no relay candidates -- TURN relay will NOT work")
             else:
-                logger.info("[server] TURN test: {} relay candidate(s) -- TURN is working", relay_count)
+                logger.info("[server] TURN test: %d relay candidate(s) -- TURN is working", relay_count)
             await test_conn.close()
         except Exception as exc:
-            logger.exception("[server] TURN allocation test FAILED: {}", exc)
+            logger.exception("[server] TURN allocation test failed: %s", exc)
 
-    logger.info("[server] Creating SmallWebRTCRequestHandler with ice_servers={}", ice_servers)
+    logger.info("[server] Creating SmallWebRTCRequestHandler with ice_servers=%s", ice_servers)
     _webrtc_handler = SmallWebRTCRequestHandler(ice_servers=ice_servers)
 
     # Start the scheduled-call background loop (only if Twilio credentials are set)
@@ -523,17 +523,17 @@ async def webrtc_start(request: Request) -> JSONResponse:
                 resp = await client.get(f"{METERED_CREDENTIALS_URL}?apiKey={settings.metered_api_key}")
                 resp.raise_for_status()
                 ice_servers_for_client = resp.json()
-            logger.info("[server] /start fetched {} ICE servers for client: {}", len(ice_servers_for_client), ice_servers_for_client)
+            logger.info("[server] /start fetched %d ICE servers for client: %s", len(ice_servers_for_client), ice_servers_for_client)
 
             # Convert to RTCIceServer objects for the server-side peer connection
             rtc_ice_servers = _to_rtc_ice_servers(ice_servers_for_client)
-            logger.info("[server] /start converted {} RTCIceServer objects, updating handler", len(rtc_ice_servers))
+            logger.info("[server] /start converted %d RTCIceServer objects, updating handler", len(rtc_ice_servers))
             if _webrtc_handler:
                 _webrtc_handler.update_ice_servers(rtc_ice_servers)
         except Exception as exc:
-            logger.exception("[server] Failed to fetch TURN credentials: {}", exc)
+            logger.exception("[server] Failed to fetch TURN credentials: %s", exc)
     else:
-        logger.warning("[server] /start: No METERED_API_KEY, skipping TURN")
+        logger.warning("[server] /start: no METERED_API_KEY, skipping TURN")
 
     return JSONResponse({"sessionId": session_id, "iceServers": ice_servers_for_client})
 
