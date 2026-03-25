@@ -35,7 +35,9 @@ SECONDS_PER_HOUR = 3600
 # ============================================================================
 
 def lookup_user_by_phone(phone: str, supabase: Client) -> dict | None:
-    """Look up a user in user_settings by phone number.
+    """Look up a user in user_settings by their phone number (stored as JSONB).
+
+    Queries the phone->>number JSONB path to match the caller's E.164 number.
 
     Args:
         phone: The caller's phone number (E.164 format from Twilio).
@@ -47,12 +49,12 @@ def lookup_user_by_phone(phone: str, supabase: Client) -> dict | None:
     response = (
         supabase.table("user_settings")
         .select("user_id, pin_locked")
-        .eq("phone_number", phone)
-        .single()
+        .eq("phone->>number", phone)
+        .maybe_single()
         .execute()
     )
 
-    if response.data is None:
+    if response is None or response.data is None:
         logger.info("[twilio_auth] No user found for %s", phone)
         return None
 

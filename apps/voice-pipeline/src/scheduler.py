@@ -8,6 +8,7 @@ Responsibilities:
 - Fetch all users with a configured call schedule
 - Filter users who are due for a call right now (day-of-week + 5-min time window)
 - Prevent double calls via an atomic last_call_at dedup guard in the JSONB column
+- Resolve the correct company phone number for each user's country
 - Initiate outbound Twilio calls and roll back the dedup guard on failure
 """
 
@@ -47,6 +48,7 @@ class DueUser:
     """A user who is due for a scheduled call right now."""
     user_id: str
     phone_number: str
+    country_code: str
     timezone: str
 
 
@@ -71,7 +73,7 @@ def get_due_users(supabase: Client) -> list[DueUser]:
     """
     response = (
         supabase.table("user_settings")
-        .select("user_id, phone_number, call_schedule")
+        .select("user_id, phone, call_schedule")
         .not_.is_("call_schedule", "null")
         .execute()
     )
@@ -81,10 +83,16 @@ def get_due_users(supabase: Client) -> list[DueUser]:
 
     for row in rows:
         user_id = row["user_id"]
-        phone_number = row.get("phone_number")
+        phone = row.get("phone")
         schedule = row.get("call_schedule")
 
-        if not phone_number or not schedule:
+        # Skip users without a phone JSONB object or schedule
+        if not phone or not schedule:
+            continue
+
+        phone_number = phone.get("number")
+        country_code = phone.get("countryCode")
+        if not phone_number or not country_code:
             continue
 
         timezone_str = schedule.get("timezone")
@@ -141,27 +149,69 @@ def get_due_users(supabase: Client) -> list[DueUser]:
         due_users.append(DueUser(
             user_id=user_id,
             phone_number=phone_number,
+            country_code=country_code,
             timezone=timezone_str,
         ))
 
     return due_users
 
 
-def initiate_scheduled_call(user: DueUser, settings: Settings, supabase: Client) -> bool:
+def fetch_company_phones(supabase: Client, environment: str) -> dict[str, str]:
+    """Fetch active company phone numbers for the given environment.
+
+    Queries the company_phone_numbers table and returns a lookup dict
+    mapping country_code to phone_number.
+
+    Args:
+        supabase: Supabase client for DB operations.
+        environment: The app environment to filter by ("dev" or "prod").
+
+    Returns:
+        Dict mapping country_code (e.g. "US") to phone_number (e.g. "+15551234567").
+    """
+    response = (
+        supabase.table("company_phone_numbers")
+        .select("country_code, phone_number")
+        .eq("is_active", True)
+        .eq("environment", environment)
+        .execute()
+    )
+
+    rows = cast(list[dict[str, Any]], response.data or [])
+    return {row["country_code"]: row["phone_number"] for row in rows}
+
+
+def initiate_scheduled_call(
+    user: DueUser,
+    settings: Settings,
+    supabase: Client,
+    company_phones: dict[str, str],
+) -> bool:
     """Atomically claim the call slot and initiate a Twilio outbound call.
 
-    Reads the current schedule, re-checks the dedup guard, claims the slot by
-    writing last_call_at, then initiates the Twilio call. If Twilio fails,
-    rolls back last_call_at to its previous value.
+    Looks up the company phone number for the user's country. If no match,
+    logs a warning and returns False. Otherwise reads the current schedule,
+    re-checks the dedup guard, claims the slot by writing last_call_at, then
+    initiates the Twilio call. If Twilio fails, rolls back last_call_at.
 
     Args:
         user: The DueUser to call.
         settings: Application settings with Twilio credentials and public_url.
         supabase: Supabase client for DB operations.
+        company_phones: Dict mapping country_code to company phone number.
 
     Returns:
-        True if the call was initiated successfully, False if slot was already claimed.
+        True if the call was initiated successfully, False otherwise.
     """
+    # Look up the from_ number for the user's country
+    from_number = company_phones.get(user.country_code)
+    if not from_number:
+        logger.warning(
+            "[scheduler] No company phone number for country '{}', skipping user {}",
+            user.country_code, user.user_id,
+        )
+        return False
+
     # Step 1: Read current schedule to get previous last_call_at for potential rollback
     current_response = (
         supabase.table("user_settings")
@@ -221,7 +271,7 @@ def initiate_scheduled_call(user: DueUser, settings: Settings, supabase: Client)
 
         call = twilio_client.calls.create(
             to=user.phone_number,
-            from_=settings.twilio_phone_number,
+            from_=from_number,
             url=callback_url,
         )
 
@@ -252,10 +302,11 @@ def initiate_scheduled_call(user: DueUser, settings: Settings, supabase: Client)
         return False
 
 
-async def start_scheduler(settings: Settings, supabase_factory: Callable[[], Client]) -> asyncio.Task | None:
+async def start_scheduler(settings: Settings, supabase_factory: Callable[[], Client]) -> asyncio.Task[None] | None:
     """Create and return the background scheduler task.
 
-    Only starts if all three Twilio credentials are configured (non-empty).
+    Only starts if Twilio account SID and auth token are configured (non-empty).
+    The from_ phone number is resolved per-call from the company_phone_numbers table.
 
     Args:
         settings: Application settings with Twilio credentials.
@@ -264,7 +315,7 @@ async def start_scheduler(settings: Settings, supabase_factory: Callable[[], Cli
     Returns:
         The asyncio.Task running the scheduler loop, or None if Twilio is not configured.
     """
-    if not (settings.twilio_account_sid and settings.twilio_auth_token and settings.twilio_phone_number):
+    if not (settings.twilio_account_sid and settings.twilio_auth_token):
         logger.info("[scheduler] Twilio credentials not configured, scheduler will not start")
         return None
 
@@ -280,7 +331,8 @@ async def start_scheduler(settings: Settings, supabase_factory: Callable[[], Cli
 async def _scheduler_loop(settings: Settings, supabase_factory: Callable[[], Client]) -> None:
     """Infinite loop that checks for due users and initiates calls.
 
-    Sleeps for SCHEDULER_INTERVAL_SECONDS between each tick.
+    Fetches company phone numbers once per tick, then checks for due users
+    and initiates calls. Sleeps for SCHEDULER_INTERVAL_SECONDS between ticks.
     Catches all exceptions to keep running.
 
     Args:
@@ -292,6 +344,7 @@ async def _scheduler_loop(settings: Settings, supabase_factory: Callable[[], Cli
 
         try:
             supabase = supabase_factory()
+            company_phones = fetch_company_phones(supabase, settings.app_environment)
             due_users = get_due_users(supabase)
 
             if due_users:
@@ -299,7 +352,7 @@ async def _scheduler_loop(settings: Settings, supabase_factory: Callable[[], Cli
 
             for user in due_users:
                 try:
-                    initiate_scheduled_call(user, settings, supabase)
+                    initiate_scheduled_call(user, settings, supabase, company_phones)
                 except Exception as exc:
                     logger.error("[scheduler] Error initiating call for user {}: {}", user.user_id, exc)
 

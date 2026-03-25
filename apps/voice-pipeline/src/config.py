@@ -68,7 +68,7 @@ class Settings:
     recording_enabled: bool = False
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
-    twilio_phone_number: str = ""
+    app_environment: str = "prod"
 
 
 # ============================================================================
@@ -106,5 +106,5 @@ def load_settings() -> Settings:
         recording_enabled=os.getenv("RECORDING_ENABLED", "false").lower() == "true",
         twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
         twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
-        twilio_phone_number=os.getenv("TWILIO_PHONE_NUMBER", ""),
+        app_environment=os.getenv("APP_ENVIRONMENT", "prod"),
     )
