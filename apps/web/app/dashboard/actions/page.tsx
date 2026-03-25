@@ -127,29 +127,29 @@ function PendingActionsTable({
   processingIds: Set<string>;
 }) {
   if (actions.length === 0) {
-    return <p className="text-sm text-gray-500">No pending actions.</p>;
+    return <p className="text-[13px] text-[var(--text-secondary)]">No pending actions.</p>;
   }
 
   return (
-    <table className="w-full text-left text-sm">
+    <table className="w-full text-left text-[13px]">
       <thead>
-        <tr className="border-b border-gray-200">
-          <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Tool</th>
-          <th className="pb-2 font-medium text-gray-500">From / To</th>
-          <th className="pb-2 font-medium text-gray-500">Subject</th>
-          <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Created</th>
-          <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Actions</th>
+        <tr className="border-b border-[var(--border-color)]">
+          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Tool</th>
+          <th className="pb-2 font-medium text-[var(--text-secondary)]">From / To</th>
+          <th className="pb-2 font-medium text-[var(--text-secondary)]">Subject</th>
+          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Created</th>
+          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
         </tr>
       </thead>
       <tbody>
         {actions.map((action) => {
           const isProcessing = processingIds.has(action.id);
           return (
-            <tr key={action.id} className="border-b border-gray-100">
-              <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-              <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
-              <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
-              <td className="py-3 text-gray-500">
+            <tr key={action.id} className="border-b border-[var(--border-color)]">
+              <td className="py-3 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+              <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
+              <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
+              <td className="py-3 text-[var(--text-secondary)]">
                 {new Date(action.createdAt).toLocaleDateString("en-US", DATE_FORMAT)}
               </td>
               <td className="py-3">
@@ -157,14 +157,14 @@ function PendingActionsTable({
                   <button
                     onClick={() => onApprove(action.id)}
                     disabled={isProcessing}
-                    className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 bg-[var(--btn-primary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-primary-text)] hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
                   >
                     {processingIds.has(action.id) ? <Spinner /> : "Approve"}
                   </button>
                   <button
                     onClick={() => onReject(action.id)}
                     disabled={isProcessing}
-                    className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 bg-[var(--btn-secondary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-secondary-text)] border border-[var(--btn-secondary-border)] hover:bg-[var(--btn-secondary-hover)] disabled:opacity-50"
                   >
                     Reject
                   </button>
@@ -194,29 +194,29 @@ function ExecutedActionsTable({
   processingIds: Set<string>;
 }) {
   if (actions.length === 0) {
-    return <p className="text-sm text-gray-500">No executed actions.</p>;
+    return <p className="text-[13px] text-[var(--text-secondary)]">No executed actions.</p>;
   }
 
   return (
-    <table className="w-full text-left text-sm">
+    <table className="w-full text-left text-[13px]">
       <thead>
-        <tr className="border-b border-gray-200">
-          <th className="w-[12%] pb-2 font-medium text-gray-500">Tool</th>
-          <th className="w-[25%] pb-2 font-medium text-gray-500">From / To</th>
-          <th className="w-[33%] pb-2 font-medium text-gray-500">Subject</th>
-          <th className="w-[15%] pb-2 font-medium text-gray-500">Executed</th>
-          <th className="w-[15%] pb-2 font-medium text-gray-500">Actions</th>
+        <tr className="border-b border-[var(--border-color)]">
+          <th className="w-[12%] pb-2 font-medium text-[var(--text-secondary)]">Tool</th>
+          <th className="w-[25%] pb-2 font-medium text-[var(--text-secondary)]">From / To</th>
+          <th className="w-[33%] pb-2 font-medium text-[var(--text-secondary)]">Subject</th>
+          <th className="w-[15%] pb-2 font-medium text-[var(--text-secondary)]">Executed</th>
+          <th className="w-[15%] pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
         </tr>
       </thead>
       <tbody>
         {actions.map((action) => {
           const isProcessing = processingIds.has(action.id);
           return (
-            <tr key={action.id} className="border-b border-gray-100">
-              <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-              <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
-              <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
-              <td className="py-3 text-gray-500">
+            <tr key={action.id} className="border-b border-[var(--border-color)]">
+              <td className="py-3 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+              <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
+              <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
+              <td className="py-3 text-[var(--text-secondary)]">
                 {action.executedAt
                   ? new Date(action.executedAt).toLocaleDateString("en-US", DATE_FORMAT)
                   : "-"}
@@ -226,12 +226,12 @@ function ExecutedActionsTable({
                   <button
                     onClick={() => onUndo(action.id)}
                     disabled={isProcessing}
-                    className="inline-flex items-center gap-1 bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 bg-[var(--btn-secondary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-secondary-text)] border border-[var(--btn-secondary-border)] hover:bg-[var(--btn-secondary-hover)] disabled:opacity-50"
                   >
                     {isProcessing ? <Spinner /> : "Undo"}
                   </button>
                 ) : (
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-[var(--text-secondary)]">
                     {action.status === "undone" ? "Undone" : "-"}
                   </span>
                 )}
@@ -346,51 +346,57 @@ export default function ActionsPage() {
 
   if (loading) {
     return (
-      <div>
-        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Actions</h1>
-        <p className="text-gray-500">Loading...</p>
+      <div className="flex-1 flex flex-col h-full">
+        <div className="page-header">
+          <h1>Actions</h1>
+          <p>Manage the pending and executed actions of your session.</p>
+        </div>
+        <div className="page-content">
+          <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div>
-      <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Actions</h1>
+    <div className="flex-1 flex flex-col h-full">
+      <div className="page-header">
+        <h1>Actions</h1>
+        <p>Manage the pending and executed actions of your session.</p>
+      </div>
 
-      {error && (
-        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+      <div className="page-content">
+        {error && (
+          <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
+            {error}
+          </div>
+        )}
 
-      {/* Pending Actions */}
-      <section className="mb-10">
-        <h2 className="mb-4 text-lg font-bold text-black">
-          Pending Actions ({pendingActions.length})
-        </h2>
-        <div className="border border-gray-200 bg-white p-6">
+        {/* Pending Actions */}
+        <section className="settings-panel">
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>
+            Pending Actions ({pendingActions.length})
+          </h2>
           <PendingActionsTable
             actions={pendingActions}
             onApprove={handleApprove}
             onReject={handleReject}
             processingIds={processingIds}
           />
-        </div>
-      </section>
+        </section>
 
-      {/* Executed Actions */}
-      <section>
-        <h2 className="mb-4 text-lg font-bold text-black">
-          Executed Actions ({executedActions.length})
-        </h2>
-        <div className="border border-gray-200 bg-white p-6">
+        {/* Executed Actions */}
+        <section className="settings-panel">
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>
+            Executed Actions ({executedActions.length})
+          </h2>
           <ExecutedActionsTable
             actions={executedActions}
             onUndo={handleUndo}
             processingIds={processingIds}
           />
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
   );
 }

@@ -16,6 +16,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { Clock, Timer, Zap } from "lucide-react";
 import type { SessionSummary } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
@@ -170,47 +171,58 @@ function RecentSessionCard({
   const isBulkProcessing = processingIds.has(BULK_KEY);
 
   return (
-    <div className="border border-gray-200 bg-white p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-bold text-black">Most Recent Session</h2>
+    <div className="settings-panel">
+      <div className="mb-3 flex items-start justify-between">
+        <div>
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Most Recent Session</h2>
+          <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>View details and manage actions for your latest email recording.</p>
+        </div>
         <Link
           href={`/dashboard/sessions/${session.id}`}
-          className="text-sm font-medium text-black hover:underline"
+          className="text-[13px] font-medium text-[var(--accent-color)] hover:opacity-80 transition-colors mt-1"
         >
           View full session
         </Link>
       </div>
 
-      {/* Session metadata */}
-      <div className="mb-4 flex gap-6 text-sm text-gray-600">
-        <span>
-          {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
-          {" "}({formatRelativeTime(session.startedAt)})
+      {/* Session metadata badges */}
+      <div className="mb-5 flex gap-2">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+          <Clock size={12} />
+          {formatRelativeTime(session.startedAt)}
         </span>
-        <span>Duration: {formatDuration(session.durationSeconds)}</span>
-        <span>{session.actionCount} action{session.actionCount !== 1 ? "s" : ""}</span>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+          <Timer size={12} />
+          {formatDuration(session.durationSeconds)}
+        </span>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+          <Zap size={12} />
+          {session.actionCount} action{session.actionCount !== 1 ? "s" : ""}
+        </span>
       </div>
 
       {/* Actions for this session */}
       {actions.length > 0 ? (
         <>
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-medium text-gray-700">
+            <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>
               Actions ({actions.length}){pendingCount > 0 && ` -- ${pendingCount} pending`}
-            </h3>
+            </h2>
             {pendingCount > 0 && (
-              <div className="flex gap-2">
+              <div className="settings-actions !mt-0 !mb-0">
                 <button
                   onClick={() => onBulk("approve")}
                   disabled={isBusy}
-                  className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                  style={{ background: "var(--btn-primary-bg)", color: "var(--btn-primary-text)", padding: "8px 16px", fontSize: 13, fontWeight: 500, border: "none" }}
+                  className="hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
                 >
                   {isBulkProcessing ? <Spinner /> : "Approve All"}
                 </button>
                 <button
                   onClick={() => onBulk("reject")}
                   disabled={isBusy}
-                  className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                  style={{ background: "var(--btn-primary-bg)", color: "var(--btn-primary-text)", padding: "8px 16px", fontSize: 13, fontWeight: 500, border: "none" }}
+                  className="hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
                 >
                   {isBulkProcessing ? <Spinner /> : "Reject All"}
                 </button>
@@ -224,37 +236,39 @@ function RecentSessionCard({
                 : ""
             }
           >
-            <table className="w-full text-left text-sm">
-              <thead className="sticky top-0 bg-white">
-                <tr className="border-b border-gray-200">
-                  <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Tool</th>
-                  <th className="pb-2 font-medium text-gray-500">From / To</th>
-                  <th className="pb-2 font-medium text-gray-500">Subject</th>
-                  <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Status</th>
+            <table className="w-full text-left text-[13px]">
+              <thead className="sticky top-0 bg-[var(--bg-surface)]">
+                <tr className="border-b border-[var(--border-color)]">
+                  <th className="whitespace-nowrap pb-4 font-medium text-[var(--text-secondary)]">Tool</th>
+                  <th className="pb-4 font-medium text-[var(--text-secondary)]">From / To</th>
+                  <th className="pb-4 font-medium text-[var(--text-secondary)]">Subject</th>
+                  <th className="whitespace-nowrap pb-4 font-medium text-[var(--text-secondary)]">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {actions.map((action) => {
                   const isProcessing = processingIds.has(action.id) || isBulkProcessing;
                   return (
-                    <tr key={action.id} className="border-b border-gray-100">
-                      <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-                      <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
-                      <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
+                    <tr key={action.id} className="border-b border-[var(--border-color)]">
+                      <td className="py-3 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                      <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
+                      <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
                       <td className="py-3">
                         {action.status === "pending" ? (
-                          <div className="flex gap-2">
+                          <div className="settings-actions !mt-0 !mb-0">
                             <button
                               onClick={() => onApprove(action.id)}
                               disabled={isProcessing}
-                              className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                              style={{ background: "var(--btn-primary-bg)", color: "var(--btn-primary-text)", padding: "4px 12px", fontSize: 12, fontWeight: 500, border: "none" }}
+                              className="hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
                             >
                               {isProcessing ? <Spinner /> : "Approve"}
                             </button>
                             <button
                               onClick={() => onReject(action.id)}
                               disabled={isProcessing}
-                              className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                              style={{ background: "var(--bg-main)", color: "var(--text-primary)", padding: "4px 12px", fontSize: 12, fontWeight: 500, border: "1px solid var(--border-color)" }}
+                              className="hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
                             >
                               Reject
                             </button>
@@ -271,7 +285,7 @@ function RecentSessionCard({
           </div>
         </>
       ) : (
-        <p className="text-sm text-gray-500">No actions for this session.</p>
+        <p className="text-[13px] text-[var(--text-secondary)]">No actions for this session.</p>
       )}
     </div>
   );
@@ -290,21 +304,21 @@ function PreviousSessionCard({
   hasPendingActions: boolean;
 }) {
   return (
-    <Link href={`/dashboard/sessions/${session.id}`} className="block">
-      <div className="border border-gray-200 bg-white p-6 hover:border-black">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-600">
-            {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
-          </span>
+    <Link href={`/dashboard/sessions/${session.id}`} style={{ textDecoration: "none" }} className="block">
+      <div className="settings-panel hover:border-[var(--text-secondary)] transition-colors cursor-pointer" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>
+          {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
+        </h2>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0, display: "flex", justifyContent: "space-between" }}>
+          <div className="flex gap-4">
+            <span>{formatDuration(session.durationSeconds)}</span>
+            <span>{session.actionCount} action{session.actionCount !== 1 ? "s" : ""}</span>
+          </div>
           {hasPendingActions && (
-            <span className="bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
-              Pending actions
+            <span style={{ color: "#d29922", fontWeight: 500 }}>
+              • Pending actions
             </span>
           )}
-        </div>
-        <div className="mt-2 flex gap-4 text-sm text-gray-500">
-          <span>{formatDuration(session.durationSeconds)}</span>
-          <span>{session.actionCount} action{session.actionCount !== 1 ? "s" : ""}</span>
         </div>
       </div>
     </Link>
@@ -438,9 +452,14 @@ export default function DashboardOverviewPage() {
 
   if (loading) {
     return (
-      <div>
-        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Overview</h1>
-        <p className="text-gray-500">Loading...</p>
+      <div className="flex-1 flex flex-col">
+        <div className="page-header">
+          <h1>Overview</h1>
+          <p>Manage your Voice Email sessions and activities.</p>
+        </div>
+        <div className="page-content">
+          <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
+        </div>
       </div>
     );
   }
@@ -454,51 +473,68 @@ export default function DashboardOverviewPage() {
     : [];
 
   return (
-    <div>
-      <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Overview</h1>
-
-      {error && (
-        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">{error}</div>
-      )}
-
-      {/* Most recent session */}
-      {mostRecent ? (
-        <div className="mb-6">
-          <RecentSessionCard
-            session={mostRecent}
-            actions={mostRecentActions}
-            processingIds={processingIds}
-            onApprove={handleApprove}
-            onReject={handleReject}
-            onBulk={handleBulk}
-          />
+    <div className="flex-1 flex flex-col">
+      <div className="page-header">
+        <div className="flex items-center justify-between">
+          <h1>Overview</h1>
+          <Link
+            href="/dashboard/sessions"
+            style={{
+              background: "var(--btn-primary-bg)",
+              color: "var(--btn-primary-text)",
+              padding: "8px 16px",
+              fontSize: 13,
+              fontWeight: 500,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+            className="hover:opacity-90 transition-opacity"
+          >
+            All Sessions <span style={{ fontSize: 16 }}>&rsaquo;</span>
+          </Link>
         </div>
-      ) : (
-        <div className="mb-6 border border-gray-200 bg-white p-6">
-          <p className="text-sm text-gray-500">No sessions yet.</p>
-        </div>
-      )}
+        <p>Manage your Voice Email sessions and activities.</p>
+      </div>
 
-      {/* Previous sessions */}
-      {previousSessions.length > 0 && (
-        <div className="mb-6 flex flex-col gap-4">
-          {previousSessions.map((session) => (
-            <PreviousSessionCard
-              key={session.id}
-              session={session}
-              hasPendingActions={allActions.some((a) => a.sessionId === session.id && a.status === "pending")}
+      <div className="page-content">
+        {error && (
+          <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">{error}</div>
+        )}
+
+        {/* Most recent session */}
+        {mostRecent ? (
+          <div className="mb-6">
+            <RecentSessionCard
+              session={mostRecent}
+              actions={mostRecentActions}
+              processingIds={processingIds}
+              onApprove={handleApprove}
+              onReject={handleReject}
+              onBulk={handleBulk}
             />
-          ))}
-        </div>
-      )}
+          </div>
+        ) : (
+          <div className="settings-panel">
+            <p className="text-[13px] text-[var(--text-secondary)]">No sessions yet.</p>
+          </div>
+        )}
 
-      {/* All Sessions button */}
-      <Link
-        href="/dashboard/sessions"
-        className="group inline-flex items-center gap-2 border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-gray-50"
-      >
-        All Sessions <span className="transition-transform group-hover:translate-x-1">&rarr;</span>
-      </Link>
+        {/* Previous sessions */}
+        {previousSessions.length > 0 && (
+          <div className="mb-6 flex flex-col">
+            {previousSessions.map((session) => (
+              <PreviousSessionCard
+                key={session.id}
+                session={session}
+                hasPendingActions={allActions.some((a) => a.sessionId === session.id && a.status === "pending")}
+              />
+            ))}
+          </div>
+        )}
+
+      </div>
     </div>
   );
 }

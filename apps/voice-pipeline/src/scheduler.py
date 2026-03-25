@@ -129,17 +129,16 @@ def get_due_users(supabase: Client) -> list[DueUser]:
         if not (scheduled_dt <= now_local < window_end):
             continue
 
-        # Check dedup: last_call_at should not be today in user's timezone
+        # Check dedup: skip if last_call_at is after the current scheduled time.
+        # This allows a second call if the user reschedules to a later time.
         last_call_at_str = schedule.get("last_call_at")
         if last_call_at_str:
             try:
                 last_call_at = datetime.fromisoformat(last_call_at_str)
-                # Convert to user's timezone and check if it's today
                 last_call_local = last_call_at.astimezone(tz)
-                if last_call_local.date() == now_local.date():
+                if last_call_local >= scheduled_dt:
                     continue
             except (ValueError, TypeError):
-                # If we can't parse last_call_at, treat as not called today
                 pass
 
         # Check usage limit
@@ -233,13 +232,19 @@ def initiate_scheduled_call(
     # Re-check dedup guard before claiming (race condition protection)
     if previous_last_call_at:
         try:
-            last_call = datetime.fromisoformat(previous_last_call_at)
             tz = ZoneInfo(user.timezone)
             now_local = datetime.now(tz)
-            if last_call.astimezone(tz).date() == now_local.date():
-                logger.info("[scheduler] User {} already called today (race condition caught)", user.user_id)
+            day_name = DAY_KEYS[now_local.weekday()]
+            scheduled_time_str = current_schedule.get(day_name, "")
+            parts = scheduled_time_str.split(":")
+            scheduled_dt = now_local.replace(hour=int(parts[0]), minute=int(parts[1]), second=0, microsecond=0)
+
+            last_call = datetime.fromisoformat(previous_last_call_at)
+            last_call_local = last_call.astimezone(tz)
+            if last_call_local >= scheduled_dt:
+                logger.info("[scheduler] User {} already called for this slot (race condition caught)", user.user_id)
                 return False
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, IndexError):
             pass
 
     # Step 2: Claim the slot by setting last_call_at to now (UTC ISO string)

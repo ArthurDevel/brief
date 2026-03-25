@@ -48,20 +48,24 @@ function SettingsContent() {
   );
 
   return (
-    <div>
-      <h1 className="mb-6 text-3xl font-extrabold tracking-tight text-black">Settings</h1>
-
+    <div className="flex-1 flex flex-col h-full" style={{ padding: 0 }}>
       {/* Tab bar */}
-      <div className="mb-8 flex border-b border-gray-200">
+      <div style={{ display: "flex", gap: "8px", padding: "24px 32px 16px", borderBottom: "1px solid var(--border-color)", flexShrink: 0 }}>
         {TABS.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
-              activeTab === tab.id
-                ? "border-b-2 border-black text-black font-bold"
-                : "text-gray-500 hover:text-black"
-            }`}
+            style={{
+              padding: "6px 14px",
+              background: activeTab === tab.id ? "var(--btn-primary-bg)" : "var(--bg-main)",
+              border: "1px solid " + (activeTab === tab.id ? "transparent" : "var(--border-color)"),
+              borderRadius: 0,
+              color: activeTab === tab.id ? "var(--btn-primary-text)" : "var(--text-primary)",
+              fontWeight: 500,
+              cursor: "pointer",
+              fontSize: "13px",
+              transition: "all 0.1s ease",
+            }}
           >
             {tab.label}
           </button>
@@ -69,18 +73,20 @@ function SettingsContent() {
       </div>
 
       {/* Tab content */}
-      {activeTab === "general" && <GeneralTab />}
-      {activeTab === "email" && <EmailTab />}
-      {activeTab === "billing" && <BillingTab />}
-      {activeTab === "feature-requests" && <FeatureRequestsTab />}
-      {activeTab === "schedule" && <ScheduleTab />}
+      <div style={{ flex: 1, overflowY: "auto", padding: "48px 64px" }}>
+        {activeTab === "general" && <GeneralTab />}
+        {activeTab === "email" && <EmailTab />}
+        {activeTab === "billing" && <BillingTab />}
+        {activeTab === "feature-requests" && <FeatureRequestsTab />}
+        {activeTab === "schedule" && <ScheduleTab />}
+      </div>
     </div>
   );
 }
 
 export default function SettingsPage() {
   return (
-    <Suspense fallback={<p className="text-gray-500">Loading...</p>}>
+    <Suspense fallback={<p className="text-[var(--text-secondary)]">Loading...</p>}>
       <SettingsContent />
     </Suspense>
   );

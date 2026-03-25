@@ -158,7 +158,7 @@ function TranscriptBubble({ entry }: { entry: TranscriptEntry }) {
         className={`max-w-[70%] px-4 py-2 text-sm ${
           isUser
             ? "bg-black text-white"
-            : "bg-gray-100 text-gray-800"
+            : "bg-[var(--bg-hover)] text-[var(--text-primary)]"
         }`}
       >
         <p className="mb-1 text-xs font-medium opacity-70">
@@ -177,9 +177,9 @@ function TranscriptBubble({ entry }: { entry: TranscriptEntry }) {
 function ActionCard({ action }: { action: ActionRow }) {
   return (
     <div className="flex justify-start">
-      <div className="border border-gray-300 bg-gray-50 px-4 py-2 text-xs text-gray-600">
+      <div className="border border-[var(--border-color)] bg-[var(--bg-surface)] px-4 py-2 text-xs text-[var(--text-secondary)]">
         <span className="font-medium">{TOOL_LABELS[action.toolName] ?? action.toolName}</span>
-        <span className="ml-2 text-gray-400">({action.status})</span>
+        <span className="ml-2 text-[var(--text-secondary)]">({action.status})</span>
       </div>
     </div>
   );
@@ -225,24 +225,26 @@ function ActionsSummary({
   const isBusy = processingIds.size > 0;
 
   return (
-    <div className="mb-8 border border-gray-200 bg-white p-6">
+    <div className="settings-panel mb-8">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-700">
+        <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>
           Actions ({actions.length}){pendingCount > 0 && ` -- ${pendingCount} pending`}
         </h2>
         {pendingCount > 0 && (
-          <div className="flex gap-2">
+          <div className="settings-actions !mt-0 !mb-0">
             <button
               onClick={() => onBulk("approve")}
               disabled={isBusy}
-              className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+              style={{ background: "var(--btn-primary-bg)", color: "var(--btn-primary-text)", padding: "8px 16px", fontSize: 13, fontWeight: 500, border: "none" }}
+              className="hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
             >
               {isBulkProcessing ? <Spinner /> : "Approve All"}
             </button>
             <button
               onClick={() => onBulk("reject")}
               disabled={isBusy}
-              className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              style={{ background: "var(--btn-primary-bg)", color: "var(--btn-primary-text)", padding: "8px 16px", fontSize: 13, fontWeight: 500, border: "none" }}
+              className="hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
             >
               {isBulkProcessing ? <Spinner /> : "Reject All"}
             </button>
@@ -250,14 +252,14 @@ function ActionsSummary({
         )}
       </div>
       <div className={sorted.length > MAX_VISIBLE_ROWS ? "max-h-[440px] overflow-y-auto" : ""}>
-      <table className="w-full text-left text-sm">
-        <thead className="sticky top-0 bg-white">
-          <tr className="border-b border-gray-200">
-            <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Tool</th>
-            <th className="pb-2 font-medium text-gray-500">From / To</th>
-            <th className="pb-2 font-medium text-gray-500">Subject</th>
-            <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Status</th>
-            <th className="whitespace-nowrap pb-2 font-medium text-gray-500">Actions</th>
+      <table className="w-full text-left text-[13px]">
+        <thead className="sticky top-0 bg-[var(--bg-surface)]">
+          <tr className="border-b border-[var(--border-color)]">
+            <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Tool</th>
+            <th className="pb-2 font-medium text-[var(--text-secondary)]">From / To</th>
+            <th className="pb-2 font-medium text-[var(--text-secondary)]">Subject</th>
+            <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Status</th>
+            <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -266,10 +268,10 @@ function ActionsSummary({
             const isPending = action.status === "pending";
 
             return (
-              <tr key={action.id} className="border-b border-gray-100">
-                <td className="py-3 text-sm">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-                <td className="max-w-xs truncate py-3 text-gray-600">{getContact(action.arguments)}</td>
-                <td className="max-w-xs truncate py-3 text-gray-600">{getSubject(action.arguments)}</td>
+              <tr key={action.id} className="border-b border-[var(--border-color)]">
+                <td className="py-3 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
+                <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
                 <td className="py-3">
                   {isPending ? (
                     <span className="bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
@@ -287,32 +289,37 @@ function ActionsSummary({
                 </td>
                 <td className="py-3">
                   {isPending ? (
-                    <div className="flex gap-2">
+                    <div className="settings-actions !mt-0 !mb-0">
                       <button
                         onClick={() => onApprove(action.id)}
                         disabled={isProcessing}
-                        className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                        style={{ background: "var(--btn-primary-bg)", color: "var(--btn-primary-text)", padding: "4px 12px", fontSize: 12, fontWeight: 500, border: "none" }}
+                        className="hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
                       >
                         {processingIds.has(action.id) ? <Spinner /> : "Approve"}
                       </button>
                       <button
                         onClick={() => onReject(action.id)}
                         disabled={isProcessing}
-                        className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                        style={{ background: "var(--bg-main)", color: "var(--text-primary)", padding: "4px 12px", fontSize: 12, fontWeight: 500, border: "1px solid var(--border-color)" }}
+                        className="hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
                       >
                         Reject
                       </button>
                     </div>
                   ) : action.undoRecipe && action.status === "executed" ? (
-                    <button
-                      onClick={() => onUndo(action.id)}
-                      disabled={isProcessing}
-                      className="inline-flex items-center gap-1 bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
-                    >
-                      {processingIds.has(action.id) ? <Spinner /> : "Undo"}
-                    </button>
+                    <div className="settings-actions !mt-0 !mb-0">
+                      <button
+                        onClick={() => onUndo(action.id)}
+                        disabled={isProcessing}
+                        style={{ background: "var(--bg-main)", color: "var(--text-primary)", padding: "4px 12px", fontSize: 12, fontWeight: 500, border: "1px solid var(--border-color)" }}
+                        className="hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
+                      >
+                        {processingIds.has(action.id) ? <Spinner /> : "Undo"}
+                      </button>
+                    </div>
                   ) : (
-                    <span className="text-xs text-gray-400">-</span>
+                    <span className="text-xs text-[var(--text-secondary)]">-</span>
                   )}
                 </td>
               </tr>
@@ -448,19 +455,29 @@ export default function SessionDetailPage() {
 
   if (loading) {
     return (
-      <div>
-        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Session Detail</h1>
-        <p className="text-gray-500">Loading...</p>
+      <div className="flex-1 flex flex-col h-full">
+        <div className="page-header">
+          <h1>Session Detail</h1>
+          <p>View transcripts and actions for this session.</p>
+        </div>
+        <div className="page-content">
+          <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
+        </div>
       </div>
     );
   }
 
   if (error || !session) {
     return (
-      <div>
-        <h1 className="mb-8 text-3xl font-extrabold tracking-tight text-black">Session Detail</h1>
-        <div className="bg-red-50 p-4 text-sm text-red-700">
-          {error ?? "Session not found"}
+      <div className="flex-1 flex flex-col h-full">
+        <div className="page-header">
+          <h1>Session Detail</h1>
+          <p>View transcripts and actions for this session.</p>
+        </div>
+        <div className="page-content">
+          <div className="bg-red-50 p-4 text-sm text-red-700">
+            {error ?? "Session not found"}
+          </div>
         </div>
       </div>
     );
@@ -469,22 +486,26 @@ export default function SessionDetailPage() {
   const timeline = buildTimeline(session.transcript, session.actions);
 
   return (
-    <div>
-      <h1 className="mb-4 text-3xl font-extrabold tracking-tight text-black">Session Detail</h1>
+    <div className="flex-1 flex flex-col h-full">
+      <div className="page-header">
+        <h1>Session Detail</h1>
+        <p>View transcripts and actions for this session.</p>
+      </div>
 
-      {/* Session header */}
-      <div className="mb-6 border border-gray-200 bg-white p-6">
-        <div className="flex gap-8 text-sm text-gray-600">
+      <div className="page-content">
+        {/* Session header */}
+        <div className="settings-panel mb-6">
+        <div className="flex gap-8 text-[13px] text-[var(--text-primary)]">
           <div>
-            <span className="font-medium text-gray-500">Date: </span>
+            <span className="font-medium text-[var(--text-secondary)]">Date: </span>
             {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
           </div>
           <div>
-            <span className="font-medium text-gray-500">Duration: </span>
+            <span className="font-medium text-[var(--text-secondary)]">Duration: </span>
             {formatDuration(session.durationSeconds)}
           </div>
           <div>
-            <span className="font-medium text-gray-500">Actions: </span>
+            <span className="font-medium text-[var(--text-secondary)]">Actions: </span>
             {session.actions.length}
           </div>
         </div>
@@ -505,11 +526,11 @@ export default function SessionDetailPage() {
       />
 
       {/* Timeline */}
-      <div className="border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-sm font-semibold text-gray-700">Transcript</h2>
-        <div className="space-y-3">
+      <div className="settings-panel">
+        <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Transcript</h2>
+        <div className="space-y-3 mt-4">
           {timeline.length === 0 ? (
-            <p className="text-sm text-gray-500">No transcript or actions recorded.</p>
+            <p className="text-sm text-[var(--text-secondary)]">No transcript or actions recorded.</p>
           ) : (
             timeline.map((item, index) => (
               <div key={index}>
@@ -522,6 +543,7 @@ export default function SessionDetailPage() {
             ))
           )}
         </div>
+      </div>
       </div>
     </div>
   );
