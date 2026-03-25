@@ -1,14 +1,10 @@
 /**
- * Actions page -- pending action queue and executed action history.
- *
- * Shows two sections:
- * - Pending Actions: table with approve/reject buttons + bulk approve/reject
- * - Executed Actions: table with undo button (when undoable)
+ * Actions page -- single chronological table of all actions.
  *
  * Responsibilities:
  * - Fetch actions from /api/actions
- * - Approve, reject, and undo individual actions via API calls (supports concurrent ops)
- * - Display actions in categorized tables with loading spinners
+ * - Approve, reject, and undo individual actions via API calls
+ * - Display all actions in one table with status badges
  */
 
 "use client";
@@ -26,6 +22,13 @@ const DATE_FORMAT: Intl.DateTimeFormatOptions = {
   day: "numeric",
   hour: "2-digit",
   minute: "2-digit",
+};
+
+const STATUS_STYLES: Record<string, string> = {
+  executed: "bg-green-100 text-green-700",
+  rejected: "bg-red-100 text-red-700",
+  undone: "bg-yellow-100 text-yellow-700",
+  failed: "bg-orange-100 text-orange-700",
 };
 
 // ============================================================================
@@ -78,7 +81,7 @@ async function undoActionRequest(actionId: string): Promise<Response> {
 /**
  * Extracts the "from" or "to" field from action arguments.
  * @param args - The action arguments object
- * @returns The from/to string, truncated, or "-"
+ * @returns The from/to string or "-"
  */
 function getContact(args: Record<string, unknown>): string {
   const value = (args.from ?? args.to) as string | undefined;
@@ -109,26 +112,34 @@ function Spinner() {
 // ============================================================================
 
 /**
- * Table of pending actions with approve/reject buttons.
- * @param props.actions - Array of pending actions
+ * Single table of all actions sorted chronologically (newest first).
+ * @param props.actions - All actions
  * @param props.onApprove - Callback when approve is clicked
  * @param props.onReject - Callback when reject is clicked
+ * @param props.onUndo - Callback when undo is clicked
  * @param props.processingIds - Set of action IDs currently being processed
  */
-function PendingActionsTable({
+function ActionsTable({
   actions,
   onApprove,
   onReject,
+  onUndo,
   processingIds,
 }: {
   actions: ActionRow[];
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
+  onUndo: (id: string) => void;
   processingIds: Set<string>;
 }) {
   if (actions.length === 0) {
-    return <p className="text-[13px] text-[var(--text-secondary)]">No pending actions.</p>;
+    return <p className="text-[13px] text-[var(--text-secondary)]">No actions.</p>;
   }
+
+  // Sort chronologically, newest first
+  const sorted = [...actions].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 
   return (
     <table className="w-full text-left text-[13px]">
@@ -137,92 +148,49 @@ function PendingActionsTable({
           <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Tool</th>
           <th className="pb-2 font-medium text-[var(--text-secondary)]">From / To</th>
           <th className="pb-2 font-medium text-[var(--text-secondary)]">Subject</th>
-          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Created</th>
+          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Status</th>
+          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Date</th>
           <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
         </tr>
       </thead>
       <tbody>
-        {actions.map((action) => {
+        {sorted.map((action) => {
           const isProcessing = processingIds.has(action.id);
           return (
             <tr key={action.id} className="border-b border-[var(--border-color)]">
               <td className="py-3 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
               <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
               <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
+              <td className="py-3">
+                <span
+                  className={`px-2 py-0.5 text-xs font-bold ${STATUS_STYLES[action.status] ?? "bg-gray-100 text-gray-600"}`}
+                  title={action.status === "failed" ? (action.result?.error as string) : undefined}
+                >
+                  {action.status}
+                </span>
+              </td>
               <td className="py-3 text-[var(--text-secondary)]">
                 {new Date(action.createdAt).toLocaleDateString("en-US", DATE_FORMAT)}
               </td>
               <td className="py-3">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => onApprove(action.id)}
-                    disabled={isProcessing}
-                    className="inline-flex items-center gap-1 bg-[var(--btn-primary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-primary-text)] hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
-                  >
-                    {processingIds.has(action.id) ? <Spinner /> : "Approve"}
-                  </button>
-                  <button
-                    onClick={() => onReject(action.id)}
-                    disabled={isProcessing}
-                    className="inline-flex items-center gap-1 bg-[var(--btn-secondary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-secondary-text)] border border-[var(--btn-secondary-border)] hover:bg-[var(--btn-secondary-hover)] disabled:opacity-50"
-                  >
-                    Reject
-                  </button>
-                </div>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
-/**
- * Table of executed actions with optional undo button.
- * @param props.actions - Array of executed actions
- * @param props.onUndo - Callback when undo is clicked
- * @param props.processingIds - Set of action IDs currently being processed
- */
-function ExecutedActionsTable({
-  actions,
-  onUndo,
-  processingIds,
-}: {
-  actions: ActionRow[];
-  onUndo: (id: string) => void;
-  processingIds: Set<string>;
-}) {
-  if (actions.length === 0) {
-    return <p className="text-[13px] text-[var(--text-secondary)]">No executed actions.</p>;
-  }
-
-  return (
-    <table className="w-full text-left text-[13px]">
-      <thead>
-        <tr className="border-b border-[var(--border-color)]">
-          <th className="w-[12%] pb-2 font-medium text-[var(--text-secondary)]">Tool</th>
-          <th className="w-[25%] pb-2 font-medium text-[var(--text-secondary)]">From / To</th>
-          <th className="w-[33%] pb-2 font-medium text-[var(--text-secondary)]">Subject</th>
-          <th className="w-[15%] pb-2 font-medium text-[var(--text-secondary)]">Executed</th>
-          <th className="w-[15%] pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {actions.map((action) => {
-          const isProcessing = processingIds.has(action.id);
-          return (
-            <tr key={action.id} className="border-b border-[var(--border-color)]">
-              <td className="py-3 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-              <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
-              <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
-              <td className="py-3 text-[var(--text-secondary)]">
-                {action.executedAt
-                  ? new Date(action.executedAt).toLocaleDateString("en-US", DATE_FORMAT)
-                  : "-"}
-              </td>
-              <td className="py-3">
-                {action.undoRecipe && action.status === "executed" ? (
+                {action.status === "pending" ? (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => onApprove(action.id)}
+                      disabled={isProcessing}
+                      className="inline-flex items-center gap-1 bg-[var(--btn-primary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-primary-text)] hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
+                    >
+                      {isProcessing ? <Spinner /> : "Approve"}
+                    </button>
+                    <button
+                      onClick={() => onReject(action.id)}
+                      disabled={isProcessing}
+                      className="inline-flex items-center gap-1 bg-[var(--btn-secondary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-secondary-text)] border border-[var(--btn-secondary-border)] hover:bg-[var(--btn-secondary-hover)] disabled:opacity-50"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                ) : action.undoRecipe && action.status === "executed" ? (
                   <button
                     onClick={() => onUndo(action.id)}
                     disabled={isProcessing}
@@ -231,9 +199,7 @@ function ExecutedActionsTable({
                     {isProcessing ? <Spinner /> : "Undo"}
                   </button>
                 ) : (
-                  <span className="text-xs text-[var(--text-secondary)]">
-                    {action.status === "undone" ? "Undone" : "-"}
-                  </span>
+                  <span className="text-xs text-[var(--text-secondary)]">-</span>
                 )}
               </td>
             </tr>
@@ -293,12 +259,7 @@ export default function ActionsPage() {
   const handleApprove = async (actionId: string) => {
     addProcessing(actionId);
     try {
-      const res = await approveAction(actionId);
-      if (!res.ok) {
-        const body = await res.json();
-        setError(body.error ?? "Failed to approve action");
-        return;
-      }
+      await approveAction(actionId);
       await loadActions();
     } catch {
       setError("Failed to approve action");
@@ -310,12 +271,7 @@ export default function ActionsPage() {
   const handleReject = async (actionId: string) => {
     addProcessing(actionId);
     try {
-      const res = await rejectAction(actionId);
-      if (!res.ok) {
-        const body = await res.json();
-        setError(body.error ?? "Failed to reject action");
-        return;
-      }
+      await rejectAction(actionId);
       await loadActions();
     } catch {
       setError("Failed to reject action");
@@ -327,12 +283,7 @@ export default function ActionsPage() {
   const handleUndo = async (actionId: string) => {
     addProcessing(actionId);
     try {
-      const res = await undoActionRequest(actionId);
-      if (!res.ok) {
-        const body = await res.json();
-        setError(body.error ?? "Failed to undo action");
-        return;
-      }
+      await undoActionRequest(actionId);
       await loadActions();
     } catch {
       setError("Failed to undo action");
@@ -341,15 +292,12 @@ export default function ActionsPage() {
     }
   };
 
-  const pendingActions = actions.filter((a) => a.status === "pending");
-  const executedActions = actions.filter((a) => a.status === "executed" || a.status === "undone" || a.status === "failed");
-
   if (loading) {
     return (
       <div className="flex-1 flex flex-col h-full">
         <div className="page-header">
           <h1>Actions</h1>
-          <p>Manage the pending and executed actions of your session.</p>
+          <p>Manage your actions.</p>
         </div>
         <div className="page-content">
           <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
@@ -362,7 +310,7 @@ export default function ActionsPage() {
     <div className="flex-1 flex flex-col h-full">
       <div className="page-header">
         <h1>Actions</h1>
-        <p>Manage the pending and executed actions of your session.</p>
+        <p>Manage your actions.</p>
       </div>
 
       <div className="page-content">
@@ -372,26 +320,11 @@ export default function ActionsPage() {
           </div>
         )}
 
-        {/* Pending Actions */}
         <section className="settings-panel">
-          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>
-            Pending Actions ({pendingActions.length})
-          </h2>
-          <PendingActionsTable
-            actions={pendingActions}
+          <ActionsTable
+            actions={actions}
             onApprove={handleApprove}
             onReject={handleReject}
-            processingIds={processingIds}
-          />
-        </section>
-
-        {/* Executed Actions */}
-        <section className="settings-panel">
-          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>
-            Executed Actions ({executedActions.length})
-          </h2>
-          <ExecutedActionsTable
-            actions={executedActions}
             onUndo={handleUndo}
             processingIds={processingIds}
           />
