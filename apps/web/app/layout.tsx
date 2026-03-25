@@ -15,7 +15,7 @@ const ibmPlexSerif = IBM_Plex_Serif({
 });
 
 export const metadata: Metadata = {
-  title: "Voice Email Assistant",
+  title: "BrewDock",
   description: "Manage your email with voice",
 };
 
