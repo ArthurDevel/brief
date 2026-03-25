@@ -19,7 +19,8 @@ import type { DeepgramVoice } from "@/app/api/deepgram/voices/route";
 // CONSTANTS
 // ============================================================================
 
-const DEFAULT_VOICE = "aura-2-helena-en";
+const DEFAULT_VOICE = "aura-2-andromeda-en";
+const DEFAULT_SPEED = 1.2;
 
 const TOOL_NAMES = [
   "mark_as_read",
@@ -154,7 +155,7 @@ export default function GeneralTab() {
   const [phone, setPhone] = useState<PhoneFormState>({ number: "", countryCode: "" });
   const [pin, setPin] = useState("");
   const [voicePreference, setVoicePreference] = useState(DEFAULT_VOICE);
-  const [voiceSpeed, setVoiceSpeed] = useState(1.0);
+  const [voiceSpeed, setVoiceSpeed] = useState(DEFAULT_SPEED);
   const [voices, setVoices] = useState<DeepgramVoice[]>([]);
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
   const [previewingSpeed, setPreviewingSpeed] = useState(false);
@@ -176,7 +177,7 @@ export default function GeneralTab() {
 
   // Ref to always have latest form values for auto-save without stale closures
   const formRef = useRef({
-    voicePreference: DEFAULT_VOICE, voiceSpeed: 1.0,
+    voicePreference: DEFAULT_VOICE, voiceSpeed: DEFAULT_SPEED,
     toolApprovalConfig: {} as ToolApprovalConfig,
   });
   // Keep ref in sync
@@ -343,6 +344,9 @@ export default function GeneralTab() {
   const speedDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   function handleSpeedChange(speed: number) {
     setVoiceSpeed(speed);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = speed;
+    }
     clearTimeout(speedDebounceRef.current);
     speedDebounceRef.current = setTimeout(() => {
       autoSave({ voiceSpeed: speed }, "speed");
@@ -366,6 +370,7 @@ export default function GeneralTab() {
       return;
     }
     const audio = new Audio(sampleUrl);
+    audio.playbackRate = voiceSpeed;
     audio.onended = () => setPlayingVoice(null);
     audio.play();
     audioRef.current = audio;
@@ -497,6 +502,36 @@ export default function GeneralTab() {
           </div>
         </section>
 
+        {/* Voice Speed */}
+        <section className="settings-panel">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 >Voice Speed</h2>
+            {savedSection === "speed" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="text-[13px] text-[var(--text-secondary)] w-10">1x</span>
+            <input
+              type="range"
+              min={1}
+              max={1.5}
+              step={0.05}
+              value={voiceSpeed}
+              onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
+              className="flex-1 accent-[var(--btn-primary-bg)]"
+            />
+            <span className="text-[13px] text-[var(--text-secondary)] w-12">1.5x</span>
+            <span className="text-[13px] font-medium text-[var(--text-primary)] w-12 text-right">{voiceSpeed.toFixed(2)}x</span>
+            <button
+              type="button"
+              onClick={handleSpeedPreview}
+              disabled={!voices.find((v) => v.canonicalName === voicePreference)?.sampleUrl}
+              className="shrink-0 border border-[var(--border-color)] px-3 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+            >
+              {previewingSpeed ? "Stop" : "Preview"}
+            </button>
+          </div>
+        </section>
+
         {/* Voice Preference */}
         <section className="settings-panel">
           <div className="mb-4 flex items-center justify-between">
@@ -546,36 +581,6 @@ export default function GeneralTab() {
               ))}
             </div>
           )}
-        </section>
-
-        {/* Voice Speed */}
-        <section className="settings-panel">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 >Voice Speed</h2>
-            {savedSection === "speed" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="text-[13px] text-[var(--text-secondary)] w-10">1x</span>
-            <input
-              type="range"
-              min={1}
-              max={1.5}
-              step={0.05}
-              value={voiceSpeed}
-              onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
-              className="flex-1 accent-[var(--btn-primary-bg)]"
-            />
-            <span className="text-[13px] text-[var(--text-secondary)] w-12">1.5x</span>
-            <span className="text-[13px] font-medium text-[var(--text-primary)] w-12 text-right">{voiceSpeed.toFixed(2)}x</span>
-            <button
-              type="button"
-              onClick={handleSpeedPreview}
-              disabled={!voices.find((v) => v.canonicalName === voicePreference)?.sampleUrl}
-              className="shrink-0 border border-[var(--border-color)] px-3 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-            >
-              {previewingSpeed ? "Stop" : "Preview"}
-            </button>
-          </div>
         </section>
 
         {/* Tool Approval Toggles */}

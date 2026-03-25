@@ -23,7 +23,7 @@ import type { UsageInfo } from "@/lib/types";
 /** Hours limit per plan. */
 const PLAN_HOURS: Record<string, number> = {
   free: 1,
-  pro: 5,
+  pro: 6,
 };
 
 // ============================================================================

@@ -29,8 +29,8 @@ def _make_user_context() -> UserContext:
         user_id="test-user",
         imap_config=MagicMock(),
         smtp_config=SmtpConfig(host="", port=0, user="", password=""),
-        voice_preference="aura-asteria-en",
-        voice_speed=1.0,
+        voice_preference="aura-2-andromeda-en",
+        voice_speed=1.2,
         tool_approval_config={},
         memory_entries=[],
     )
