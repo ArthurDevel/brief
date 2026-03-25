@@ -212,6 +212,7 @@ export default function CallPage() {
           </section>
 
         </div>
+        </>
         )}
       </div>
     </div>
