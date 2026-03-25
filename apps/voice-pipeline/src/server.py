@@ -612,7 +612,7 @@ async def twilio_voice(request: Request) -> Response:
 
     if user_record is None:
         logger.info("[twilio] Unknown caller %s, rejecting", caller_phone)
-        twiml = build_twiml_reject("This phone number is not registered. Goodbye.")
+        twiml = build_twiml_reject("This phone number is not linked to a Brief account. Please create an account on brief dot ai and add your phone number in settings. Goodbye.")
         return Response(content=twiml, media_type="text/xml")
 
     if user_record["pin_locked"]:
