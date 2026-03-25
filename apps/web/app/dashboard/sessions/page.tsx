@@ -75,11 +75,11 @@ export default function HistoryPage() {
   if (loading) {
     return (
       <div className="flex-1 flex flex-col h-full">
-        <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>History</h1>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Past call sessions and interactions.</p>
+        <div className="page-header">
+          <h1>History</h1>
+          <p>Past call sessions and interactions.</p>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+        <div className="page-content">
           <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
         </div>
       </div>
@@ -88,12 +88,12 @@ export default function HistoryPage() {
 
   return (
     <div className="flex-1 flex flex-col h-full">
-      <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>History</h1>
-        <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Past call sessions and interactions.</p>
+      <div className="page-header">
+        <h1>History</h1>
+        <p>Past call sessions and interactions.</p>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+      <div className="page-content">
         {error && (
           <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
             {error}

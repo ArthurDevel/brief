@@ -157,14 +157,14 @@ function PendingActionsTable({
                   <button
                     onClick={() => onApprove(action.id)}
                     disabled={isProcessing}
-                    className="inline-flex items-center gap-1 bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 bg-[var(--btn-primary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-primary-text)] hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
                   >
                     {processingIds.has(action.id) ? <Spinner /> : "Approve"}
                   </button>
                   <button
                     onClick={() => onReject(action.id)}
                     disabled={isProcessing}
-                    className="inline-flex items-center gap-1 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 bg-[var(--btn-secondary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-secondary-text)] border border-[var(--btn-secondary-border)] hover:bg-[var(--btn-secondary-hover)] disabled:opacity-50"
                   >
                     Reject
                   </button>
@@ -226,12 +226,12 @@ function ExecutedActionsTable({
                   <button
                     onClick={() => onUndo(action.id)}
                     disabled={isProcessing}
-                    className="inline-flex items-center gap-1 bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 bg-[var(--btn-secondary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-secondary-text)] border border-[var(--btn-secondary-border)] hover:bg-[var(--btn-secondary-hover)] disabled:opacity-50"
                   >
                     {isProcessing ? <Spinner /> : "Undo"}
                   </button>
                 ) : (
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-[var(--text-secondary)]">
                     {action.status === "undone" ? "Undone" : "-"}
                   </span>
                 )}
@@ -347,11 +347,11 @@ export default function ActionsPage() {
   if (loading) {
     return (
       <div className="flex-1 flex flex-col h-full">
-        <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Actions</h1>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Manage the pending and executed actions of your session.</p>
+        <div className="page-header">
+          <h1>Actions</h1>
+          <p>Manage the pending and executed actions of your session.</p>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+        <div className="page-content">
           <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
         </div>
       </div>
@@ -360,12 +360,12 @@ export default function ActionsPage() {
 
   return (
     <div className="flex-1 flex flex-col h-full">
-      <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Actions</h1>
-        <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Manage the pending and executed actions of your session.</p>
+      <div className="page-header">
+        <h1>Actions</h1>
+        <p>Manage the pending and executed actions of your session.</p>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+      <div className="page-content">
         {error && (
           <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">
             {error}

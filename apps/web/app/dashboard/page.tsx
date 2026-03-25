@@ -16,6 +16,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { Clock, Timer, Zap } from "lucide-react";
 import type { SessionSummary } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
@@ -171,10 +172,10 @@ function RecentSessionCard({
 
   return (
     <div className="settings-panel">
-      <div className="mb-5 flex items-start justify-between">
+      <div className="mb-3 flex items-start justify-between">
         <div>
           <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Most Recent Session</h2>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "0 0 20px 0" }}>View details and manage actions for your latest email recording.</p>
+          <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>View details and manage actions for your latest email recording.</p>
         </div>
         <Link
           href={`/dashboard/sessions/${session.id}`}
@@ -184,14 +185,20 @@ function RecentSessionCard({
         </Link>
       </div>
 
-      {/* Session metadata */}
-      <div className="mb-5 flex gap-6 text-[13px] text-[var(--text-secondary)]">
-        <span>
-          {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
-          {" "}({formatRelativeTime(session.startedAt)})
+      {/* Session metadata badges */}
+      <div className="mb-5 flex gap-2">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+          <Clock size={12} />
+          {formatRelativeTime(session.startedAt)}
         </span>
-        <span>Duration: {formatDuration(session.durationSeconds)}</span>
-        <span>{session.actionCount} action{session.actionCount !== 1 ? "s" : ""}</span>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+          <Timer size={12} />
+          {formatDuration(session.durationSeconds)}
+        </span>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+          <Zap size={12} />
+          {session.actionCount} action{session.actionCount !== 1 ? "s" : ""}
+        </span>
       </div>
 
       {/* Actions for this session */}
@@ -230,12 +237,12 @@ function RecentSessionCard({
             }
           >
             <table className="w-full text-left text-[13px]">
-              <thead className="sticky top-0 bg-white">
+              <thead className="sticky top-0 bg-[var(--bg-surface)]">
                 <tr className="border-b border-[var(--border-color)]">
-                  <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Tool</th>
-                  <th className="pb-2 font-medium text-[var(--text-secondary)]">From / To</th>
-                  <th className="pb-2 font-medium text-[var(--text-secondary)]">Subject</th>
-                  <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Status</th>
+                  <th className="whitespace-nowrap pb-4 font-medium text-[var(--text-secondary)]">Tool</th>
+                  <th className="pb-4 font-medium text-[var(--text-secondary)]">From / To</th>
+                  <th className="pb-4 font-medium text-[var(--text-secondary)]">Subject</th>
+                  <th className="whitespace-nowrap pb-4 font-medium text-[var(--text-secondary)]">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -278,7 +285,7 @@ function RecentSessionCard({
           </div>
         </>
       ) : (
-        <p className="text-sm text-gray-500">No actions for this session.</p>
+        <p className="text-[13px] text-[var(--text-secondary)]">No actions for this session.</p>
       )}
     </div>
   );
@@ -446,11 +453,11 @@ export default function DashboardOverviewPage() {
   if (loading) {
     return (
       <div className="flex-1 flex flex-col">
-        <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Overview</h1>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Manage your Voice Email sessions and activities.</p>
+        <div className="page-header">
+          <h1>Overview</h1>
+          <p>Manage your Voice Email sessions and activities.</p>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+        <div className="page-content">
           <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
         </div>
       </div>
@@ -467,12 +474,31 @@ export default function DashboardOverviewPage() {
 
   return (
     <div className="flex-1 flex flex-col">
-      <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Overview</h1>
-        <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Manage your Voice Email sessions and activities.</p>
+      <div className="page-header">
+        <div className="flex items-center justify-between">
+          <h1>Overview</h1>
+          <Link
+            href="/dashboard/sessions"
+            style={{
+              background: "var(--btn-primary-bg)",
+              color: "var(--btn-primary-text)",
+              padding: "8px 16px",
+              fontSize: 13,
+              fontWeight: 500,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+            className="hover:opacity-90 transition-opacity"
+          >
+            All Sessions <span style={{ fontSize: 16 }}>&rsaquo;</span>
+          </Link>
+        </div>
+        <p>Manage your Voice Email sessions and activities.</p>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+      <div className="page-content">
         {error && (
           <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">{error}</div>
         )}
@@ -508,16 +534,6 @@ export default function DashboardOverviewPage() {
           </div>
         )}
 
-        {/* All Sessions button */}
-        <div className="settings-actions">
-          <Link
-            href="/dashboard/sessions"
-            style={{ background: "var(--btn-primary-bg)", color: "var(--btn-primary-text)", padding: "8px 16px", fontSize: 13, fontWeight: 500, textDecoration: "none", display: "inline-block" }}
-            className="hover:bg-[var(--btn-primary-hover)] transition-colors"
-          >
-            All Sessions
-          </Link>
-        </div>
       </div>
     </div>
   );

@@ -55,12 +55,12 @@ export default function CallPage() {
 
   return (
     <div className="flex-1 flex flex-col h-full">
-      <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Browser Call</h1>
-        <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Place a direct call from your browser.</p>
+      <div className="page-header">
+        <h1>Browser Call</h1>
+        <p>Place a direct call from your browser.</p>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+      <div className="page-content">
         {error && (
           <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
@@ -76,7 +76,7 @@ export default function CallPage() {
             </p>
           <div className="flex flex-col items-start gap-2">
             <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
-            <span className="text-xs text-gray-400">{PHONE_NUMBER}</span>
+            <span className="text-xs text-[var(--text-secondary)]">{PHONE_NUMBER}</span>
           </div>
         </section>
       )}

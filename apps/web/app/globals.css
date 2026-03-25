@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-@import "tailwindcss";
+/* ============================================================================
+ * CSS VARIABLES
+ * ============================================================================ */
 
 :root {
   --bg-main: #ffffff;
@@ -15,9 +17,34 @@
   --btn-primary-bg: #111111;
   --btn-primary-text: #ffffff;
   --btn-primary-hover: #333333;
+  --btn-secondary-bg: #ffffff;
+  --btn-secondary-text: #111827;
+  --btn-secondary-border: #eaeaea;
+  --btn-secondary-hover: #f9fafb;
 }
 
-.dark {
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-main: #0a0a0a;
+    --bg-sidebar: #111111;
+    --bg-surface: #171717;
+    --bg-hover: #262626;
+    --bg-active: #333333;
+    --border-color: #333333;
+    --text-primary: #f3f4f6;
+    --text-secondary: #9ca3af;
+    --accent-color: #3fb950;
+    --btn-primary-bg: #ececec;
+    --btn-primary-text: #111111;
+    --btn-primary-hover: #ffffff;
+    --btn-secondary-bg: #111111;
+    --btn-secondary-text: #f3f4f6;
+    --btn-secondary-border: #333333;
+    --btn-secondary-hover: #1f1f1f;
+  }
+}
+
+body.dark {
   --bg-main: #0a0a0a;
   --bg-sidebar: #111111;
   --bg-surface: #171717;
@@ -30,20 +57,144 @@
   --btn-primary-bg: #ececec;
   --btn-primary-text: #111111;
   --btn-primary-hover: #ffffff;
+  --btn-secondary-bg: #111111;
+  --btn-secondary-text: #f3f4f6;
+  --btn-secondary-border: #333333;
+  --btn-secondary-hover: #1f1f1f;
 }
 
-* {
-  box-sizing: border-box;
+body.light {
+  --bg-main: #ffffff;
+  --bg-sidebar: #f7f7f8;
+  --bg-surface: #ffffff;
+  --bg-hover: #f1f3f5;
+  --bg-active: #e9ecef;
+  --border-color: #eaeaea;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --accent-color: #2ea043;
+  --btn-primary-bg: #111111;
+  --btn-primary-text: #ffffff;
+  --btn-primary-hover: #333333;
+  --btn-secondary-bg: #ffffff;
+  --btn-secondary-text: #111827;
+  --btn-secondary-border: #eaeaea;
+  --btn-secondary-hover: #f9fafb;
 }
+
+/* ============================================================================
+ * RESET
+ * ============================================================================ */
+
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
   background: var(--bg-main);
   color: var(--text-primary);
-  line-height: normal;
+  height: 100vh;
+  overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* ============================================================================
+ * SIDEBAR
+ * ============================================================================ */
+
+.sidebar {
+  width: 240px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: 100vh;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.sidebar-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.sidebar-item.active {
+  color: var(--accent-color);
+  background: rgba(46, 160, 67, 0.1);
+  font-weight: 600;
+}
+
+.sidebar-footer {
+  padding: 12px 0;
+}
+
+.sidebar-section-label {
+  padding: 16px 24px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ============================================================================
+ * PAGE HEADER + CONTENT
+ * ============================================================================ */
+
+.page-header {
+  background: var(--bg-main);
+  padding: 48px 64px 24px;
+  flex-shrink: 0;
+}
+
+.page-header h1 {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.5px;
+}
+
+.page-header p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.page-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 64px 48px;
+}
+
+/* ============================================================================
+ * SETTINGS PANEL
+ * ============================================================================ */
 
 .settings-panel {
   background: var(--bg-surface);
@@ -55,7 +206,7 @@ body {
 }
 
 .settings-panel h2 {
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 12px;
@@ -66,4 +217,56 @@ body {
   align-items: center;
   margin-bottom: 8px;
   gap: 10px;
+}
+
+.settings-row label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.settings-row input {
+  flex: 1;
+  max-width: 340px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 0;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.settings-row input:focus {
+  border-color: var(--btn-primary-bg);
+}
+
+.settings-actions {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-actions button {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+  border: none;
+  padding: 8px 16px;
+  border-radius: 0;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.settings-actions button:hover {
+  background: var(--btn-primary-hover);
+}
+
+.settings-actions button:disabled {
+  background: var(--text-secondary);
+  cursor: default;
 }
