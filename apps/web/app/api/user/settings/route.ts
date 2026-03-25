@@ -16,7 +16,7 @@ import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
 import { storeSecret, updateSecret } from "@dublin/tools";
-import type { UserSettings, CallSchedule } from "@/lib/types";
+import type { UserSettings, UserPhone, CallSchedule } from "@/lib/types";
 import type { ToolApprovalConfig } from "@dublin/tools/src/types";
 
 // ============================================================================
@@ -52,7 +52,7 @@ function mapRowToSettings(row: Record<string, unknown>): UserSettings {
     voicePreference: ((row.voice_config as Record<string, unknown>)?.voice as string) ?? "aura-2-helena-en",
     voiceSpeed: ((row.voice_config as Record<string, unknown>)?.speed as number) ?? 1.0,
     toolApprovalConfig: (row.tool_approval_config as ToolApprovalConfig) ?? {},
-    phoneNumber: (row.phone_number as string) ?? null,
+    phone: (row.phone as UserPhone) ?? null,
     hasPin: !!row.pin_hash,
     callSchedule: (row.call_schedule as CallSchedule) ?? null,
   };
@@ -99,7 +99,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse<UserSetti
       voicePreference: "aura-2-helena-en",
       voiceSpeed: 1.0,
       toolApprovalConfig: {},
-      phoneNumber: null,
+      phone: null,
       hasPin: false,
       callSchedule: null,
     };

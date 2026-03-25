@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 #
-# Start a Cloudflare quick tunnel and configure the Twilio phone number
-# webhook to point at it, then start the voice pipeline server.
+# Start a Cloudflare quick tunnel and configure Twilio phone number webhooks
+# to point at it, then start the voice pipeline server.
+#
+# Phone numbers are fetched from the company_phone_numbers table (environment=dev).
+# If no dev numbers are configured, the server starts without Twilio webhooks.
 #
 # Required env vars (from .env or exported):
-#   TWILIO_ACCOUNT_SID   - Twilio account SID
-#   TWILIO_AUTH_TOKEN     - Twilio auth token
-#   TWILIO_PHONE_NUMBER   - Twilio phone number (E.164, e.g. +15551234567)
+#   TWILIO_ACCOUNT_SID         - Twilio account SID
+#   TWILIO_AUTH_TOKEN           - Twilio auth token
+#   SUPABASE_URL                - Supabase project URL
+#   SUPABASE_SERVICE_ROLE_KEY   - Supabase service role key
 #
 # Usage:
 #   ./dev-server-start.sh              # with Cloudflare tunnel + Twilio webhook
@@ -40,8 +44,9 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
 fi
 
 PORT="${PORT:-7860}"
+export APP_ENVIRONMENT=dev
 
-# Type check — catch type errors, bad method calls, missing args, etc.
+# Type check -- catch type errors, bad method calls, missing args, etc.
 echo "Running type check..."
 cd "$SCRIPT_DIR"
 if ! python3 -m pyright src/; then
@@ -59,7 +64,7 @@ if [[ "$NO_TUNNEL" == true ]]; then
 fi
 
 # Validate Twilio credentials
-for var in TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_PHONE_NUMBER; do
+for var in TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN; do
   if [[ -z "${!var:-}" ]]; then
     echo "ERROR: $var is not set. Add it to .env or export it." >&2
     exit 1
@@ -74,6 +79,11 @@ fi
 
 if ! command -v curl &>/dev/null; then
   echo "ERROR: curl is not installed." >&2
+  exit 1
+fi
+
+if ! command -v jq &>/dev/null; then
+  echo "ERROR: jq is not installed. brew install jq" >&2
   exit 1
 fi
 
@@ -108,32 +118,55 @@ fi
 
 echo "Tunnel URL: $TUNNEL_URL"
 
-# URL-encode the phone number (+ → %2B)
-ENCODED_PHONE=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TWILIO_PHONE_NUMBER', safe=''))")
+# Fetch dev phone numbers from company_phone_numbers table
+WEBHOOK_URL="$TUNNEL_URL/twilio/voice"
+PHONE_NUMBERS_JSON=$(curl -s -X GET \
+  "${SUPABASE_URL}/rest/v1/company_phone_numbers?environment=eq.dev&is_active=eq.true" \
+  -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+  -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}")
 
-# Look up the phone number SID
-PHONE_SID=$(curl -s -X GET \
-  "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers.json?PhoneNumber=$ENCODED_PHONE" \
-  -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
-  | python3 -c "import sys,json; nums=json.load(sys.stdin).get('incoming_phone_numbers',[]); print(nums[0]['sid'] if nums else '')")
+PHONE_COUNT=$(echo "$PHONE_NUMBERS_JSON" | jq 'length')
 
-if [[ -z "$PHONE_SID" ]]; then
-  echo "ERROR: Could not find phone number $TWILIO_PHONE_NUMBER in your Twilio account." >&2
-  exit 1
+if [[ "$PHONE_COUNT" -eq 0 ]]; then
+  echo ""
+  echo "WARNING: No dev phone numbers found in company_phone_numbers table."
+  echo "  Add one with: ./scripts/add-company-phone.sh --phone \"+1...\" --country US --label \"United States\" --env dev --webhook-url \"$TUNNEL_URL\""
+  echo "  Continuing without Twilio webhook setup."
+  echo ""
+else
+  # Configure webhook for each dev phone number
+  echo "Configuring webhooks for $PHONE_COUNT dev phone number(s)..."
+  echo "$PHONE_NUMBERS_JSON" | jq -c '.[]' | while read -r row; do
+    PHONE=$(echo "$row" | jq -r '.phone_number')
+    LABEL=$(echo "$row" | jq -r '.label')
+
+    # URL-encode the phone number (+ -> %2B)
+    ENCODED_PHONE=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PHONE', safe=''))")
+
+    # Look up the phone number SID in Twilio
+    PHONE_SID=$(curl -s -X GET \
+      "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers.json?PhoneNumber=$ENCODED_PHONE" \
+      -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
+      | python3 -c "import sys,json; nums=json.load(sys.stdin).get('incoming_phone_numbers',[]); print(nums[0]['sid'] if nums else '')")
+
+    if [[ -z "$PHONE_SID" ]]; then
+      echo "  WARNING: Could not find $PHONE ($LABEL) in Twilio account, skipping."
+      continue
+    fi
+
+    # Update the voice webhook URL
+    curl -s -X POST \
+      "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers/$PHONE_SID.json" \
+      -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
+      --data-urlencode "VoiceUrl=$WEBHOOK_URL" \
+      --data-urlencode "VoiceMethod=POST" \
+      > /dev/null
+
+    echo "  Configured $PHONE ($LABEL) -> $WEBHOOK_URL"
+  done
+  echo "Twilio webhooks configured."
 fi
 
-# Update the voice webhook URL
-WEBHOOK_URL="$TUNNEL_URL/twilio/voice"
-echo "Updating Twilio phone number $TWILIO_PHONE_NUMBER webhook to: $WEBHOOK_URL"
-
-curl -s -X POST \
-  "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers/$PHONE_SID.json" \
-  -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
-  --data-urlencode "VoiceUrl=$WEBHOOK_URL" \
-  --data-urlencode "VoiceMethod=POST" \
-  > /dev/null
-
-echo "Twilio webhook configured."
 echo ""
 echo "=== Ready ==="
 echo "  Tunnel:  $TUNNEL_URL"

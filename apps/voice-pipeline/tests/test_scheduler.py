@@ -1,14 +1,17 @@
 """
 Tests for the scheduled calling feature.
 
-Covers the scheduler's public functions (get_due_users, initiate_scheduled_call)
-and the /twilio/scheduled-call endpoint. All external dependencies (Supabase,
-Twilio, usage limits) are mocked.
+Covers the scheduler's public functions (get_due_users, initiate_scheduled_call,
+fetch_company_phones) and the /twilio/scheduled-call endpoint. All external
+dependencies (Supabase, Twilio, usage limits) are mocked.
 
 Responsibilities:
 - Verify get_due_users correctly filters users by day, time window, dedup guard,
   usage limit, and timezone
+- Verify get_due_users reads phone JSONB and populates country_code
 - Verify initiate_scheduled_call claims the slot, calls Twilio, and rolls back on failure
+- Verify initiate_scheduled_call uses country-matched from_ number and skips unsupported countries
+- Verify fetch_company_phones returns a country_code -> phone_number dict
 - Verify the /twilio/scheduled-call endpoint validates the API key and returns TwiML
 """
 
@@ -22,7 +25,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from src.scheduler import DueUser, get_due_users, initiate_scheduled_call
+from src.scheduler import DueUser, get_due_users, initiate_scheduled_call, fetch_company_phones
 from src.config import Settings
 
 
@@ -41,19 +44,38 @@ FAKE_SETTINGS = Settings(
     public_url="https://voice.example.com",
     twilio_account_sid="AC_fake_sid",
     twilio_auth_token="fake_auth_token",
-    twilio_phone_number="+15551234567",
 )
+
+FAKE_COMPANY_PHONES: dict[str, str] = {
+    "US": "+15551234567",
+    "BE": "+32123456789",
+}
 
 
 # ============================================================================
 # FIXTURES
 # ============================================================================
 
-def _make_supabase_row(user_id: str, phone_number: str, schedule: dict) -> dict:
-    """Build a fake user_settings row as returned by Supabase."""
+def _make_supabase_row(
+    user_id: str,
+    phone_number: str,
+    schedule: dict,
+    country_code: str = "US",
+) -> dict:
+    """Build a fake user_settings row as returned by Supabase.
+
+    Args:
+        user_id: The user's ID.
+        phone_number: The user's E.164 phone number.
+        schedule: The call_schedule JSONB object.
+        country_code: The user's country code (default "US").
+
+    Returns:
+        A dict mimicking a Supabase user_settings row with phone JSONB.
+    """
     return {
         "user_id": user_id,
-        "phone_number": phone_number,
+        "phone": {"number": phone_number, "countryCode": country_code},
         "call_schedule": schedule,
     }
 
@@ -78,7 +100,7 @@ def _mock_supabase_select(rows: list[dict]) -> MagicMock:
 # ============================================================================
 
 @patch("src.scheduler.check_usage_limit", return_value=True)
-def test_get_due_users_returns_due_user_and_skips_not_due(mock_usage):
+def test_get_due_users_returns_due_user_and_skips_not_due(mock_usage: MagicMock) -> None:
     """get_due_users returns only users whose schedule matches the current time.
 
     Sets up two users: one scheduled for the current time (due), one scheduled
@@ -111,7 +133,7 @@ def test_get_due_users_returns_due_user_and_skips_not_due(mock_usage):
 
 
 @patch("src.scheduler.check_usage_limit", return_value=True)
-def test_get_due_users_skips_already_called_today(mock_usage):
+def test_get_due_users_skips_already_called_today(mock_usage: MagicMock) -> None:
     """get_due_users skips users whose last_call_at is today (dedup guard).
 
     The user's schedule matches the current time, but last_call_at is set to
@@ -138,7 +160,7 @@ def test_get_due_users_skips_already_called_today(mock_usage):
 
 
 @patch("src.scheduler.check_usage_limit", return_value=False)
-def test_get_due_users_skips_usage_limit_exceeded(mock_usage):
+def test_get_due_users_skips_usage_limit_exceeded(mock_usage: MagicMock) -> None:
     """get_due_users skips users who have exceeded their monthly usage limit.
 
     The user's schedule matches and last_call_at is not today, but
@@ -161,7 +183,7 @@ def test_get_due_users_skips_usage_limit_exceeded(mock_usage):
 
 
 @patch("src.scheduler.check_usage_limit", return_value=True)
-def test_get_due_users_handles_different_timezones(mock_usage):
+def test_get_due_users_handles_different_timezones(mock_usage: MagicMock) -> None:
     """get_due_users respects each user's timezone when determining if they are due.
 
     Two users are both scheduled for 09:00. The current UTC time is frozen to
@@ -185,7 +207,7 @@ def test_get_due_users_handles_different_timezones(mock_usage):
 
     with patch("src.scheduler.datetime") as mock_dt:
         # datetime.now(tz) should return our fixed time converted to the requested tz
-        def fake_now(tz=None):
+        def fake_now(tz=None):  # type: ignore[assignment]
             if tz is None:
                 return fixed_utc
             return fixed_utc.astimezone(tz)
@@ -201,7 +223,7 @@ def test_get_due_users_handles_different_timezones(mock_usage):
 
 
 @patch("src.scheduler.check_usage_limit", return_value=True)
-def test_get_due_users_returns_empty_when_all_days_null(mock_usage):
+def test_get_due_users_returns_empty_when_all_days_null(mock_usage: MagicMock) -> None:
     """get_due_users returns empty list when all days in the schedule are null.
 
     The user has a call_schedule with a timezone set, but every day is null
@@ -224,20 +246,80 @@ def test_get_due_users_returns_empty_when_all_days_null(mock_usage):
     assert len(result) == 0
 
 
+@patch("src.scheduler.check_usage_limit", return_value=True)
+def test_get_due_users_reads_phone_from_jsonb(mock_usage: MagicMock) -> None:
+    """get_due_users reads phone JSONB and populates DueUser with correct fields.
+
+    A user with phone: { "number": "+32485111222", "countryCode": "BE" } and a
+    matching schedule is returned as a DueUser with the correct phone_number
+    and country_code.
+    """
+    tz = ZoneInfo("UTC")
+    now = datetime.now(tz)
+    day_key = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"][now.weekday()]
+    current_time_str = now.strftime("%H:%M")
+
+    row = _make_supabase_row("user-be", "+32485111222", {
+        "timezone": "UTC",
+        day_key: current_time_str,
+    }, country_code="BE")
+
+    mock_client = _mock_supabase_select([row])
+    result = get_due_users(mock_client)
+
+    assert len(result) == 1
+    assert result[0].user_id == "user-be"
+    assert result[0].phone_number == "+32485111222"
+    assert result[0].country_code == "BE"
+
+
+# ============================================================================
+# TESTS: fetch_company_phones
+# ============================================================================
+
+def test_fetch_company_phones_returns_country_to_number_dict() -> None:
+    """fetch_company_phones returns a dict mapping country_code to phone_number.
+
+    Mocks a Supabase response with two active rows and verifies the returned
+    dict has the correct mappings.
+    """
+    mock_client = MagicMock()
+    mock_execute = MagicMock()
+    mock_execute.data = [
+        {"country_code": "US", "phone_number": "+15551234567"},
+        {"country_code": "BE", "phone_number": "+32123456789"},
+    ]
+
+    # Chain: table().select().eq().eq().execute()
+    (
+        mock_client.table.return_value
+        .select.return_value
+        .eq.return_value
+        .eq.return_value
+        .execute
+    ).return_value = mock_execute
+
+    result = fetch_company_phones(mock_client, "prod")
+
+    assert result == {"US": "+15551234567", "BE": "+32123456789"}
+    mock_client.table.assert_called_with("company_phone_numbers")
+
+
 # ============================================================================
 # TESTS: initiate_scheduled_call
 # ============================================================================
 
 @patch("src.scheduler.TwilioClient")
-def test_initiate_scheduled_call_calls_twilio_and_updates_last_call_at(mock_twilio_cls):
+def test_initiate_scheduled_call_calls_twilio_and_updates_last_call_at(mock_twilio_cls: MagicMock) -> None:
     """initiate_scheduled_call calls Twilio with correct params and updates last_call_at.
 
     Verifies that:
     1. The current schedule is read from DB
     2. last_call_at is updated (slot claimed)
-    3. Twilio calls.create is called with the user's phone, FROM number, and callback URL
+    3. Twilio calls.create is called with the user's phone, FROM number from
+       company_phones dict, and callback URL
     """
-    user = DueUser(user_id="user-123", phone_number="+15559998888", timezone="UTC")
+    user = DueUser(user_id="user-123", phone_number="+15559998888", country_code="US", timezone="UTC")
 
     # Mock Supabase: read current schedule, then update
     mock_supabase = MagicMock()
@@ -270,7 +352,7 @@ def test_initiate_scheduled_call_calls_twilio_and_updates_last_call_at(mock_twil
     mock_call.sid = "CA_fake_sid"
     mock_twilio_instance.calls.create.return_value = mock_call
 
-    result = initiate_scheduled_call(user, FAKE_SETTINGS, mock_supabase)
+    result = initiate_scheduled_call(user, FAKE_SETTINGS, mock_supabase, FAKE_COMPANY_PHONES)
 
     assert result is True
 
@@ -278,7 +360,7 @@ def test_initiate_scheduled_call_calls_twilio_and_updates_last_call_at(mock_twil
     mock_twilio_instance.calls.create.assert_called_once()
     call_kwargs = mock_twilio_instance.calls.create.call_args
     assert call_kwargs.kwargs["to"] == "+15559998888"
-    assert call_kwargs.kwargs["from_"] == "+15551234567"
+    assert call_kwargs.kwargs["from_"] == FAKE_COMPANY_PHONES["US"]
     assert "scheduled-call" in call_kwargs.kwargs["url"]
     assert "token=" in call_kwargs.kwargs["url"]
     assert "userId=user-123" in call_kwargs.kwargs["url"]
@@ -290,13 +372,13 @@ def test_initiate_scheduled_call_calls_twilio_and_updates_last_call_at(mock_twil
 
 
 @patch("src.scheduler.TwilioClient")
-def test_initiate_scheduled_call_rolls_back_on_twilio_failure(mock_twilio_cls):
+def test_initiate_scheduled_call_rolls_back_on_twilio_failure(mock_twilio_cls: MagicMock) -> None:
     """initiate_scheduled_call rolls back last_call_at if Twilio call creation fails.
 
     When Twilio raises an exception, the scheduler should reset last_call_at
     to its previous value (None in this case) so the user can be retried.
     """
-    user = DueUser(user_id="user-456", phone_number="+15559998888", timezone="UTC")
+    user = DueUser(user_id="user-456", phone_number="+15559998888", country_code="US", timezone="UTC")
 
     mock_supabase = MagicMock()
 
@@ -325,7 +407,7 @@ def test_initiate_scheduled_call_rolls_back_on_twilio_failure(mock_twilio_cls):
     mock_twilio_cls.return_value = mock_twilio_instance
     mock_twilio_instance.calls.create.side_effect = Exception("Twilio API error")
 
-    result = initiate_scheduled_call(user, FAKE_SETTINGS, mock_supabase)
+    result = initiate_scheduled_call(user, FAKE_SETTINGS, mock_supabase, FAKE_COMPANY_PHONES)
 
     assert result is False
 
@@ -338,12 +420,80 @@ def test_initiate_scheduled_call_rolls_back_on_twilio_failure(mock_twilio_cls):
     assert "last_call_at" not in rollback_arg["call_schedule"]
 
 
+def test_initiate_scheduled_call_skips_unsupported_country() -> None:
+    """initiate_scheduled_call returns False and never calls Twilio for unsupported countries.
+
+    A user with a country_code that has no match in company_phones should be
+    skipped. Twilio should never be instantiated.
+    """
+    user = DueUser(user_id="user-999", phone_number="+81312345678", country_code="JP", timezone="UTC")
+
+    mock_supabase = MagicMock()
+
+    # company_phones has no "JP" entry
+    result = initiate_scheduled_call(user, FAKE_SETTINGS, mock_supabase, FAKE_COMPANY_PHONES)
+
+    assert result is False
+
+    # Supabase should NOT have been called at all (we bail before reading schedule)
+    mock_supabase.table.assert_not_called()
+
+
+@patch("src.scheduler.TwilioClient")
+def test_initiate_scheduled_call_uses_country_matched_from_number(mock_twilio_cls: MagicMock) -> None:
+    """initiate_scheduled_call uses the Belgian number from company_phones for a BE user.
+
+    When a user has country_code "BE", the from_ number passed to Twilio should
+    be the Belgian company phone number from the lookup dict.
+    """
+    user = DueUser(user_id="user-be-1", phone_number="+32485111222", country_code="BE", timezone="UTC")
+
+    mock_supabase = MagicMock()
+
+    # .select().eq().single().execute() for reading current schedule
+    current_schedule = {"timezone": "UTC", "wednesday": "09:00"}
+    mock_single_execute = MagicMock()
+    mock_single_execute.data = {"call_schedule": current_schedule}
+    (
+        mock_supabase.table.return_value
+        .select.return_value
+        .eq.return_value
+        .single.return_value
+        .execute
+    ).return_value = mock_single_execute
+
+    # .update().eq().execute() for claiming slot
+    mock_update_execute = MagicMock()
+    (
+        mock_supabase.table.return_value
+        .update.return_value
+        .eq.return_value
+        .execute
+    ).return_value = mock_update_execute
+
+    # Mock Twilio client
+    mock_twilio_instance = MagicMock()
+    mock_twilio_cls.return_value = mock_twilio_instance
+    mock_call = MagicMock()
+    mock_call.sid = "CA_fake_sid"
+    mock_twilio_instance.calls.create.return_value = mock_call
+
+    result = initiate_scheduled_call(user, FAKE_SETTINGS, mock_supabase, FAKE_COMPANY_PHONES)
+
+    assert result is True
+
+    # Verify from_ is the Belgian company number
+    call_kwargs = mock_twilio_instance.calls.create.call_args
+    assert call_kwargs.kwargs["from_"] == "+32123456789"
+    assert call_kwargs.kwargs["to"] == "+32485111222"
+
+
 # ============================================================================
 # TESTS: /twilio/scheduled-call endpoint
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_scheduled_call_endpoint_rejects_invalid_token():
+async def test_scheduled_call_endpoint_rejects_invalid_token() -> None:
     """/twilio/scheduled-call returns 401 when the API key is missing or wrong.
 
     Uses httpx.ASGITransport with mocked load_settings and start_scheduler
@@ -386,7 +536,7 @@ async def test_scheduled_call_endpoint_rejects_invalid_token():
 
 
 @pytest.mark.asyncio
-async def test_scheduled_call_endpoint_returns_valid_twiml():
+async def test_scheduled_call_endpoint_returns_valid_twiml() -> None:
     """/twilio/scheduled-call returns valid TwiML with <Connect><Stream> for an
     authenticated request.
 

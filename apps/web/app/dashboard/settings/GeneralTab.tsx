@@ -9,7 +9,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { UserSettings, MemoryEntry } from "@/lib/types";
+import { parsePhoneNumber } from "libphonenumber-js";
+import type { UserSettings, MemoryEntry, CompanyPhone } from "@/lib/types";
 import type { ToolApprovalConfig, ActionClassification } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 import type { DeepgramVoice } from "@/app/api/deepgram/voices/route";
@@ -33,6 +34,30 @@ const CLASSIFICATION_OPTIONS: ActionClassification[] = [
   "mutating_auto",
   "mutating_queued",
 ];
+
+/** Curated list of common countries for the country dropdown. */
+const COUNTRY_OPTIONS: { code: string; label: string }[] = [
+  { code: "US", label: "United States" },
+  { code: "BE", label: "Belgium" },
+  { code: "GB", label: "United Kingdom" },
+  { code: "DE", label: "Germany" },
+  { code: "FR", label: "France" },
+  { code: "NL", label: "Netherlands" },
+  { code: "ES", label: "Spain" },
+  { code: "IT", label: "Italy" },
+  { code: "AU", label: "Australia" },
+  { code: "CA", label: "Canada" },
+];
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+/** Form state for the phone number + country fields. */
+interface PhoneFormState {
+  number: string;
+  countryCode: string;
+}
 
 // ============================================================================
 // API HELPERS
@@ -69,16 +94,30 @@ async function saveSettings(data: Record<string, unknown>): Promise<UserSettings
   return res.json();
 }
 
-async function savePhoneNumber(phoneNumber: string): Promise<void> {
+/**
+ * Save the user's phone number and country code.
+ * @param phone - The phone form state with number and countryCode
+ */
+async function savePhone(phone: PhoneFormState): Promise<void> {
   const res = await fetch("/api/user/phone", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phoneNumber }),
+    body: JSON.stringify({ number: phone.number, countryCode: phone.countryCode }),
   });
   if (!res.ok) {
     const body = await res.json();
     throw new Error(body.error || "Failed to save phone number");
   }
+}
+
+/**
+ * Fetch active company phone numbers for the current environment.
+ * @returns Array of active company phones
+ */
+async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
+  const res = await fetch("/api/company-phones");
+  if (!res.ok) throw new Error("Failed to load company phone numbers");
+  return res.json();
 }
 
 async function createMemoryEntry(content: string): Promise<MemoryEntry> {
@@ -112,7 +151,7 @@ async function deleteMemoryEntry(id: string): Promise<void> {
 
 export default function GeneralTab() {
   // Form state
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [phone, setPhone] = useState<PhoneFormState>({ number: "", countryCode: "" });
   const [pin, setPin] = useState("");
   const [voicePreference, setVoicePreference] = useState(DEFAULT_VOICE);
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
@@ -124,9 +163,10 @@ export default function GeneralTab() {
   const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([]);
   const [newMemoryContent, setNewMemoryContent] = useState("");
   const [hasPin, setHasPin] = useState(false);
+  const [companyPhones, setCompanyPhones] = useState<CompanyPhone[]>([]);
 
   // Saved state for detecting pending text changes
-  const [savedPhone, setSavedPhone] = useState("");
+  const [savedPhone, setSavedPhone] = useState<PhoneFormState>({ number: "", countryCode: "" });
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -171,19 +211,27 @@ export default function GeneralTab() {
   useEffect(() => {
     async function load() {
       try {
-        const [settings, memory, voiceList] = await Promise.all([
+        const [settings, memory, voiceList, phones] = await Promise.all([
           fetchSettings(),
           fetchMemory(),
           fetchVoices(),
+          fetchCompanyPhones(),
         ]);
+        setCompanyPhones(phones);
         setVoices(voiceList);
-        setPhoneNumber(settings.phoneNumber ?? "");
+
+        // Load phone from settings (now a UserPhone object or null)
+        const loadedPhone: PhoneFormState = settings.phone
+          ? { number: settings.phone.number, countryCode: settings.phone.countryCode }
+          : { number: "", countryCode: "" };
+        setPhone(loadedPhone);
+        setSavedPhone(loadedPhone);
+
         setHasPin(settings.hasPin);
         setVoicePreference(settings.voicePreference);
         setVoiceSpeed(settings.voiceSpeed ?? 1.0);
         setToolApprovalConfig(settings.toolApprovalConfig);
         setMemoryEntries(memory);
-        setSavedPhone(settings.phoneNumber ?? "");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load settings");
       } finally {
@@ -204,16 +252,64 @@ export default function GeneralTab() {
   }, []);
 
   // Pending change detection
-  const phoneDirty = phoneNumber !== savedPhone;
+  const phoneDirty = phone.number !== savedPhone.number || phone.countryCode !== savedPhone.countryCode;
+  const phoneUnsupported = savedPhone.countryCode !== "" && !companyPhones.some((p) => p.countryCode === savedPhone.countryCode);
   const pinDirty = pin !== "";
 
-  // Section save handlers
-  async function handleSavePhone() {
+  // ============================================================================
+  // EVENT HANDLERS
+  // ============================================================================
+
+  /**
+   * Handle phone number input change. Auto-detects country from the phone prefix.
+   * @param value - The raw phone number string
+   */
+  function handlePhoneNumberChange(value: string): void {
+    let detectedCountry = phone.countryCode;
+
+    // Try to auto-detect country from the phone number prefix
+    try {
+      const parsed = parsePhoneNumber(value);
+      if (parsed?.country) {
+        detectedCountry = parsed.country;
+      }
+    } catch {
+      // Not a valid phone number yet -- keep existing country
+    }
+
+    setPhone({ number: value, countryCode: detectedCountry });
+  }
+
+  /**
+   * Handle manual country dropdown change.
+   * @param countryCode - The selected ISO 3166-1 alpha-2 country code
+   */
+  function handleCountryChange(countryCode: string): void {
+    setPhone((prev) => ({ ...prev, countryCode }));
+  }
+
+  async function handleSavePhone(): Promise<void> {
     setSavingSection("phone");
     setError(null);
+
+    // Validate that the selected country matches the phone number
     try {
-      await savePhoneNumber(phoneNumber);
-      setSavedPhone(phoneNumber);
+      const parsed = parsePhoneNumber(phone.number);
+      if (parsed?.country && parsed.country !== phone.countryCode) {
+        setError(`Phone number belongs to ${parsed.country}, not ${phone.countryCode}.`);
+        setSavingSection(null);
+        return;
+      }
+    } catch {
+      // If parsing fails, the number is likely invalid
+      setError("Invalid phone number format.");
+      setSavingSection(null);
+      return;
+    }
+
+    try {
+      await savePhone(phone);
+      setSavedPhone(phone);
       setSavedSection("phone");
       clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSavedSection(null), 1500);
@@ -342,12 +438,31 @@ export default function GeneralTab() {
         {/* Phone Number */}
         <section className="border border-gray-200 bg-white p-6">
           <h2 className="mb-4 text-lg font-bold text-black">Phone Number</h2>
-          <InputField
-            label="Your phone number (for caller ID authentication)"
-            value={phoneNumber}
-            onChange={setPhoneNumber}
-            placeholder="+1234567890"
-          />
+          <div className="flex gap-3">
+            <div className="w-48">
+              <label className="mb-1 block text-sm font-medium text-gray-700">Country</label>
+              <select
+                value={phone.countryCode}
+                onChange={(e) => handleCountryChange(e.target.value)}
+                className="w-full border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+              >
+                <option value="">-- Select --</option>
+                {COUNTRY_OPTIONS.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.label} ({c.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex-1">
+              <InputField
+                label="Your phone number (for caller ID authentication)"
+                value={phone.number}
+                onChange={handlePhoneNumberChange}
+                placeholder="+1234567890"
+              />
+            </div>
+          </div>
           <div className="mt-4 flex justify-end">
             {phoneDirty ? (
               <SectionSaveButton onClick={handleSavePhone} saving={savingSection === "phone"} />
@@ -355,6 +470,12 @@ export default function GeneralTab() {
               <span className="bg-green-100 px-3 py-1 text-sm font-medium text-green-700">Saved</span>
             ) : null}
           </div>
+          {phoneUnsupported && (
+            <p className="mt-3 text-sm text-red-600">
+              Phone calls are not yet available in your country. Supported countries:{" "}
+              {companyPhones.map((p) => p.label).join(", ")}.
+            </p>
+          )}
         </section>
 
         {/* PIN */}
