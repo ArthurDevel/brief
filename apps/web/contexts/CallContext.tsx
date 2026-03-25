@@ -237,10 +237,10 @@ export function CallProvider({ children }: { children: ReactNode }): React.React
       }
       const token = sessionData.session.access_token;
 
-      setStatus("Requesting microphone...");
+      setStatus("Setting up audio...");
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      setStatus("Establishing WebRTC connection...");
+      setStatus("Connecting...");
       const pipelineSession = await startWebRTCSession(token, micStream);
       pipelineSessionRef.current = pipelineSession;
 

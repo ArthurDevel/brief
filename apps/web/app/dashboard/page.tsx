@@ -528,7 +528,7 @@ export default function DashboardOverviewPage() {
               <PreviousSessionCard
                 key={session.id}
                 session={session}
-                hasPendingActions={allActions.some((a) => a.sessionId === session.id && a.status === "pending")}
+                hasPendingActions={session.pendingActionCount > 0}
               />
             ))}
           </div>
