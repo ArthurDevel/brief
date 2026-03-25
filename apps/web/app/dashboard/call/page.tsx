@@ -112,18 +112,6 @@ export default function CallPage() {
   // RENDER
   // ============================================================================
 
-  if (loading) {
-    return <p className="text-gray-500">Loading...</p>;
-  }
-
-  if (loadError) {
-    return (
-      <div className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-        {loadError}
-      </div>
-    );
-  }
-
   return (
     <div className="flex-1 flex flex-col h-full">
       <div className="page-header">
@@ -132,6 +120,14 @@ export default function CallPage() {
       </div>
 
       <div className="page-content">
+        {loading ? (
+          <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
+        ) : loadError ? (
+          <div className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {loadError}
+          </div>
+        ) : (
+          <>
         {error && (
           <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
@@ -216,6 +212,7 @@ export default function CallPage() {
           </section>
 
         </div>
+        )}
       </div>
     </div>
   );
