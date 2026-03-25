@@ -158,7 +158,7 @@ function TranscriptBubble({ entry }: { entry: TranscriptEntry }) {
         className={`max-w-[70%] px-4 py-2 text-sm ${
           isUser
             ? "bg-black text-white"
-            : "bg-gray-100 text-gray-800"
+            : "bg-[var(--bg-hover)] text-[var(--text-primary)]"
         }`}
       >
         <p className="mb-1 text-xs font-medium opacity-70">
@@ -177,9 +177,9 @@ function TranscriptBubble({ entry }: { entry: TranscriptEntry }) {
 function ActionCard({ action }: { action: ActionRow }) {
   return (
     <div className="flex justify-start">
-      <div className="border border-gray-300 bg-gray-50 px-4 py-2 text-xs text-gray-600">
+      <div className="border border-[var(--border-color)] bg-[var(--bg-surface)] px-4 py-2 text-xs text-[var(--text-secondary)]">
         <span className="font-medium">{TOOL_LABELS[action.toolName] ?? action.toolName}</span>
-        <span className="ml-2 text-gray-400">({action.status})</span>
+        <span className="ml-2 text-[var(--text-secondary)]">({action.status})</span>
       </div>
     </div>
   );
@@ -253,7 +253,7 @@ function ActionsSummary({
       </div>
       <div className={sorted.length > MAX_VISIBLE_ROWS ? "max-h-[440px] overflow-y-auto" : ""}>
       <table className="w-full text-left text-[13px]">
-        <thead className="sticky top-0 bg-white">
+        <thead className="sticky top-0 bg-[var(--bg-surface)]">
           <tr className="border-b border-[var(--border-color)]">
             <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Tool</th>
             <th className="pb-2 font-medium text-[var(--text-secondary)]">From / To</th>
@@ -319,7 +319,7 @@ function ActionsSummary({
                       </button>
                     </div>
                   ) : (
-                    <span className="text-xs text-gray-400">-</span>
+                    <span className="text-xs text-[var(--text-secondary)]">-</span>
                   )}
                 </td>
               </tr>
@@ -456,11 +456,11 @@ export default function SessionDetailPage() {
   if (loading) {
     return (
       <div className="flex-1 flex flex-col h-full">
-        <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Session Detail</h1>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>View transcripts and actions for this session.</p>
+        <div className="page-header">
+          <h1>Session Detail</h1>
+          <p>View transcripts and actions for this session.</p>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+        <div className="page-content">
           <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
         </div>
       </div>
@@ -470,11 +470,11 @@ export default function SessionDetailPage() {
   if (error || !session) {
     return (
       <div className="flex-1 flex flex-col h-full">
-        <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Session Detail</h1>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>View transcripts and actions for this session.</p>
+        <div className="page-header">
+          <h1>Session Detail</h1>
+          <p>View transcripts and actions for this session.</p>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+        <div className="page-content">
           <div className="bg-red-50 p-4 text-sm text-red-700">
             {error ?? "Session not found"}
           </div>
@@ -487,12 +487,12 @@ export default function SessionDetailPage() {
 
   return (
     <div className="flex-1 flex flex-col h-full">
-      <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Session Detail</h1>
-        <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>View transcripts and actions for this session.</p>
+      <div className="page-header">
+        <h1>Session Detail</h1>
+        <p>View transcripts and actions for this session.</p>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
+      <div className="page-content">
         {/* Session header */}
         <div className="settings-panel mb-6">
         <div className="flex gap-8 text-[13px] text-[var(--text-primary)]">
@@ -530,7 +530,7 @@ export default function SessionDetailPage() {
         <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>Transcript</h2>
         <div className="space-y-3 mt-4">
           {timeline.length === 0 ? (
-            <p className="text-sm text-gray-500">No transcript or actions recorded.</p>
+            <p className="text-sm text-[var(--text-secondary)]">No transcript or actions recorded.</p>
           ) : (
             timeline.map((item, index) => (
               <div key={index}>

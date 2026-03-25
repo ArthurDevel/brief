@@ -103,7 +103,7 @@ export default function FeatureRequestsTab() {
       )}
 
       {/* Submit form */}
-      <div className="mb-8 border border-gray-200 bg-white p-6">
+      <div className="settings-panel">
         <h2 >Submit a Request</h2>
         <form onSubmit={handleSubmit} className="flex gap-3">
           <input
@@ -111,12 +111,12 @@ export default function FeatureRequestsTab() {
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Describe the feature you'd like..."
-            className="flex-1 border border-gray-300 px-3 py-2 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+            className="flex-1 border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
           />
           <button
             type="submit"
             disabled={submitting || !description.trim()}
-            className="bg-black px-4 py-2 text-[13px] font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+            className="bg-[var(--btn-primary-bg)] px-4 py-2 text-[13px] font-medium text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
           >
             {submitting ? "Submitting..." : "Submit"}
           </button>
@@ -124,7 +124,7 @@ export default function FeatureRequestsTab() {
       </div>
 
       {/* Requests table */}
-      <div className="border border-gray-200 bg-white p-6">
+      <div className="settings-panel">
         <h2 >
           Your Requests ({requests.length})
         </h2>
@@ -134,7 +134,7 @@ export default function FeatureRequestsTab() {
         ) : (
           <table className="w-full text-left text-[13px]">
             <thead>
-              <tr className="border-b border-gray-200">
+              <tr className="border-b border-[var(--border-color)]">
                 <th className="pb-2 font-medium text-[var(--text-secondary)]">Description</th>
                 <th className="pb-2 font-medium text-[var(--text-secondary)]">Source</th>
                 <th className="pb-2 font-medium text-[var(--text-secondary)]">Date</th>
@@ -142,8 +142,8 @@ export default function FeatureRequestsTab() {
             </thead>
             <tbody>
               {requests.map((req) => (
-                <tr key={req.id} className="border-b border-gray-100">
-                  <td className="py-3 ">{req.description}</td>
+                <tr key={req.id} className="border-b border-[var(--border-color)]">
+                  <td className="py-3 text-[var(--text-primary)]">{req.description}</td>
                   <td className="py-3">
                     <span
                       className={`inline-block px-2 py-0.5 text-xs font-bold ${

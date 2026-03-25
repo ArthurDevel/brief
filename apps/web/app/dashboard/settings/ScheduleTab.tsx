@@ -286,9 +286,9 @@ export default function ScheduleTab() {
         </div>
       )}
 
-      <div className="space-y-8">
+      <div className="">
         {/* Timezone */}
-        <section className="border border-gray-200 bg-white p-6">
+        <section className="settings-panel">
           <div className="mb-4 flex items-center justify-between">
             <h2 >Timezone</h2>
             {savedSection === "timezone" && (
@@ -301,7 +301,7 @@ export default function ScheduleTab() {
               handleTimezoneChange(e.target.value);
               setSavedSection(null);
             }}
-            className="w-full border border-gray-300 px-3 py-2 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+            className="w-full border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
           >
             {TIMEZONES.map((tz) => (
               <option key={tz} value={tz}>
@@ -315,7 +315,7 @@ export default function ScheduleTab() {
         </section>
 
         {/* Weekly Schedule */}
-        <section className="border border-gray-200 bg-white p-6">
+        <section className="settings-panel">
           <div className="mb-4 flex items-center justify-between">
             <h2 >Weekly Schedule</h2>
             {savedSection === "schedule" && (
@@ -365,13 +365,13 @@ interface DayRowProps {
  */
 function DayRow({ label, config, onToggle, onTimeChange }: DayRowProps) {
   return (
-    <div className="flex items-center gap-4 border border-gray-200 p-3">
+    <div className="flex items-center gap-4 border border-[var(--border-color)] p-3">
       {/* Toggle */}
       <button
         type="button"
         onClick={onToggle}
         className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-          config.enabled ? "bg-black" : "bg-gray-300"
+          config.enabled ? "bg-[var(--btn-primary-bg)]" : "bg-[var(--border-color)]"
         }`}
       >
         <span
@@ -382,7 +382,7 @@ function DayRow({ label, config, onToggle, onTimeChange }: DayRowProps) {
       </button>
 
       {/* Day label */}
-      <span className="w-28 text-[13px] font-medium ">{label}</span>
+      <span className="w-28 text-[13px] font-medium text-[var(--text-primary)]">{label}</span>
 
       {/* Time picker */}
       <input
@@ -390,7 +390,7 @@ function DayRow({ label, config, onToggle, onTimeChange }: DayRowProps) {
         value={config.time}
         onChange={(e) => onTimeChange(e.target.value)}
         disabled={!config.enabled}
-        className="border border-gray-300 px-3 py-1.5 text-[13px] focus:border-black focus:outline-none focus:ring-1 focus:ring-black disabled:bg-gray-100 disabled:"
+        className="border border-[var(--border-color)] px-3 py-1.5 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)] disabled:bg-[var(--bg-hover)] disabled:text-[var(--text-secondary)]"
       />
     </div>
   );

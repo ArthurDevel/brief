@@ -57,6 +57,58 @@ Common sections for frontend files
 - components
 - render
 
+# GUIDE: NextJS File Organization
+
+## File Organization: Colocation First
+
+Place new files next to the code that uses them. Only promote to shared locations when a second consumer appears.
+
+**Colocated (single consumer)** — keep files in the same folder as the page/route that uses them:
+
+```
+scraper-dashboard/src/app/events/[eventId]/
+├── page.tsx
+├── actions.ts        # server actions for this page only
+├── types.ts          # types used only by this page
+├── components.tsx    # components used only by this page
+└── constants.ts      # constants used only by this page
+```
+
+```
+scraper-server/src/routes/
+├── agent.ts
+├── types.ts          # types used only by agent route
+└── db.ts             # queries used only by agent route
+```
+
+**Shared (multiple consumers within a package)** — move to `lib/` with a named file:
+
+```
+scraper-dashboard/src/lib/
+├── actions/
+│   └── events.ts     # server actions used by multiple pages
+├── components/
+│   └── event-card.tsx # component used across pages
+├── constants/
+│   └── events.ts     # constants shared across pages
+├── types/
+│   └── events.ts     # types shared across pages
+├── db.ts
+└── s3.ts
+```
+
+**Shared across packages** — only the root `types/` folder:
+
+```
+types/
+├── index.ts            # API-level interfaces (EventResponse, etc.)
+└── database-types.ts   # auto-generated DB row types (do not edit)
+```
+
+## Next.js Data Fetching
+
+Use server actions by default (colocated in `actions.ts`, or `lib/actions/[name].ts` if shared). Use API routes only when parallel requests are needed, since server actions cannot run in parallel.
+
 # GUIDE: Python Guideliness
 
 You must format the code such that it is easy to read for a junior developer. Make sure to keep functionality the same, except if stated otherwise. Keep code simple, do not use fallbacks except if the user requests this, prefer raising errors in a simple way. Do not overcomplicate, simple is best.
@@ -88,5 +140,11 @@ You must format the code such that it is easy to read for a junior developer. Ma
 # ============================================================================
 
 
+
 # GUIDE: Project Specific
 This project uses pnpm for package management.
+
+## CSS / Tailwind Notes
+- Currently all custom CSS classes (sidebar, page-header, page-content, settings-panel, etc.) live in `apps/web/app/globals.css`
+- Future decision: evaluate whether to split CSS into colocated `.css` files (e.g. `layout.css` next to `layout.tsx`, `settings.css` next to settings tabs) following the same colocation-first principle used for TS files
+- Using Tailwind v4 with `@import "tailwindcss"` -- no `tailwind.config` file

@@ -48,36 +48,37 @@ function SettingsContent() {
   );
 
   return (
-    <div className="flex-1 flex flex-col h-full">
-      <div style={{ padding: "48px 64px 24px", flexShrink: 0 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: 0 }}>Settings</h1>
-        <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, margin: 0 }}>Configure your agent and preferences.</p>
+    <div className="flex-1 flex flex-col h-full" style={{ padding: 0 }}>
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: "8px", padding: "24px 32px 16px", borderBottom: "1px solid var(--border-color)", flexShrink: 0 }}>
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            style={{
+              padding: "6px 14px",
+              background: activeTab === tab.id ? "var(--btn-primary-bg)" : "var(--bg-main)",
+              border: "1px solid " + (activeTab === tab.id ? "transparent" : "var(--border-color)"),
+              borderRadius: 0,
+              color: activeTab === tab.id ? "var(--btn-primary-text)" : "var(--text-primary)",
+              fontWeight: 500,
+              cursor: "pointer",
+              fontSize: "13px",
+              transition: "all 0.1s ease",
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 64px 48px" }}>
-        {/* Tab bar */}
-        <div className="mb-8 flex border-b border-[var(--border-color)]">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-4 py-2 text-[13px] font-medium transition-colors ${
-                activeTab === tab.id
-                  ? "border-b-2 border-[var(--text-primary)] text-[var(--text-primary)] font-semibold"
-                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
       {/* Tab content */}
-      {activeTab === "general" && <GeneralTab />}
-      {activeTab === "email" && <EmailTab />}
-      {activeTab === "billing" && <BillingTab />}
-      {activeTab === "feature-requests" && <FeatureRequestsTab />}
-      {activeTab === "schedule" && <ScheduleTab />}
+      <div style={{ flex: 1, overflowY: "auto", padding: "48px 64px" }}>
+        {activeTab === "general" && <GeneralTab />}
+        {activeTab === "email" && <EmailTab />}
+        {activeTab === "billing" && <BillingTab />}
+        {activeTab === "feature-requests" && <FeatureRequestsTab />}
+        {activeTab === "schedule" && <ScheduleTab />}
       </div>
     </div>
   );
