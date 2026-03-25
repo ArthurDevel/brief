@@ -68,6 +68,10 @@ export async function POST(
   }
 
   const { id: sessionId } = await params;
+  const totalStart = Date.now();
+  const log = (msg: string) => console.log(`[end-of-session] [${sessionId}] ${msg}`);
+
+  log("Processing started");
   const supabase = createServiceRoleClient();
 
   // Load the session
@@ -116,8 +120,11 @@ export async function POST(
     executedAt: (row.executed_at as string) ?? null,
   }));
 
+  log(`Loaded ${actions.length} action(s)`);
+
   // No actions -- nothing to report
   if (actions.length === 0) {
+    log("No actions, skipping enrichment and email");
     return NextResponse.json({ emailSent: false });
   }
 
@@ -132,8 +139,9 @@ export async function POST(
       .single();
 
     if (settingsError || !settings || !settings.imap_password_secret_id) {
-      console.warn("Skipping email enrichment: IMAP settings not configured");
+      log("Skipping enrichment: IMAP settings not configured");
     } else {
+      const imapStart = Date.now();
       const imapPassword = await retrieveSecret(supabase, settings.imap_password_secret_id);
       const imapClient = await createImapConnection({
         host: settings.imap_host,
@@ -141,23 +149,28 @@ export async function POST(
         user: settings.imap_user,
         password: imapPassword,
       });
+      log(`IMAP connected in ${Date.now() - imapStart}ms`);
 
       try {
-        const enrichedActions = await enrichActionsWithEmailMeta(actions, imapClient);
+        const enrichStart = Date.now();
+        const enrichedActions = await enrichActionsWithEmailMeta(actions, imapClient, log);
+        log(`Enrichment done in ${Date.now() - enrichStart}ms: ${enrichedActions.length} action(s) enriched`);
 
         // Update enriched actions in the DB
+        const dbStart = Date.now();
         for (const action of enrichedActions) {
           await supabase
             .from("actions")
             .update({ arguments: action.arguments })
             .eq("id", action.id);
         }
+        log(`DB updates done in ${Date.now() - dbStart}ms`);
       } finally {
         await closeImapConnection(imapClient);
       }
     }
   } catch (error) {
-    console.error("Email enrichment failed, continuing with summary send:", error);
+    console.error(`[end-of-session] [${sessionId}] Enrichment failed, continuing:`, error);
   }
 
   // Get user email from Supabase auth
@@ -176,13 +189,19 @@ export async function POST(
     (a) => getDefaultClassification(a.toolName) !== "read_only"
   );
 
+  log(`${visibleActions.length} visible action(s) after filtering read-only`);
+
   if (visibleActions.length === 0) {
+    log("No visible actions, skipping email");
     return NextResponse.json({ emailSent: false });
   }
 
   // Send the summary email
+  const sendStart = Date.now();
   await sendSessionSummary(userData.user.email, sessionId, visibleActions);
+  log(`Summary email sent to ${userData.user.email} in ${Date.now() - sendStart}ms`);
 
+  log(`Total processing time: ${Date.now() - totalStart}ms`);
   return NextResponse.json({ emailSent: true });
 }
 
@@ -198,29 +217,35 @@ export async function POST(
  * Each individual lookup is wrapped in try/catch so one failure does not block others.
  * @param actions - Array of action rows to enrich
  * @param imapClient - Connected ImapFlow client
+ * @param log - Logging function for diagnostic output
  * @returns Array of actions whose arguments were updated (subset of input)
  */
 async function enrichActionsWithEmailMeta(
   actions: ActionRow[],
-  imapClient: ImapClient
+  imapClient: ImapClient,
+  log: (msg: string) => void
 ): Promise<ActionRow[]> {
   const enriched: ActionRow[] = [];
 
-  for (const action of actions) {
-    // Only enrich email-related actions that have an email_id
-    if (!EMAIL_TOOL_NAMES.includes(action.toolName)) continue;
-    if (!action.arguments?.email_id) continue;
+  // Count how many actions need enrichment
+  const candidates = actions.filter(
+    (a) => EMAIL_TOOL_NAMES.includes(a.toolName)
+      && a.arguments?.email_id
+      && !(a.arguments.subject && a.arguments.from)
+  );
+  log(`${candidates.length} action(s) need enrichment out of ${actions.length} total`);
 
-    // Skip if already enriched
-    if (action.arguments.subject && action.arguments.from) continue;
-
+  for (const action of candidates) {
     try {
       const messageId = action.arguments.message_id as string | undefined;
       const emailId = action.arguments.email_id as string;
+      const lookupStart = Date.now();
 
       const meta = messageId
         ? await fetchEmailMetaByMessageId(imapClient, messageId)
         : await fetchEmailMetaByUid(imapClient, emailId);
+
+      log(`Enriched action ${action.id} (${action.toolName}) in ${Date.now() - lookupStart}ms: "${meta.subject}" from ${meta.from}`);
 
       action.arguments = {
         ...action.arguments,
@@ -229,10 +254,7 @@ async function enrichActionsWithEmailMeta(
       };
       enriched.push(action);
     } catch (error) {
-      console.warn(
-        `Failed to enrich action ${action.id} (${action.toolName}):`,
-        error
-      );
+      log(`Failed to enrich action ${action.id} (${action.toolName}): ${error}`);
     }
   }
 
