@@ -35,6 +35,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from supabase import Client
 
+from src.audio.markdown_stripper import MarkdownStripperProcessor
 from src.audio.recorder import AudioRecorder
 from src.audio.normalizer import AudioNormalizerProcessor
 from src.audio.speed import AudioSpeedProcessor
@@ -250,7 +251,8 @@ def create_pipeline(
     pipeline_chain: list[Any] = [transport.input(), watchdog]
     if user_recorder is not None:
         pipeline_chain.append(user_recorder)
-    pipeline_chain.extend([stt, user_aggregator, llm, tts, speed_processor, normalizer])
+    markdown_stripper = MarkdownStripperProcessor()
+    pipeline_chain.extend([stt, user_aggregator, llm, markdown_stripper, tts, speed_processor, normalizer])
     if assistant_recorder is not None:
         pipeline_chain.append(assistant_recorder)
     pipeline_chain.extend([transport.output(), assistant_aggregator])
