@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #
-# Start a Cloudflare quick tunnel and configure Twilio phone number webhooks
+# Start a Cloudflare tunnel and configure Twilio phone number webhooks
 # to point at it, then start the voice pipeline server.
+#
+# By default, uses a named Cloudflare tunnel (requires a one-time setup in the
+# Cloudflare Zero Trust dashboard). Use --quick-tunnel to fall back to a
+# disposable quick tunnel (subject to rate limits).
 #
 # Phone numbers are fetched from the company_phone_numbers table (environment=dev).
 # If no dev numbers are configured, the server starts without Twilio webhooks.
@@ -12,16 +16,23 @@
 #   SUPABASE_URL                - Supabase project URL
 #   SUPABASE_SERVICE_ROLE_KEY   - Supabase service role key
 #
+# For named tunnel (default):
+#   CLOUDFLARE_TUNNEL_TOKEN    - Tunnel token from Cloudflare Zero Trust dashboard
+#   CLOUDFLARE_TUNNEL_URL      - Public URL of the tunnel (e.g. https://dev-voice.yourdomain.com)
+#
 # Usage:
-#   ./dev-server-start.sh              # with Cloudflare tunnel + Twilio webhook
-#   ./dev-server-start.sh --no-tunnel  # local only, no tunnel or Twilio setup
+#   ./dev-server-start.sh                # named tunnel (default)
+#   ./dev-server-start.sh --quick-tunnel # disposable quick tunnel (rate limited)
+#   ./dev-server-start.sh --no-tunnel    # local only, no tunnel or Twilio setup
 
 set -euo pipefail
 
 NO_TUNNEL=false
+QUICK_TUNNEL=false
 for arg in "$@"; do
   case "$arg" in
     --no-tunnel) NO_TUNNEL=true ;;
+    --quick-tunnel) QUICK_TUNNEL=true ;;
     *) echo "Unknown argument: $arg" >&2; exit 1 ;;
   esac
 done
@@ -87,33 +98,93 @@ if ! command -v jq &>/dev/null; then
   exit 1
 fi
 
-# Start cloudflared quick tunnel in background, capture the URL from its log
 TUNNEL_LOG=$(mktemp)
-cloudflared tunnel --url "http://localhost:$PORT" 2>"$TUNNEL_LOG" &
-TUNNEL_PID=$!
+TUNNEL_PID=""
 
 cleanup() {
   echo ""
-  echo "Shutting down tunnel (PID $TUNNEL_PID)..."
-  kill "$TUNNEL_PID" 2>/dev/null || true
+  if [[ -n "$TUNNEL_PID" ]]; then
+    echo "Shutting down tunnel (PID $TUNNEL_PID)..."
+    kill "$TUNNEL_PID" 2>/dev/null || true
+  fi
   rm -f "$TUNNEL_LOG"
 }
 trap cleanup EXIT
 
-# Wait for the tunnel URL to appear in the log
-echo "Starting Cloudflare quick tunnel on port $PORT..."
 TUNNEL_URL=""
-for i in $(seq 1 30); do
-  TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9_-]+(-[a-zA-Z0-9_-]+)+\.trycloudflare\.com' "$TUNNEL_LOG" | head -1 || true)
-  if [[ -n "$TUNNEL_URL" ]]; then
-    break
-  fi
-  sleep 1
-done
 
-if [[ -z "$TUNNEL_URL" ]]; then
-  echo "Failed to start Cloudflare tunnel (trycloudflare.com may be down)." >&2
-  exit 1
+if [[ "$QUICK_TUNNEL" == true ]]; then
+  # --- Quick tunnel (disposable, rate limited) ---
+  MAX_TUNNEL_RETRIES=3
+  for attempt in $(seq 1 $MAX_TUNNEL_RETRIES); do
+    echo "Starting Cloudflare quick tunnel on port $PORT (attempt $attempt/$MAX_TUNNEL_RETRIES)..."
+
+    > "$TUNNEL_LOG"
+    cloudflared tunnel --url "http://localhost:$PORT" 2>"$TUNNEL_LOG" &
+    TUNNEL_PID=$!
+
+    for i in $(seq 1 30); do
+      TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9_-]+(-[a-zA-Z0-9_-]+)+\.trycloudflare\.com' "$TUNNEL_LOG" | head -1 || true)
+      if [[ -n "$TUNNEL_URL" ]]; then
+        break 2
+      fi
+      if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+
+    echo "Tunnel attempt $attempt failed."
+    kill "$TUNNEL_PID" 2>/dev/null || true
+    wait "$TUNNEL_PID" 2>/dev/null || true
+    TUNNEL_PID=""
+
+    if [[ $attempt -lt $MAX_TUNNEL_RETRIES ]]; then
+      echo "Retrying in 5 seconds..."
+      sleep 5
+    fi
+  done
+
+  if [[ -z "$TUNNEL_URL" ]]; then
+    echo "Failed to start quick tunnel after $MAX_TUNNEL_RETRIES attempts." >&2
+    echo "--- cloudflared log ---" >&2
+    cat "$TUNNEL_LOG" >&2
+    echo "--- end log ---" >&2
+    exit 1
+  fi
+
+else
+  # --- Named tunnel (default) ---
+  if [[ -z "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+    echo "ERROR: CLOUDFLARE_TUNNEL_TOKEN is not set." >&2
+    echo "  Get it from: Cloudflare Zero Trust dashboard -> Networks -> Tunnels -> your tunnel -> Configure -> Token" >&2
+    echo "  Add it to your .env file." >&2
+    exit 1
+  fi
+
+  if [[ -z "${CLOUDFLARE_TUNNEL_URL:-}" ]]; then
+    echo "ERROR: CLOUDFLARE_TUNNEL_URL is not set." >&2
+    echo "  This is the public URL of your tunnel (e.g. https://dev-voice.yourdomain.com)." >&2
+    echo "  Find it in: Cloudflare Zero Trust dashboard -> Networks -> Tunnels -> your tunnel -> Public Hostname" >&2
+    echo "  Add it to your .env file." >&2
+    exit 1
+  fi
+
+  echo "Starting named Cloudflare tunnel..."
+  cloudflared tunnel run --token "$CLOUDFLARE_TUNNEL_TOKEN" 2>"$TUNNEL_LOG" &
+  TUNNEL_PID=$!
+
+  # Wait briefly to make sure cloudflared doesn't crash on startup
+  sleep 3
+  if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+    echo "ERROR: Named tunnel failed to start." >&2
+    echo "--- cloudflared log ---" >&2
+    cat "$TUNNEL_LOG" >&2
+    echo "--- end log ---" >&2
+    exit 1
+  fi
+
+  TUNNEL_URL="$CLOUDFLARE_TUNNEL_URL"
 fi
 
 echo "Tunnel URL: $TUNNEL_URL"
@@ -177,4 +248,57 @@ echo ""
 # Start the voice pipeline with PUBLIC_URL set to the tunnel
 export PUBLIC_URL="$TUNNEL_URL"
 cd "$SCRIPT_DIR"
-exec python3 -m uvicorn src.server:app --host 0.0.0.0 --port "$PORT"
+python3 -m uvicorn src.server:app --host 0.0.0.0 --port "$PORT" &
+SERVER_PID=$!
+
+# Wait for the server to be ready locally
+echo "Waiting for server to start on port $PORT..."
+for i in $(seq 1 30); do
+  if curl -s --max-time 2 "http://localhost:$PORT/health" > /dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "ERROR: Server failed to start." >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+# Verify the tunnel routes to our server (catches port mismatches in the dashboard config)
+if [[ "$QUICK_TUNNEL" == false ]]; then
+  echo "Verifying tunnel connectivity..."
+  TUNNEL_HEALTH=""
+  for i in $(seq 1 10); do
+    TUNNEL_HEALTH=$(curl -s --max-time 5 "$TUNNEL_URL/health" 2>/dev/null || echo "")
+    if [[ "$TUNNEL_HEALTH" == *'"status"'*'"ok"'* ]]; then
+      break
+    fi
+    echo "  Attempt $i/10: tunnel not ready ($TUNNEL_HEALTH)"
+    sleep 2
+  done
+
+  if [[ "$TUNNEL_HEALTH" != *'"status"'*'"ok"'* ]]; then
+    echo "" >&2
+    echo "ERROR: Tunnel health check failed. The tunnel may be configured for a different port." >&2
+    echo "  Response: $TUNNEL_HEALTH" >&2
+    echo "  Your server is running on port $PORT." >&2
+    echo "  Fix: Update the service URL in Cloudflare Zero Trust dashboard -> Networks -> Tunnels -> Configure -> Public Hostname" >&2
+    echo "" >&2
+    echo "  Possible causes:" >&2
+    echo "    - Cloudflare WARP is running (conflicts with cloudflared)" >&2
+    echo "    - The tunnel's public hostname is configured for a different port" >&2
+    echo "" >&2
+    echo "  Alternatively, restart with a different option:" >&2
+    echo "    --quick-tunnel    Use a temporary Cloudflare quick tunnel instead" >&2
+    echo "    --no-tunnel       Run without any tunnel (local only)" >&2
+    echo "" >&2
+    kill "$SERVER_PID" 2>/dev/null
+    exit 1
+  else
+    echo "Tunnel health check passed."
+  fi
+fi
+
+# Forward signals to the server so Ctrl+C shuts everything down
+trap "kill $SERVER_PID 2>/dev/null; cleanup" EXIT
+wait "$SERVER_PID"
