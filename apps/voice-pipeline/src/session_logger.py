@@ -67,7 +67,11 @@ def install() -> None:
 
     _stdlib_handler = _SessionLogHandler()
     _stdlib_handler.setLevel(logging.DEBUG)
-    logging.getLogger().addHandler(_stdlib_handler)
+    root = logging.getLogger()
+    root.addHandler(_stdlib_handler)
+    # Root logger defaults to WARNING; lower it so INFO records reach the handler
+    if root.level > logging.INFO:
+        root.setLevel(logging.INFO)
 
 
 def uninstall() -> None:
