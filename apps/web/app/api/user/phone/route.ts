@@ -45,14 +45,17 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "countryCode is required" }, { status: 400 });
   }
 
-  if (!number.startsWith("+")) {
+  // Normalize to E.164: strip spaces, dashes, parentheses
+  const normalized = "+" + number.replace(/[^\d]/g, "");
+
+  if (!number.startsWith("+") || normalized.length < 2) {
     return NextResponse.json(
       { error: "Phone number must be in international format (e.g. +1234567890)" },
       { status: 400 }
     );
   }
 
-  const phone: UserPhone = { number, countryCode };
+  const phone: UserPhone = { number: normalized, countryCode };
 
   const { error } = await supabase
     .from("user_settings")
