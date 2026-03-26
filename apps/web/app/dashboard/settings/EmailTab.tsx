@@ -294,17 +294,17 @@ export default function EmailTab() {
       {/* Provider Selector */}
       <section className="settings-panel">
         <h2 >Email Provider</h2>
-        <div className="flex gap-0">
+        <div className="flex">
           {PROVIDERS.map((p) => (
             <button
               key={p.id}
               type="button"
               onClick={() => handleProviderChange(p.id)}
-              className={`px-5 py-2 text-[13px] font-medium border transition-colors ${
+              className={`flex-1 py-2 text-[13px] font-semibold border transition-colors ${
                 provider === p.id
                   ? "bg-[var(--btn-primary-bg)] text-white border-[var(--btn-primary-bg)]"
                   : "bg-[var(--bg-surface)] text-[var(--text-secondary)] border-[var(--border-color)] hover:bg-[var(--bg-hover)]"
-              } ${p.id === "gmail" ? "rounded-l" : ""} ${p.id === "custom" ? "rounded-r" : ""} ${p.id !== "gmail" ? "-ml-px" : ""}`}
+              } ${p.id !== "gmail" ? "-ml-px" : ""}`}
             >
               {p.label}
             </button>
@@ -441,11 +441,11 @@ interface ProviderInstructionsProps {
  */
 function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, saving, saved, error, onSave }: ProviderInstructionsProps) {
   return (
-    <div className="mt-4 text-[13px] text-[var(--text-secondary)]">
-      <ol className="list-decimal list-inside space-y-4">
+    <div className="mt-6 text-[13px] text-[var(--text-secondary)]">
+      <ol className="list-decimal list-outside pl-5 space-y-4 mb-6">
         <li>
           Enter your Gmail address
-          <div className="mt-1.5 ml-5">
+          <div className="mt-1.5 -ml-3 mr-3">
             <InlineInput
               value={email}
               onChange={onEmailChange}
@@ -479,7 +479,7 @@ function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordCha
         </li>
         <li>
           {hasPassword ? "Paste your new app password (leave blank to keep current)" : "Paste your app password"}
-          <div className="mt-1.5 ml-5">
+          <div className="mt-1.5 -ml-3 mr-3">
             <InlineInput
               value={appPassword}
               onChange={onAppPasswordChange}
@@ -491,27 +491,21 @@ function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordCha
         </li>
       </ol>
 
-      {error && (
-        <div className="mt-4 border border-red-200 bg-red-50 p-3 text-[13px] text-red-700">
-          {error}
-        </div>
-      )}
+      {error && <p className="text-red-600 text-sm font-medium mb-4">{error}</p>}
 
-      <div className="mt-5 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={saving}
-          className="bg-[var(--btn-primary-bg)] px-6 py-2 text-[13px] font-medium text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
-        >
-          {saving ? "Testing connection..." : "Test & Save"}
-        </button>
-        {saved && (
-          <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
-            Connection verified and saved
-          </span>
-        )}
-      </div>
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={saving}
+        className="w-full bg-[var(--btn-primary-bg)] py-3 text-[13px] font-semibold text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition"
+      >
+        {saving ? "Testing connection..." : "Test & Save"}
+      </button>
+      {saved && (
+        <span className="mt-3 inline-block bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
+          Connection verified and saved
+        </span>
+      )}
     </div>
   );
 }
@@ -521,11 +515,11 @@ function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordCha
  */
 function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, saving, saved, error, onSave }: ProviderInstructionsProps) {
   return (
-    <div className="mt-4 text-[13px] text-[var(--text-secondary)]">
-      <ol className="list-decimal list-inside space-y-4">
+    <div className="mt-6 text-[13px] text-[var(--text-secondary)]">
+      <ol className="list-decimal list-outside pl-5 space-y-4 mb-6">
         <li>
           Enter your Outlook email address
-          <div className="mt-1.5 ml-5">
+          <div className="mt-1.5 -ml-3 mr-3">
             <InlineInput
               value={email}
               onChange={onEmailChange}
@@ -567,13 +561,13 @@ function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordC
             App passwords
           </a>
           {" "}and create a new one
-          <p className="mt-2 ml-5 text-xs text-[var(--text-secondary)]">
+          <p className="mt-2 text-xs text-[var(--text-secondary)]">
             For work/school accounts, your admin may need to enable IMAP access.
           </p>
         </li>
         <li>
           {hasPassword ? "Paste your new app password (leave blank to keep current)" : "Paste your app password"}
-          <div className="mt-1.5 ml-5">
+          <div className="mt-1.5 -ml-3 mr-3">
             <InlineInput
               value={appPassword}
               onChange={onAppPasswordChange}
@@ -585,27 +579,21 @@ function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordC
         </li>
       </ol>
 
-      {error && (
-        <div className="mt-4 border border-red-200 bg-red-50 p-3 text-[13px] text-red-700">
-          {error}
-        </div>
-      )}
+      {error && <p className="text-red-600 text-sm font-medium mb-4">{error}</p>}
 
-      <div className="mt-5 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={saving}
-          className="bg-[var(--btn-primary-bg)] px-6 py-2 text-[13px] font-medium text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
-        >
-          {saving ? "Testing connection..." : "Test & Save"}
-        </button>
-        {saved && (
-          <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
-            Connection verified and saved
-          </span>
-        )}
-      </div>
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={saving}
+        className="w-full bg-[var(--btn-primary-bg)] py-3 text-[13px] font-semibold text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition"
+      >
+        {saving ? "Testing connection..." : "Test & Save"}
+      </button>
+      {saved && (
+        <span className="mt-3 inline-block bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
+          Connection verified and saved
+        </span>
+      )}
     </div>
   );
 }
@@ -641,7 +629,7 @@ function InlineInput({ value, onChange, placeholder, type = "text" }: InlineInpu
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full max-w-sm border border-[var(--border-color)] px-3 py-1.5 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
+      className="w-full border border-[var(--border-color)] px-3 py-2 text-[15px] font-medium placeholder-zinc-300 focus:border-[var(--btn-primary-bg)] focus:outline-none transition"
     />
   );
 }
