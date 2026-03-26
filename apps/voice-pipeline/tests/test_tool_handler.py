@@ -33,6 +33,7 @@ def _make_user_context() -> UserContext:
         voice_speed=1.2,
         tool_approval_config={},
         memory_entries=[],
+        email_provider="custom",
     )
 
 

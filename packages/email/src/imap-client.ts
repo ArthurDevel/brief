@@ -18,7 +18,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import TurndownService from "turndown";
-import type { ImapConfig, EmailSummary, Email, ThreadMessage, EmailMeta, EmailMetaRequest } from "./types";
+import type { ImapConfig, EmailSummary, Email, ThreadMessage, EmailMeta, EmailMetaRequest, FolderInfo } from "./types";
 import type { UndoRecipe } from "@dublin/tools";
 
 // ============================================================================
@@ -47,6 +47,72 @@ export async function resolveSpecialUseFolder(
     }
   }
   throw new Error(`No mailbox with special-use flag ${flag} found`);
+}
+
+/**
+ * Lists all selectable IMAP folders, excluding INBOX and non-selectable parents.
+ * @param client - Connected ImapFlow client
+ * @returns Array of folder info objects
+ */
+export async function listFolders(client: ImapFlow): Promise<FolderInfo[]> {
+  const mailboxes = await client.list();
+  const folders: FolderInfo[] = [];
+
+  for (const mailbox of mailboxes) {
+    // Skip non-selectable folders (e.g. [Gmail] container)
+    if (mailbox.flags && mailbox.flags.has("\\Noselect")) continue;
+    // Skip INBOX -- user is already there
+    if (mailbox.path === "INBOX") continue;
+
+    const pathSegments = mailbox.path.split(mailbox.delimiter || "/");
+    const name = pathSegments[pathSegments.length - 1];
+
+    folders.push({
+      path: mailbox.path,
+      name,
+      specialUse: mailbox.specialUse ?? null,
+    });
+  }
+
+  return folders;
+}
+
+/**
+ * Moves an email to a target folder and returns an undo recipe.
+ * @param client - Connected ImapFlow client
+ * @param emailId - The UID of the email to move
+ * @param targetFolder - Destination folder path
+ * @param sourceFolder - Current folder path (for undo)
+ * @returns UndoRecipe to reverse the move
+ */
+export async function moveEmailToFolder(
+  client: ImapFlow,
+  emailId: string,
+  targetFolder: string,
+  sourceFolder: string
+): Promise<UndoRecipe> {
+  const lock = await client.getMailboxLock(sourceFolder);
+
+  try {
+    // Fetch the stable Message-ID before moving (UIDs change across folders)
+    const msg = await client.fetchOne(emailId, { envelope: true }, { uid: true });
+    if (!msg || !msg.envelope) throw new Error(`Email with UID ${emailId} not found`);
+    const messageId = msg.envelope.messageId;
+    if (!messageId) throw new Error("Email has no Message-ID header");
+
+    await client.messageMove(emailId, targetFolder, { uid: true });
+
+    return {
+      operation: "move_email",
+      params: {
+        messageId,
+        from: targetFolder,
+        to: sourceFolder,
+      },
+    };
+  } finally {
+    lock.release();
+  }
 }
 
 // ============================================================================

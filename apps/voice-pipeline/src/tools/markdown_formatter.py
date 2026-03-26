@@ -10,7 +10,7 @@ Converts structured email data into compact markdown strings for LLM consumption
 
 from __future__ import annotations
 
-from src.tools.email_client import Email, EmailSummary, ThreadMessage
+from src.tools.email_client import Email, EmailSummary, FolderInfo, ThreadMessage
 
 
 # ============================================================================
@@ -99,5 +99,29 @@ def format_thread(messages: list[ThreadMessage]) -> str:
         lines.append("")
 
     lines.append("---")
+
+    return "\n".join(lines)
+
+
+def format_folders(folders: list[FolderInfo]) -> str:
+    """Format a list of folders as markdown.
+
+    Each folder on its own line, with special-use annotation if present.
+
+    Args:
+        folders: List of FolderInfo to format.
+
+    Returns:
+        Markdown string with folder listing.
+    """
+    lines: list[str] = []
+    lines.append(f"## Folders ({len(folders)})")
+    lines.append("")
+
+    for folder in folders:
+        if folder.special_use:
+            lines.append(f"- **{folder.name}** ({folder.path}) -- {folder.special_use}")
+        else:
+            lines.append(f"- **{folder.name}** ({folder.path})")
 
     return "\n".join(lines)

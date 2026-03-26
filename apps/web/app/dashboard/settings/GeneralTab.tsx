@@ -13,6 +13,7 @@ import { parsePhoneNumber } from "libphonenumber-js";
 import type { UserSettings, MemoryEntry, CompanyPhone } from "@/lib/types";
 import type { ToolApprovalConfig, ActionClassification } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
+import { getDefaultClassification } from "@dublin/tools/src/classification";
 import type { DeepgramVoice } from "@/app/api/deepgram/voices/route";
 
 // ============================================================================
@@ -25,6 +26,7 @@ const DEFAULT_SPEED = 1.2;
 const TOOL_NAMES = [
   "mark_as_read",
   "archive_email",
+  "move_to_folder",
   "draft_email",
   "delete_email",
   "send_email",
@@ -604,7 +606,7 @@ export default function GeneralTab() {
                   disabled={toolName === "send_email"}
                   className="border border-[var(--border-color)] px-3 py-1.5 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)] disabled:bg-[var(--bg-hover)] disabled:text-[var(--text-secondary)]"
                 >
-                  <option value="">Default</option>
+                  <option value="">Default ({getDefaultClassification(toolName)})</option>
                   {CLASSIFICATION_OPTIONS.map((opt) => (
                     <option key={opt} value={opt}>
                       {opt}

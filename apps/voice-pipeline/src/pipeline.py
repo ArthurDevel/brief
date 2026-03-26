@@ -186,6 +186,7 @@ def create_pipeline(
         user_context.memory_entries,
         user_context.tool_approval_config,
         email_context=email_context,
+        email_provider=user_context.email_provider,
     )
 
     tools = get_tool_definitions()

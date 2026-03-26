@@ -69,6 +69,24 @@ export interface Email {
   isRead: boolean;
 }
 
+// ============================================================================
+// FOLDER DATA
+// ============================================================================
+
+/** Information about an IMAP folder (mailbox). */
+export interface FolderInfo {
+  /** Full IMAP folder path (e.g. "[Gmail]/Starred") */
+  path: string;
+  /** Display name -- last segment of the path (e.g. "Starred") */
+  name: string;
+  /** RFC 6154 special-use flag if present (e.g. "\\Trash"), null otherwise */
+  specialUse: string | null;
+}
+
+// ============================================================================
+// EMAIL META
+// ============================================================================
+
 /** Lightweight email metadata used for enriching action arguments. */
 export interface EmailMeta {
   /** Email subject line */

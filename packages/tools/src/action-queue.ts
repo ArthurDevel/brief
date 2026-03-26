@@ -459,10 +459,12 @@ async function dispatchTool(
   sessionId: string | null
 ): Promise<{ result: Record<string, unknown>; undoRecipe: UndoRecipe | null }> {
   // Lazy import to avoid circular dependencies
-  const { listInbox, searchEmails, readEmail, readThread, markAsRead, archiveEmail, deleteEmail, moveEmail } =
-    await import("@dublin/email");
+  const {
+    listInbox, searchEmails, readEmail, readThread, markAsRead,
+    archiveEmail, deleteEmail, moveEmail, listFolders, moveEmailToFolder,
+  } = await import("@dublin/email");
   const { sendEmail, saveDraft } = await import("@dublin/email");
-  const { formatEmailSummaries, formatEmail, formatThread } = await import("@dublin/email");
+  const { formatEmailSummaries, formatEmail, formatThread, formatFolders } = await import("@dublin/email");
 
   switch (toolName) {
     case "list_inbox": {
@@ -545,6 +547,22 @@ async function dispatchTool(
         body: args.body as string,
       });
       return { result: { sent: true }, undoRecipe: null };
+    }
+
+    case "list_folders": {
+      const folders = await listFolders(imapClient);
+      return { result: { markdown: formatFolders(folders) }, undoRecipe: null };
+    }
+
+    case "move_to_folder": {
+      const sourceFolder = (args.source_folder as string) ?? "INBOX";
+      const undoRecipe = await moveEmailToFolder(
+        imapClient,
+        args.email_id as string,
+        args.folder as string,
+        sourceFolder
+      );
+      return { result: { moved: true }, undoRecipe };
     }
 
     case "save_memory": {
@@ -689,7 +707,7 @@ export async function fetchPendingEmailIds(
     .from("actions")
     .select("arguments")
     .eq("session_id", sessionId)
-    .in("tool_name", ["delete_email", "archive_email"])
+    .in("tool_name", ["delete_email", "archive_email", "move_to_folder"])
     .in("status", ["pending", "approved"]);
 
   if (error) {
