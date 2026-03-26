@@ -26,6 +26,7 @@ from supabase import Client
 
 from src.session import ImapConfig, SmtpConfig
 from src.tools.classification import classify_action
+from src.tools.contact_matcher import rank_contacts
 from src.tools import email_client
 from src.tools.markdown_formatter import format_email_summaries, format_email, format_thread
 
@@ -650,6 +651,21 @@ def _dispatch_tool(
     if tool_name == "submit_feature_request":
         result, recipe = _handle_feature_request(supabase, user_id, args["description"])
         return result, recipe, None
+
+    if tool_name == "find_contact":
+        response = (
+            supabase.table("user_contacts")
+            .select("email, display_name, frequency")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        contacts = cast(list[dict[str, Any]], response.data or [])
+        matches = rank_contacts(args["name"], contacts)
+        return (
+            {"matches": [{"email": m.email, "display_name": m.display_name, "score": m.score} for m in matches]},
+            None,
+            None,
+        )
 
     raise ValueError(f"Unknown tool: {tool_name}")
 

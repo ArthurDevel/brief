@@ -300,4 +300,24 @@ def get_tool_definitions() -> list[dict]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "find_contact",
+                "description": (
+                    "Look up a contact by name. Returns ranked matches with email "
+                    "addresses. Use this when the user asks to email someone by name."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "The name of the contact to look up.",
+                        },
+                    },
+                    "required": ["name"],
+                },
+            },
+        },
     ]

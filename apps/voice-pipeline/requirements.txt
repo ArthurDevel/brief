@@ -12,4 +12,6 @@ httpx
 langfuse
 markdownify
 twilio
+rapidfuzz
+jellyfish
 pyright

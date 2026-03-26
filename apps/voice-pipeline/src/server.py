@@ -59,9 +59,11 @@ from src.scheduler import start_scheduler
 from src.session import end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
 from src.tools.email_client import close_imap_connection, create_imap_connection
+from src.tools import contact_sync
 from src.transports.twilio import TwilioTransport, TwilioParams
 from src import session_logger
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -314,6 +316,14 @@ async def _cleanup_session(
     if log_text:
         await session_logger.upload_session_logs(session.session_id, log_text, supabase)
 
+    # Incremental contact sync (fire-and-forget, never blocks cleanup)
+    if imap_holder.get("config"):
+        try:
+            contact_sync.incremental_sync(imap_holder["config"], session.user_id, supabase)
+            logger.info("[server] Incremental contact sync completed for user %s", session.user_id)
+        except Exception as exc:
+            logger.warning("[server] Incremental contact sync failed for user %s: %s", session.user_id, exc)
+
     _live_pipeline_sessions.pop(session.session_id, None)
 
 
@@ -482,6 +492,85 @@ app.add_middleware(
 @app.get("/health")
 async def health() -> JSONResponse:
     return JSONResponse({"status": "ok"})
+
+
+# ============================================================================
+# ENDPOINTS: INTERNAL API
+# ============================================================================
+
+def _run_contact_sync(user_id: str, mode: str = "full") -> None:
+    """Background task: load IMAP config from DB/Vault and run contact sync.
+
+    Args:
+        user_id: The user to sync contacts for.
+        mode: "full" for full scan, "incremental" for delta-only scan.
+    """
+    logger.info("[server] Contact sync background task started for user %s (mode=%s)", user_id, mode)
+    try:
+        settings = load_settings()
+        supabase = create_service_client(settings)
+
+        # Load IMAP config from DB + Vault (same pattern as load_user_context)
+        settings_response = (
+            supabase.table("user_settings")
+            .select("imap_host, imap_port, imap_user, imap_password_secret_id")
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+
+        if not settings_response.data:
+            logger.error("[server] sync-contacts: no settings found for user %s", user_id)
+            return
+
+        row = cast(dict[str, Any], settings_response.data)
+        if not row.get("imap_password_secret_id"):
+            logger.error("[server] sync-contacts: no IMAP credentials for user %s", user_id)
+            return
+
+        from src.tools.vault import retrieve_secret
+        imap_password = retrieve_secret(supabase, str(row["imap_password_secret_id"]))
+
+        from src.session import ImapConfig
+        imap_config = ImapConfig(
+            host=str(row["imap_host"]),
+            port=int(row["imap_port"]),
+            user=str(row["imap_user"]),
+            password=imap_password,
+        )
+
+        if mode == "incremental":
+            count = contact_sync.incremental_sync(imap_config, user_id, supabase)
+            logger.info("[server] Incremental contact sync completed for user %s: %d contacts", user_id, count)
+        else:
+            count = contact_sync.full_sync(imap_config, user_id, supabase)
+            logger.info("[server] Full contact sync completed for user %s: %d contacts", user_id, count)
+
+    except Exception as exc:
+        logger.error("[server] Contact sync failed for user %s (mode=%s): %s", user_id, mode, exc)
+
+
+@app.post("/sync-contacts")
+async def sync_contacts(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
+    """Trigger a full contact sync for a user. Returns immediately, sync runs in background.
+
+    Authenticated with INTERNAL_API_KEY via Bearer header.
+    """
+    settings = load_settings()
+
+    # Authenticate
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer ") or auth_header[7:] != settings.internal_api_key:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    body = await request.json()
+    user_id = body.get("user_id")
+    if not user_id:
+        return JSONResponse({"error": "Missing user_id"}, status_code=400)
+
+    mode = body.get("mode", "full")
+    background_tasks.add_task(_run_contact_sync, user_id, mode)
+    return JSONResponse({"status": "queued"})
 
 
 # ============================================================================

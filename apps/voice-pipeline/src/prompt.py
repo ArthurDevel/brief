@@ -36,7 +36,12 @@ BASE_INSTRUCTIONS = (
     "subject in quick succession. When reading an email, summarize the key "
     "points only.\n"
     "\n"
-    "Always confirm before destructive actions like deleting or sending emails."
+    "Always confirm before destructive actions like deleting or sending emails.\n"
+    "\n"
+    "When the user asks to email someone by name (not by email address), call "
+    "find_contact first to look up their email address. If multiple matches are "
+    "returned, briefly read the top options and ask which one. If no matches are "
+    "found, ask the user for the email address directly."
 )
 
 ALL_TOOLS: list[dict[str, str]] = [
@@ -53,6 +58,7 @@ ALL_TOOLS: list[dict[str, str]] = [
     {"name": "batch_delete_emails", "default_class": "mutating_queued"},
     {"name": "save_memory", "default_class": "read_only"},
     {"name": "submit_feature_request", "default_class": "read_only"},
+    {"name": "find_contact", "default_class": "read_only"},
 ]
 
 
