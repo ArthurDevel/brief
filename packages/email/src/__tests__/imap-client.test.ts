@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import hoodiecrow from "hoodiecrow-imap";
-import type { ImapConfig } from "../types";
+import type { ImapConfig, EmailMetaRequest } from "../types";
 import {
   createImapConnection,
   closeImapConnection,
@@ -19,6 +19,7 @@ import {
   archiveEmail,
   deleteEmail,
   moveEmail,
+  fetchEmailMetaBatch,
 } from "../imap-client";
 import { saveDraft, deleteDraft } from "../smtp-client";
 
@@ -108,6 +109,19 @@ const THREAD_MSG_3 = {
   ].join("\r\n"),
 };
 
+// A message that only exists in Trash (not in INBOX or All Mail).
+const TRASH_ONLY_MSG = {
+  raw: [
+    "From: Dave <dave@example.com>",
+    "To: testuser@localhost",
+    "Subject: Old promo offer",
+    "Date: Sun, 09 Mar 2026 08:00:00 +0000",
+    "Message-Id: <trash-only-001@example.com>",
+    "",
+    "This promotional offer has expired.",
+  ].join("\r\n"),
+};
+
 /**
  * Creates a Hoodiecrow server with a non-standard folder prefix.
  * Real Gmail accounts may use "[Google Mail]" or localized names instead of "[Gmail]".
@@ -147,7 +161,10 @@ function createTestServer() {
                 "special-use": "\\Sent",
                 messages: [THREAD_MSG_2],
               },
-              Trash: { "special-use": "\\Trash" },
+              Trash: {
+                "special-use": "\\Trash",
+                messages: [TRASH_ONLY_MSG],
+              },
             },
           },
         },
@@ -289,6 +306,120 @@ describe("IMAP client (Hoodiecrow integration)", () => {
       expect(full.from).toContain("Bob");
       expect(full.to).toContain("testuser@localhost");
       expect(full.body).toContain("invoice for March");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // fetchEmailMetaBatch
+  // --------------------------------------------------------------------------
+
+  it("returns correct subject/from for multiple UIDs", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const requests: EmailMetaRequest[] = [
+        { actionId: "a1", uid: "1" },
+        { actionId: "a2", uid: "2" },
+        { actionId: "a3", uid: "3" },
+      ];
+
+      const results = await fetchEmailMetaBatch(client, requests);
+
+      expect(results.size).toBe(3);
+
+      expect(results.get("a1")!.subject).toBe("Weekly standup notes");
+      expect(results.get("a1")!.from).toContain("Alice");
+
+      expect(results.get("a2")!.subject).toBe("Invoice #1234");
+      expect(results.get("a2")!.from).toContain("Bob");
+
+      expect(results.get("a3")!.subject).toBe("Lunch tomorrow?");
+      expect(results.get("a3")!.from).toContain("Carol");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  it("returns correct subject/from for multiple message_ids", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const requests: EmailMetaRequest[] = [
+        { actionId: "b1", messageId: "<msg-001@example.com>" },
+        { actionId: "b2", messageId: "<msg-002@example.com>" },
+      ];
+
+      const results = await fetchEmailMetaBatch(client, requests);
+
+      expect(results.size).toBe(2);
+
+      expect(results.get("b1")!.subject).toBe("Weekly standup notes");
+      expect(results.get("b1")!.from).toContain("Alice");
+
+      expect(results.get("b2")!.subject).toBe("Invoice #1234");
+      expect(results.get("b2")!.from).toContain("Bob");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  it("finds a message_id that only exists in Trash", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const requests: EmailMetaRequest[] = [
+        { actionId: "c1", messageId: "<trash-only-001@example.com>" },
+      ];
+
+      const results = await fetchEmailMetaBatch(client, requests);
+
+      expect(results.size).toBe(1);
+      expect(results.get("c1")!.subject).toBe("Old promo offer");
+      expect(results.get("c1")!.from).toContain("Dave");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  it("handles a mix of UID-based and message_id-based lookups", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const requests: EmailMetaRequest[] = [
+        { actionId: "d1", uid: "1" },
+        { actionId: "d2", messageId: "<msg-002@example.com>" },
+        { actionId: "d3", uid: "3" },
+      ];
+
+      const results = await fetchEmailMetaBatch(client, requests);
+
+      expect(results.size).toBe(3);
+
+      expect(results.get("d1")!.subject).toBe("Weekly standup notes");
+      expect(results.get("d2")!.subject).toBe("Invoice #1234");
+      expect(results.get("d3")!.subject).toBe("Lunch tomorrow?");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  it("returns partial results when some lookups fail", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const requests: EmailMetaRequest[] = [
+        { actionId: "e1", uid: "1" },
+        { actionId: "e2", uid: "99999" },
+        { actionId: "e3", uid: "2" },
+      ];
+
+      const results = await fetchEmailMetaBatch(client, requests);
+
+      // Valid UIDs should be in the results
+      expect(results.has("e1")).toBe(true);
+      expect(results.has("e3")).toBe(true);
+      expect(results.get("e1")!.subject).toBe("Weekly standup notes");
+      expect(results.get("e3")!.subject).toBe("Invoice #1234");
+
+      // Nonexistent UID should NOT be in the results
+      expect(results.has("e2")).toBe(false);
     } finally {
       await closeImapConnection(client);
     }
@@ -438,4 +569,5 @@ describe("IMAP client (Hoodiecrow integration)", () => {
       await closeImapConnection(client);
     }
   });
+
 });
