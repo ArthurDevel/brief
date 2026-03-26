@@ -41,6 +41,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from src.audio.recorder import AudioRecorder, combine_wav_buffers, upload_recording
 from src.auth.jwt_auth import verify_token
 from src.auth.twilio_auth import (
+    MAX_NO_INPUT_REPEATS,
     MAX_PIN_ATTEMPTS,
     build_twiml_connect,
     build_twiml_gather_pin,
@@ -704,6 +705,22 @@ async def twilio_verify_pin(request: Request) -> Response:
 
     logger.info("[twilio] Incorrect PIN for user %s, attempt %d", user_id, attempt)
     twiml = build_twiml_gather_pin(user_id, attempt=next_attempt)
+    return Response(content=twiml, media_type="text/xml")
+
+
+@app.post("/twilio/no-input")
+async def twilio_no_input(request: Request) -> Response:
+    """Handle Twilio redirect when the caller provides no PIN input.
+
+    Re-prompts the caller up to MAX_NO_INPUT_REPEATS times before hanging up.
+    """
+    user_id = request.query_params.get("userId", "")
+    attempt = request.query_params.get("attempt", "1")
+    no_input_count = request.query_params.get("noInputCount", "1")
+
+    logger.info("[twilio] No input from user %s, repeat %s/%s", user_id, no_input_count, MAX_NO_INPUT_REPEATS)
+
+    twiml = build_twiml_gather_pin(user_id, attempt=int(attempt), no_input_count=int(no_input_count))
     return Response(content=twiml, media_type="text/xml")
 
 
