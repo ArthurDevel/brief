@@ -306,19 +306,29 @@ function PreviousSessionCard({
   return (
     <Link href={`/dashboard/sessions/${session.id}`} style={{ textDecoration: "none" }} className="block">
       <div className="settings-panel hover:border-[var(--text-secondary)] transition-colors cursor-pointer" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>
-          {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
-        </h2>
-        <div style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0, display: "flex", justifyContent: "space-between" }}>
-          <div className="flex gap-4">
-            <span>{formatDuration(session.durationSeconds)}</span>
-            <span>{session.actionCount} action{session.actionCount !== 1 ? "s" : ""}</span>
-          </div>
+        <div className="flex items-start justify-between">
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 8px 0" }}>
+            {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
+          </h2>
           {hasPendingActions && (
-            <span style={{ color: "#d29922", fontWeight: 500 }}>
-              • Pending actions
+            <span style={{ color: "#d29922", fontWeight: 500, fontSize: 13 }}>
+              Pending actions
             </span>
           )}
+        </div>
+        <div className="flex gap-2">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+            <Clock size={12} />
+            {formatRelativeTime(session.startedAt)}
+          </span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+            <Timer size={12} />
+            {formatDuration(session.durationSeconds)}
+          </span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+            <Zap size={12} />
+            {session.actionCount} action{session.actionCount !== 1 ? "s" : ""}
+          </span>
         </div>
       </div>
     </Link>
