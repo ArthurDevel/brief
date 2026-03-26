@@ -14,9 +14,9 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useCall } from "@/contexts/CallContext";
-import { Smartphone, Monitor } from "lucide-react";
+import { Smartphone, Monitor, QrCode, UserPlus } from "lucide-react";
 import * as QRCode from "qrcode";
 import type { UserSettings, CompanyPhone, UserPhone } from "@/lib/types";
 
@@ -66,6 +66,7 @@ export default function CallPage() {
   // UI state
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showQr, setShowQr] = useState(false);
 
   // Fetch user settings and company phones on mount
   useEffect(() => {
@@ -107,6 +108,30 @@ export default function CallPage() {
     }
     load();
   }, []);
+
+  /**
+   * Downloads a vCard file so the user can save the company phone number as a contact.
+   */
+  const downloadVcard = useCallback(() => {
+    if (!matchedCompanyPhone) return;
+
+    const vcard = [
+      "BEGIN:VCARD",
+      "VERSION:3.0",
+      `FN:${VCARD_CONTACT_NAME}`,
+      `N:;${VCARD_CONTACT_NAME};;;`,
+      `TEL;TYPE=VOICE:${matchedCompanyPhone.phoneNumber}`,
+      "END:VCARD",
+    ].join("\n");
+
+    const blob = new Blob([vcard], { type: "text/vcard" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${VCARD_CONTACT_NAME}.vcf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [matchedCompanyPhone]);
 
   // ============================================================================
   // RENDER
@@ -153,11 +178,43 @@ export default function CallPage() {
                 </p>
               ) : matchedCompanyPhone && qrDataUrl ? (
                 <>
-                  <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
-                    Scan this QR code to save the number to your contacts, then call it anytime.
-                  </p>
-                  <div className="flex flex-col items-start gap-2">
-                    <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                  {/* Desktop: always show QR */}
+                  <div className="hidden md:block">
+                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
+                      Scan this QR code to save the number to your contacts, then call it anytime.
+                    </p>
+                    <div className="flex flex-col items-start gap-2">
+                      <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                      <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
+                    </div>
+                  </div>
+
+                  {/* Mobile: buttons + toggleable QR */}
+                  <div className="md:hidden">
+                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
+                      Save the number to your contacts, then call it anytime.
+                    </p>
+                    <div className="flex flex-col gap-3 mb-4 max-w-[300px]">
+                      <button
+                        onClick={downloadVcard}
+                        className="flex items-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-4 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        Add to Contacts
+                      </button>
+                      <button
+                        onClick={() => setShowQr((prev) => !prev)}
+                        className="flex items-center gap-2 border border-[var(--border-color)] bg-[var(--bg-surface)] text-[var(--text-primary)] px-4 py-2.5 text-[13px] font-semibold cursor-pointer hover:bg-[var(--bg-hover)] transition"
+                      >
+                        <QrCode className="w-4 h-4" />
+                        {showQr ? "Hide QR" : "Show QR"}
+                      </button>
+                    </div>
+                    {showQr && (
+                      <div className="flex flex-col items-start gap-2">
+                        <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                      </div>
+                    )}
                     <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
                   </div>
                 </>
