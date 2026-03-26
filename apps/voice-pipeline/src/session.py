@@ -21,6 +21,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
+
+EmailProvider = Literal["gmail", "outlook", "custom"]
+
 from supabase import Client
 
 from src.tools.vault import retrieve_secret
@@ -94,6 +97,7 @@ class UserContext:
     voice_speed: float
     tool_approval_config: dict[str, str]
     memory_entries: list[MemoryEntry]
+    email_provider: EmailProvider
 
 
 # ============================================================================
@@ -255,6 +259,22 @@ def end_session(session: ActiveSession, cost_summary: Any, supabase: Client) -> 
 # HELPER FUNCTIONS
 # ============================================================================
 
+def _derive_email_provider(imap_host: str) -> EmailProvider:
+    """Derive the email provider type from the IMAP host string.
+
+    Args:
+        imap_host: The IMAP server hostname (e.g. "imap.gmail.com").
+
+    Returns:
+        "gmail", "outlook", or "custom" based on the host.
+    """
+    if imap_host == "imap.gmail.com":
+        return "gmail"
+    if imap_host == "outlook.office365.com":
+        return "outlook"
+    return "custom"
+
+
 def _flush_transcript(session: ActiveSession) -> None:
     """Write the current in-memory transcript to the database.
 
@@ -353,4 +373,5 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
         voice_speed=float(voice_config.get("speed", 1.2)),
         tool_approval_config=cast(dict[str, str], settings.get("tool_approval_config") or {}),
         memory_entries=memory_entries,
+        email_provider=_derive_email_provider(imap_config.host),
     )

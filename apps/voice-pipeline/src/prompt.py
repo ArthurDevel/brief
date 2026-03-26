@@ -27,7 +27,8 @@ BASE_INSTRUCTIONS = (
     "think you hear. Never switch to another language.\n"
     "\n"
     "You have access to tools to list, read, search, draft, delete, archive, "
-    "and send emails. You can also save things to memory and submit feature "
+    "and send emails, move emails between folders, and list available folders. "
+    "You can also save things to memory and submit feature "
     "requests. Use them whenever the user asks about their inbox or wants to "
     "take action.\n"
     "\n"
@@ -51,6 +52,8 @@ ALL_TOOLS: list[dict[str, str]] = [
     {"name": "send_email", "default_class": "mutating_queued"},
     {"name": "batch_archive_emails", "default_class": "mutating_auto"},
     {"name": "batch_delete_emails", "default_class": "mutating_queued"},
+    {"name": "list_folders", "default_class": "read_only"},
+    {"name": "move_to_folder", "default_class": "mutating_auto"},
     {"name": "save_memory", "default_class": "read_only"},
     {"name": "submit_feature_request", "default_class": "read_only"},
 ]
@@ -64,19 +67,30 @@ def build_system_prompt(
     memory_entries: list[MemoryEntry],
     tool_approval_config: dict[str, str],
     email_context: str | None = None,
+    email_provider: str | None = None,
 ) -> str:
-    """Assemble BASE_INSTRUCTIONS + user memory section + email context + tool behavior section.
+    """Assemble BASE_INSTRUCTIONS + provider hint + user memory + email context + tool behavior.
 
     Args:
         memory_entries: User's persistent memory entries from the database.
         tool_approval_config: User's per-tool approval overrides
             (tool_name -> classification string).
         email_context: Optional sentence about new/unread emails for the greeting.
+        email_provider: The user's email provider ("gmail", "outlook", "custom", or None).
+            When "gmail", a hint about Gmail label semantics is appended.
 
     Returns:
         The full system prompt string.
     """
     sections: list[str] = [BASE_INSTRUCTIONS]
+
+    # Add Gmail-specific hint about folder/label semantics
+    if email_provider == "gmail":
+        sections.append(
+            "This user has a Gmail account. Moving an email to a folder is "
+            "equivalent to applying a Gmail label -- the email will also remain "
+            "in All Mail."
+        )
 
     # Add user memory section if there are entries
     if memory_entries:
@@ -103,7 +117,7 @@ def build_system_prompt(
 # ============================================================================
 
 def _build_tool_behavior_section(config: dict[str, str]) -> str:
-    """Categorize all 10 tools into read_only/auto_execute/requires_approval.
+    """Categorize all 15 tools into read_only/auto_execute/requires_approval.
 
     send_email is always queued regardless of user config. Other tools
     check user overrides first, then fall back to their defaults.

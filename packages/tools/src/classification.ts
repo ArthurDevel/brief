@@ -26,6 +26,8 @@ const DEFAULT_CLASSIFICATIONS: Record<ToolName, ActionClassification> = {
   archive_email: "mutating_auto",
   draft_email: "mutating_auto",
   batch_archive_emails: "mutating_auto",
+  list_folders: "read_only",
+  move_to_folder: "mutating_auto",
   batch_delete_emails: "mutating_queued",
   delete_email: "mutating_queued",
   send_email: "mutating_queued",

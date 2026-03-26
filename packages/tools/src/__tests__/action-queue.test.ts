@@ -367,6 +367,48 @@ describe("Action queue (Hoodiecrow integration)", () => {
   });
 
   // --------------------------------------------------------------------------
+  // Execute move_to_folder + undo
+  // --------------------------------------------------------------------------
+
+  it("executes a move_to_folder action and undoes it: email returns to inbox", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const target = emails.find((e) => e.subject === "Invoice #1234")!;
+      expect(target).toBeDefined();
+
+      const { store, supabase } = makePendingAction("a-move", "move_to_folder", {
+        email_id: target.id,
+        folder: "[Google Mail]/Trash",
+        source_folder: "INBOX",
+      });
+
+      // Execute move
+      const result = await executeAction("a-move", supabase, client, DUMMY_SMTP_CONFIG);
+      expect(result.status).toBe("executed");
+
+      // Email should have left the inbox
+      const mid = await listInbox(client, 10);
+      expect(mid.find((e) => e.subject === "Invoice #1234")).toBeUndefined();
+
+      // Action should have a move_email undo recipe
+      const action = store.actions["a-move"];
+      expect(action.undo_recipe).toMatchObject({ operation: "move_email" });
+
+      // Undo
+      const undoResult = await undoAction("a-move", supabase, client);
+      expect(undoResult.success).toBe(true);
+
+      // Email should be back in inbox
+      const after = await listInbox(client, 10);
+      expect(after.find((e) => e.subject === "Invoice #1234")).toBeDefined();
+      expect(store.actions["a-move"].status).toBe("undone");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
   // Execute draft
   // --------------------------------------------------------------------------
 

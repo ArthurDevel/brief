@@ -27,7 +27,7 @@ from supabase import Client
 from src.session import ImapConfig, SmtpConfig
 from src.tools.classification import classify_action
 from src.tools import email_client
-from src.tools.markdown_formatter import format_email_summaries, format_email, format_thread
+from src.tools.markdown_formatter import format_email_summaries, format_email, format_folders, format_thread
 
 logger = logging.getLogger(__name__)
 
@@ -651,6 +651,23 @@ def _dispatch_tool(
         result, recipe = _handle_feature_request(supabase, user_id, args["description"])
         return result, recipe, None
 
+    if tool_name == "list_folders":
+        folders = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.list_folders(c),
+        )
+        return {"markdown": format_folders(folders)}, None, None
+
+    if tool_name == "move_to_folder":
+        source_folder = args.get("source_folder", "INBOX")
+        recipe_data, message_id = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.move_email_to_folder(
+                c, args["email_id"], args["folder"], source_folder
+            ),
+        )
+        return {"moved": True}, UndoRecipe(**recipe_data), message_id
+
     raise ValueError(f"Unknown tool: {tool_name}")
 
 
@@ -672,15 +689,31 @@ def _dispatch_undo(
     config: ImapConfig = imap_holder["config"]
 
     if recipe.operation == "move_email":
-        email_client.with_reconnect(
-            imap_holder, config,
-            lambda c: email_client.move_email(
-                c,
-                recipe.params["email_id"],
-                recipe.params["from"],
-                recipe.params["to"],
-            ),
-        )
+        if "message_id" in recipe.params:
+            # New path: search by Message-ID header for reliable undo
+            email_client.with_reconnect(
+                imap_holder, config,
+                lambda c: email_client.move_email(
+                    c,
+                    recipe.params["message_id"],
+                    recipe.params["from"],
+                    recipe.params["to"],
+                ),
+            )
+        elif "email_id" in recipe.params:
+            # Backwards-compat: old recipes stored UID as email_id.
+            # Use direct UID-based move since move_email now expects Message-ID.
+            email_client.with_reconnect(
+                imap_holder, config,
+                lambda c: _move_email_by_uid(
+                    c,
+                    recipe.params["email_id"],
+                    recipe.params["from"],
+                    recipe.params["to"],
+                ),
+            )
+        else:
+            raise ValueError("move_email undo recipe missing both message_id and email_id")
         return
 
     if recipe.operation == "delete_draft":
@@ -799,7 +832,7 @@ def _fetch_pending_email_ids(session_id: str, supabase: Client) -> set[str]:
         supabase.table("actions")
         .select("arguments")
         .eq("session_id", session_id)
-        .in_("tool_name", ["delete_email", "archive_email"])
+        .in_("tool_name", ["delete_email", "archive_email", "move_to_folder"])
         .in_("status", ["pending", "approved"])
         .execute()
     )
@@ -862,3 +895,21 @@ def _format_queued_sends(sends: list[QueuedSend]) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _move_email_by_uid(
+    client: Any,
+    email_id: str,
+    from_folder: str,
+    to_folder: str,
+) -> None:
+    """Move an email by UID (legacy backwards-compat path for old undo recipes).
+
+    Args:
+        client: Connected IMAPClient.
+        email_id: The UID of the email.
+        from_folder: Source folder.
+        to_folder: Destination folder.
+    """
+    client.select_folder(from_folder)
+    client.move([int(email_id)], to_folder)

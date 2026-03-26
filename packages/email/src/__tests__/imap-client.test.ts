@@ -19,6 +19,8 @@ import {
   archiveEmail,
   deleteEmail,
   moveEmail,
+  listFolders,
+  moveEmailToFolder,
 } from "../imap-client";
 import { saveDraft, deleteDraft } from "../smtp-client";
 
@@ -411,6 +413,74 @@ describe("IMAP client (Hoodiecrow integration)", () => {
 
       expect(thread).toHaveLength(1);
       expect(thread[0].subject).toBe("Invoice #1234");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // saveDraft + deleteDraft
+  // --------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------
+  // listFolders
+  // --------------------------------------------------------------------------
+
+  it("lists all selectable folders excluding INBOX and non-selectable parents", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const folders = await listFolders(client);
+      const paths = folders.map((f) => f.path);
+
+      // Should include special-use folders
+      expect(paths).toContain("[Google Mail]/All Mail");
+      expect(paths).toContain("[Google Mail]/Trash");
+      expect(paths).toContain("[Google Mail]/Drafts");
+      expect(paths).toContain("[Google Mail]/Sent Mail");
+
+      // Should NOT include INBOX
+      expect(paths).not.toContain("INBOX");
+
+      // Should NOT include the non-selectable [Google Mail] parent
+      expect(paths).not.toContain("[Google Mail]");
+
+      // Verify display names are the last path segment
+      const allMail = folders.find((f) => f.path === "[Google Mail]/All Mail")!;
+      expect(allMail.name).toBe("All Mail");
+      expect(allMail.specialUse).toBe("\\All");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // moveEmailToFolder
+  // --------------------------------------------------------------------------
+
+  it("moves an email to a target folder and returns an undo recipe", async () => {
+    const client = await createImapConnection(imapConfig);
+    try {
+      const before = await listInbox(client, 10);
+      const target = before.find((e) => e.subject === "Invoice #1234")!;
+      expect(target).toBeDefined();
+
+      // Move to Drafts folder
+      const undoRecipe = await moveEmailToFolder(
+        client,
+        target.id,
+        "[Google Mail]/Drafts",
+        "INBOX"
+      );
+
+      expect(undoRecipe.operation).toBe("move_email");
+      expect(undoRecipe.params.from).toBe("[Google Mail]/Drafts");
+      expect(undoRecipe.params.to).toBe("INBOX");
+      expect(undoRecipe.params.messageId).toBeDefined();
+
+      // Verify it left the inbox
+      const after = await listInbox(client, 10);
+      const found = after.find((e) => e.subject === "Invoice #1234");
+      expect(found).toBeUndefined();
     } finally {
       await closeImapConnection(client);
     }
