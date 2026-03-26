@@ -110,6 +110,24 @@ app.router.lifespan_context = _noop_lifespan
 _client = TestClient(app)
 
 
+@patch("src.server.lookup_user_by_phone", return_value={"user_id": "user-123", "pin_locked": False, "pin_configured": False})
+@patch("src.server.create_service_client")
+@patch("src.server.load_settings")
+def test_twilio_voice_rejects_when_pin_not_configured(
+    _mock_settings, _mock_supabase, _mock_lookup
+):
+    """POST /twilio/voice for a caller without a PIN configured rejects
+    immediately without prompting for PIN input.
+    """
+    response = _client.post("/twilio/voice", data={"From": "+15550001111"})
+
+    assert response.status_code == 200
+    body = response.text
+    assert "Not configured" in body
+    assert "onboarding" in body
+    assert "<Gather" not in body
+
+
 @patch("src.server.check_usage_limit", return_value=True)
 @patch("src.server.lookup_user_by_phone", return_value={"user_id": "user-123", "pin_locked": False, "pin_configured": True})
 @patch("src.server.create_service_client")
