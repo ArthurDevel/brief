@@ -69,6 +69,7 @@ def test_lookup_user_by_phone_queries_jsonb_number():
     mock_client = _mock_supabase_lookup({
         "user_id": "user-abc-123",
         "pin_locked": True,
+        "pin_hash": "$2b$12$fakehashvalue",
     })
 
     result = lookup_user_by_phone("+15550001111", mock_client)
@@ -76,10 +77,11 @@ def test_lookup_user_by_phone_queries_jsonb_number():
     assert result is not None
     assert result["user_id"] == "user-abc-123"
     assert result["pin_locked"] is True
+    assert result["pin_configured"] is True
 
     # Verify the query chain was called with the correct JSONB path
     mock_client.table.assert_called_with("user_settings")
-    mock_client.table.return_value.select.assert_called_with("user_id, pin_locked")
+    mock_client.table.return_value.select.assert_called_with("user_id, pin_locked, pin_hash")
     mock_client.table.return_value.select.return_value.eq.assert_called_with(
         "phone->>number", "+15550001111"
     )
@@ -109,7 +111,7 @@ _client = TestClient(app)
 
 
 @patch("src.server.check_usage_limit", return_value=True)
-@patch("src.server.lookup_user_by_phone", return_value={"user_id": "user-123", "pin_locked": False})
+@patch("src.server.lookup_user_by_phone", return_value={"user_id": "user-123", "pin_locked": False, "pin_configured": True})
 @patch("src.server.create_service_client")
 @patch("src.server.load_settings")
 def test_twilio_voice_returns_gather_with_timeout_and_redirect(
