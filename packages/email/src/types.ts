@@ -35,6 +35,20 @@ export interface SmtpConfig {
 // EMAIL DATA
 // ============================================================================
 
+/**
+ * A request for email metadata lookup, used in batch operations.
+ * At least one of uid or messageId must be set.
+ * If both are present, messageId is preferred (stable across folder moves).
+ * @property actionId - Action row ID, used as key in the result map
+ * @property uid - Email UID for direct fetch in INBOX
+ * @property messageId - RFC Message-ID for header search (All Mail / Trash)
+ */
+export interface EmailMetaRequest {
+  actionId: string;
+  uid?: string;
+  messageId?: string;
+}
+
 /** Summary of an email for inbox listings. */
 export interface EmailSummary {
   id: string;
