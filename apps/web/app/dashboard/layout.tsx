@@ -17,7 +17,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { CallProvider } from "@/contexts/CallContext";
 import ActiveCallBar from "@/components/ActiveCallBar";
-import { Home, Phone, Activity, Clock, Settings } from "lucide-react";
+import { Home, Phone, Activity, Clock, Settings, Menu, X } from "lucide-react";
 
 // ============================================================================
 // CONSTANTS
@@ -54,6 +54,12 @@ function isActive(href: string, pathname: string): boolean {
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [isFreePlan, setIsFreePlan] = useState<boolean>(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+
+  // Close Mobile Menu automatically upon navigation
+  useEffect(() => {
+    setIsMobileMenuOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     fetch("/api/billing/usage")
@@ -66,10 +72,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <CallProvider>
       <div className="flex flex-col h-screen">
         <ActiveCallBar />
-        <div className="flex flex-1 min-h-0">
+        <div className="flex flex-1 min-h-0 relative">
+
+        {/* Mobile Sidebar Overlay */}
+        {isMobileMenuOpen && (
+          <div 
+            className="fixed inset-0 z-40 bg-black/20 md:hidden transition-opacity"
+            onClick={() => setIsMobileMenuOpen(false)}
+          />
+        )}
 
         {/* Sidebar */}
-        <aside className="sidebar">
+        <aside className={`sidebar ${isMobileMenuOpen ? "open" : ""}`}>
           <div style={{ padding: "24px 16px 8px 24px", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 32, height: 32, backgroundColor: "black", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-ibm-plex-serif), serif", fontSize: "18px", lineHeight: 1, paddingTop: 2 }}>
               B
@@ -111,7 +125,26 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </aside>
 
         {/* Main content */}
-        <main className="flex-1 flex flex-col min-h-0 bg-[var(--bg-main)]">
+        <main className="flex-1 flex flex-col min-h-0 bg-[var(--bg-main)] w-full">
+          {/* Mobile Header */}
+          <header className="md:hidden flex-shrink-0 flex items-center justify-between p-4 border-b border-[var(--border-color)] bg-[var(--bg-main)]">
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 26, height: 26, backgroundColor: "var(--text-primary)", color: "var(--bg-main)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-ibm-plex-serif), serif", fontSize: "15px", lineHeight: 1, paddingTop: 2 }}>
+                B
+              </div>
+              <span style={{ fontSize: "20px", fontWeight: "400", fontFamily: "var(--font-ibm-plex-serif), serif", letterSpacing: "-0.5px", color: "var(--text-primary)" }}>
+                BrewDock
+              </span>
+            </div>
+            <button 
+              onClick={() => setIsMobileMenuOpen(true)} 
+              className="p-1 -mr-1 text-[var(--text-primary)]"
+              aria-label="Open menu"
+            >
+              <Menu size={24} />
+            </button>
+          </header>
+
           {children}
         </main>
 
