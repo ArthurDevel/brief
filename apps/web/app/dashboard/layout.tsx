@@ -125,9 +125,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </aside>
 
         {/* Main content */}
-        <main className="flex-1 flex flex-col min-h-0 bg-[var(--bg-main)] w-full">
+        <main className="flex-1 flex flex-col min-h-0 bg-[var(--bg-main)] w-full overflow-y-auto relative">
           {/* Mobile Header */}
-          <header className="md:hidden flex-shrink-0 flex items-center justify-between p-4 border-b border-[var(--border-color)] bg-[var(--bg-main)]">
+          <header className="md:hidden sticky top-0 z-20 flex-shrink-0 flex items-center justify-between p-4 border-b border-[var(--border-color)] bg-[var(--bg-main)]">
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ width: 26, height: 26, backgroundColor: "var(--text-primary)", color: "var(--bg-main)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-ibm-plex-serif), serif", fontSize: "15px", lineHeight: 1, paddingTop: 2 }}>
                 B

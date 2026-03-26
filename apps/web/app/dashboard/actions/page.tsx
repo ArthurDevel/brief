@@ -142,71 +142,73 @@ function ActionsTable({
   );
 
   return (
-    <table className="w-full text-left text-[13px]">
-      <thead>
-        <tr className="border-b border-[var(--border-color)]">
-          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Tool</th>
-          <th className="pb-2 font-medium text-[var(--text-secondary)]">From / To</th>
-          <th className="pb-2 font-medium text-[var(--text-secondary)]">Subject</th>
-          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Status</th>
-          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Date</th>
-          <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {sorted.map((action) => {
-          const isProcessing = processingIds.has(action.id);
-          return (
-            <tr key={action.id} className="border-b border-[var(--border-color)]">
-              <td className="py-3 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-              <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
-              <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
-              <td className="py-3">
-                <span
-                  className={`px-2 py-0.5 text-xs font-bold ${STATUS_STYLES[action.status] ?? "bg-gray-100 text-gray-600"}`}
-                  title={action.status === "failed" ? (action.result?.error as string) : undefined}
-                >
-                  {action.status}
-                </span>
-              </td>
-              <td className="py-3 text-[var(--text-secondary)]">
-                {new Date(action.createdAt).toLocaleDateString("en-US", DATE_FORMAT)}
-              </td>
-              <td className="py-3">
-                {action.status === "pending" ? (
-                  <div className="flex gap-2">
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-[13px] min-w-[800px]">
+        <thead>
+          <tr className="border-b border-[var(--border-color)]">
+            <th className="whitespace-nowrap pb-2 pr-6 font-medium text-[var(--text-secondary)]">Tool</th>
+            <th className="pb-2 pr-6 font-medium text-[var(--text-secondary)]">From / To</th>
+            <th className="pb-2 pr-6 font-medium text-[var(--text-secondary)]">Subject</th>
+            <th className="whitespace-nowrap pb-2 pr-6 font-medium text-[var(--text-secondary)]">Status</th>
+            <th className="whitespace-nowrap pb-2 pr-6 font-medium text-[var(--text-secondary)]">Date</th>
+            <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((action) => {
+            const isProcessing = processingIds.has(action.id);
+            return (
+              <tr key={action.id} className="border-b border-[var(--border-color)]">
+                <td className="py-3 pr-6 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
+                <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
+                <td className="py-3 pr-6">
+                  <span
+                    className={`px-2 py-0.5 text-xs font-bold ${STATUS_STYLES[action.status] ?? "bg-gray-100 text-gray-600"}`}
+                    title={action.status === "failed" ? (action.result?.error as string) : undefined}
+                  >
+                    {action.status}
+                  </span>
+                </td>
+                <td className="py-3 pr-6 text-[var(--text-secondary)] whitespace-nowrap">
+                  {new Date(action.createdAt).toLocaleDateString("en-US", DATE_FORMAT)}
+                </td>
+                <td className="py-3 whitespace-nowrap">
+                  {action.status === "pending" ? (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => onApprove(action.id)}
+                        disabled={isProcessing}
+                        className="inline-flex items-center gap-1 bg-[var(--btn-primary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-primary-text)] hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
+                      >
+                        {isProcessing ? <Spinner /> : "Approve"}
+                      </button>
+                      <button
+                        onClick={() => onReject(action.id)}
+                        disabled={isProcessing}
+                        className="inline-flex items-center gap-1 bg-[var(--btn-secondary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-secondary-text)] border border-[var(--btn-secondary-border)] hover:bg-[var(--btn-secondary-hover)] disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  ) : action.undoRecipe && action.status === "executed" ? (
                     <button
-                      onClick={() => onApprove(action.id)}
-                      disabled={isProcessing}
-                      className="inline-flex items-center gap-1 bg-[var(--btn-primary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-primary-text)] hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
-                    >
-                      {isProcessing ? <Spinner /> : "Approve"}
-                    </button>
-                    <button
-                      onClick={() => onReject(action.id)}
+                      onClick={() => onUndo(action.id)}
                       disabled={isProcessing}
                       className="inline-flex items-center gap-1 bg-[var(--btn-secondary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-secondary-text)] border border-[var(--btn-secondary-border)] hover:bg-[var(--btn-secondary-hover)] disabled:opacity-50"
                     >
-                      Reject
+                      {isProcessing ? <Spinner /> : "Undo"}
                     </button>
-                  </div>
-                ) : action.undoRecipe && action.status === "executed" ? (
-                  <button
-                    onClick={() => onUndo(action.id)}
-                    disabled={isProcessing}
-                    className="inline-flex items-center gap-1 bg-[var(--btn-secondary-bg)] px-3 py-1 text-xs font-medium text-[var(--btn-secondary-text)] border border-[var(--btn-secondary-border)] hover:bg-[var(--btn-secondary-hover)] disabled:opacity-50"
-                  >
-                    {isProcessing ? <Spinner /> : "Undo"}
-                  </button>
-                ) : (
-                  <span className="text-xs text-[var(--text-secondary)]">-</span>
-                )}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+                  ) : (
+                    <span className="text-xs text-[var(--text-secondary)]">-</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -294,7 +296,7 @@ export default function ActionsPage() {
 
   if (loading) {
     return (
-      <div className="flex-1 flex flex-col h-full">
+      <div className="flex-1 flex flex-col">
         <div className="page-header">
           <h1>Actions</h1>
           <p>Manage your actions.</p>
@@ -307,7 +309,7 @@ export default function ActionsPage() {
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full">
+    <div className="flex-1 flex flex-col">
       <div className="page-header">
         <h1>Actions</h1>
         <p>Manage your actions.</p>
