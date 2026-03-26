@@ -21,9 +21,9 @@ import { retrieveSecret } from "@dublin/tools";
 import {
   createImapConnection,
   closeImapConnection,
-  fetchEmailMetaByMessageId,
-  fetchEmailMetaByUid,
+  fetchEmailMetaBatch,
 } from "@dublin/email";
+import type { EmailMetaRequest } from "@dublin/email";
 import type { ActionRow } from "@dublin/tools";
 import { getDefaultClassification } from "@dublin/tools/src/classification";
 
@@ -211,10 +211,8 @@ export async function POST(
 
 /**
  * Enriches actions that reference an email with subject/from metadata.
- * For each action with an email_id in its arguments:
- * - If message_id is present, looks up by Message-ID header (stable across folders)
- * - Otherwise, falls back to UID lookup in INBOX
- * Each individual lookup is wrapped in try/catch so one failure does not block others.
+ * Builds a batch of requests and calls fetchEmailMetaBatch once, then merges
+ * the results back into the action arguments.
  * @param actions - Array of action rows to enrich
  * @param imapClient - Connected ImapFlow client
  * @param log - Logging function for diagnostic output
@@ -225,9 +223,7 @@ async function enrichActionsWithEmailMeta(
   imapClient: ImapClient,
   log: (msg: string) => void
 ): Promise<ActionRow[]> {
-  const enriched: ActionRow[] = [];
-
-  // Count how many actions need enrichment
+  // Filter to candidate actions that need enrichment
   const candidates = actions.filter(
     (a) => EMAIL_TOOL_NAMES.includes(a.toolName)
       && a.arguments?.email_id
@@ -235,26 +231,38 @@ async function enrichActionsWithEmailMeta(
   );
   log(`${candidates.length} action(s) need enrichment out of ${actions.length} total`);
 
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  // Build batch requests -- prefer messageId over uid when both are present
+  const requests: EmailMetaRequest[] = candidates.map((action) => {
+    const messageId = action.arguments.message_id as string | undefined;
+    const emailId = action.arguments.email_id as string;
+
+    if (messageId) {
+      return { actionId: action.id, messageId };
+    }
+    return { actionId: action.id, uid: emailId };
+  });
+
+  // Single batch call for all lookups
+  const results = await fetchEmailMetaBatch(imapClient, requests);
+  log(`Batch returned ${results.size} result(s) for ${requests.length} request(s)`);
+
+  // Merge results back into action arguments
+  const enriched: ActionRow[] = [];
   for (const action of candidates) {
-    try {
-      const messageId = action.arguments.message_id as string | undefined;
-      const emailId = action.arguments.email_id as string;
-      const lookupStart = Date.now();
-
-      const meta = messageId
-        ? await fetchEmailMetaByMessageId(imapClient, messageId)
-        : await fetchEmailMetaByUid(imapClient, emailId);
-
-      log(`Enriched action ${action.id} (${action.toolName}) in ${Date.now() - lookupStart}ms: "${meta.subject}" from ${meta.from}`);
-
+    const meta = results.get(action.id);
+    if (meta) {
       action.arguments = {
         ...action.arguments,
         subject: meta.subject,
         from: meta.from,
       };
       enriched.push(action);
-    } catch (error) {
-      log(`Failed to enrich action ${action.id} (${action.toolName}): ${error}`);
+    } else {
+      log(`No metadata found for action ${action.id} (${action.toolName})`);
     }
   }
 

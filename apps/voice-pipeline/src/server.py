@@ -41,6 +41,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from src.audio.recorder import AudioRecorder, combine_wav_buffers, upload_recording
 from src.auth.jwt_auth import verify_token
 from src.auth.twilio_auth import (
+    MAX_NO_INPUT_REPEATS,
     MAX_PIN_ATTEMPTS,
     build_twiml_connect,
     build_twiml_gather_pin,
@@ -138,6 +139,33 @@ def _to_rtc_ice_servers(raw_servers: list[dict]) -> list[RTCIceServer]:
             credential=selected.get("credential", ""),
         ))
     return ice_servers
+
+
+async def _trigger_end_of_session_hook(session_id: str, web_app_url: str, internal_api_key: str) -> None:
+    """Fire the end-of-session webhook on the web app.
+
+    Builds the URL, makes the POST request, and logs the result.
+    Intended to be called via asyncio.create_task() so it runs
+    fire-and-forget without blocking the caller.
+
+    Args:
+        session_id: The session ID to include in the URL.
+        web_app_url: Base URL of the web app.
+        internal_api_key: Bearer token for the internal API.
+    """
+    try:
+        url = f"{web_app_url}/api/sessions/{session_id}/end-of-session"
+        hook_start = asyncio.get_event_loop().time()
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {internal_api_key}"},
+            )
+            response.raise_for_status()
+            elapsed_ms = (asyncio.get_event_loop().time() - hook_start) * 1000
+            logger.info("[server] End-of-session hook completed for session %s in %.0fms", session_id, elapsed_ms)
+    except BaseException as exc:
+        logger.warning("[server] End-of-session hook failed for session %s: %s", session_id, exc)
 
 
 async def _fetch_ice_servers(api_key: str) -> list[RTCIceServer]:
@@ -285,19 +313,9 @@ async def _cleanup_session(
 
     # Trigger end-of-session processing (e.g. summary email) on the web app
     if session_ended:
-        try:
-            url = f"{settings.web_app_url}/api/sessions/{session.session_id}/end-of-session"
-            hook_start = asyncio.get_event_loop().time()
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    url,
-                    headers={"Authorization": f"Bearer {settings.internal_api_key}"},
-                )
-                response.raise_for_status()
-                elapsed_ms = (asyncio.get_event_loop().time() - hook_start) * 1000
-                logger.info("[server] End-of-session hook completed for session %s in %.0fms", session.session_id, elapsed_ms)
-        except BaseException as exc:
-            logger.warning("[server] End-of-session hook failed for session %s: %s", session.session_id, exc)
+        asyncio.create_task(
+            _trigger_end_of_session_hook(session.session_id, settings.web_app_url, settings.internal_api_key)
+        )
 
     # Combine and upload call recording if recorders were active
     if user_recorder is not None and assistant_recorder is not None:
@@ -687,6 +705,22 @@ async def twilio_verify_pin(request: Request) -> Response:
 
     logger.info("[twilio] Incorrect PIN for user %s, attempt %d", user_id, attempt)
     twiml = build_twiml_gather_pin(user_id, attempt=next_attempt)
+    return Response(content=twiml, media_type="text/xml")
+
+
+@app.post("/twilio/no-input")
+async def twilio_no_input(request: Request) -> Response:
+    """Handle Twilio redirect when the caller provides no PIN input.
+
+    Re-prompts the caller up to MAX_NO_INPUT_REPEATS times before hanging up.
+    """
+    user_id = request.query_params.get("userId", "")
+    attempt = request.query_params.get("attempt", "1")
+    no_input_count = request.query_params.get("noInputCount", "1")
+
+    logger.info("[twilio] No input from user %s, repeat %s/%s", user_id, no_input_count, MAX_NO_INPUT_REPEATS)
+
+    twiml = build_twiml_gather_pin(user_id, attempt=int(attempt), no_input_count=int(no_input_count))
     return Response(content=twiml, media_type="text/xml")
 
 
