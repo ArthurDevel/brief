@@ -48,7 +48,7 @@ function SettingsContent() {
   );
 
   return (
-    <div className="flex-1 flex flex-col h-full" style={{ padding: 0 }}>
+    <div className="flex-1 flex flex-col" style={{ padding: 0 }}>
       {/* Tab bar */}
       <div className="flex gap-2 px-4 py-4 md:px-8 md:pt-6 md:pb-4 border-b border-[var(--border-color)] shrink-0 overflow-x-auto">
         {TABS.map((tab) => (
@@ -74,7 +74,7 @@ function SettingsContent() {
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-y-auto w-full px-4 py-6 md:px-[64px] md:py-[48px]">
+      <div className="flex-1 w-full px-4 py-6 md:px-[64px] md:py-[48px]">
         {activeTab === "general" && <GeneralTab />}
         {activeTab === "email" && <EmailTab />}
         {activeTab === "billing" && <BillingTab />}

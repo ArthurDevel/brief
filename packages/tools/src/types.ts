@@ -32,6 +32,8 @@ export type ToolName =
   | "send_email"
   | "batch_archive_emails"
   | "batch_delete_emails"
+  | "list_folders"
+  | "move_to_folder"
   | "save_memory"
   | "submit_feature_request";
 

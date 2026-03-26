@@ -8,7 +8,7 @@
  * - Formats thread conversations with --- separators between messages
  */
 
-import type { EmailSummary, Email, ThreadMessage } from "./types";
+import type { EmailSummary, Email, ThreadMessage, FolderInfo } from "./types";
 
 // ============================================================================
 // MAIN HANDLERS
@@ -92,6 +92,27 @@ export function formatThread(messages: ThreadMessage[]): string {
   }
 
   lines.push("---");
+
+  return lines.join("\n");
+}
+
+/**
+ * Formats a list of folders as a markdown bullet list.
+ * Special-use folders are annotated with their RFC 6154 flag.
+ *
+ * @param folders - List of folder info objects to format.
+ * @returns Markdown string with header and bullet list.
+ */
+export function formatFolders(folders: FolderInfo[]): string {
+  const lines: string[] = [];
+
+  lines.push(`## Folders (${folders.length})`);
+  lines.push("");
+
+  for (const folder of folders) {
+    const annotation = folder.specialUse ? ` (${folder.specialUse})` : "";
+    lines.push(`- ${folder.path}${annotation}`);
+  }
 
   return lines.join("\n");
 }

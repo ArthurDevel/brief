@@ -277,14 +277,14 @@ function ActionsSummary({
           </div>
         )}
       </div>
-      <div className={sorted.length > MAX_VISIBLE_ROWS ? "max-h-[440px] overflow-y-auto" : ""}>
-      <table className="w-full text-left text-[13px]">
+      <div className={sorted.length > MAX_VISIBLE_ROWS ? "max-h-[440px] overflow-y-auto overflow-x-auto" : "overflow-x-auto"}>
+      <table className="w-full text-left text-[13px] min-w-[700px] md:min-w-[800px]">
         <thead className="sticky top-0 bg-[var(--bg-surface)]">
           <tr className="border-b border-[var(--border-color)]">
-            <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Tool</th>
-            <th className="pb-2 font-medium text-[var(--text-secondary)]">From / To</th>
-            <th className="pb-2 font-medium text-[var(--text-secondary)]">Subject</th>
-            <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Status</th>
+            <th className="whitespace-nowrap pb-2 pr-6 font-medium text-[var(--text-secondary)]">Tool</th>
+            <th className="pb-2 pr-6 font-medium text-[var(--text-secondary)]">From / To</th>
+            <th className="pb-2 pr-6 font-medium text-[var(--text-secondary)]">Subject</th>
+            <th className="whitespace-nowrap pb-2 pr-6 font-medium text-[var(--text-secondary)]">Status</th>
             <th className="whitespace-nowrap pb-2 font-medium text-[var(--text-secondary)]">Actions</th>
           </tr>
         </thead>
@@ -295,10 +295,10 @@ function ActionsSummary({
 
             return (
               <tr key={action.id} className="border-b border-[var(--border-color)]">
-                <td className="py-3 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-                <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
-                <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
-                <td className="py-3">
+                <td className="py-3 pr-6 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
+                <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
+                <td className="py-3 pr-6">
                   {isPending ? (
                     <span className="bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
                       pending
@@ -314,7 +314,7 @@ function ActionsSummary({
                     </span>
                   )}
                 </td>
-                <td className="py-3">
+                <td className="py-3 whitespace-nowrap">
                   {isPending ? (
                     <div className="settings-actions !mt-0 !mb-0">
                       <button
@@ -489,7 +489,7 @@ export default function SessionDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex-1 flex flex-col h-full">
+      <div className="flex-1 flex flex-col">
         <div className="page-header">
           <h1>Session Detail</h1>
           <p>View transcripts and actions for this session.</p>
@@ -503,7 +503,7 @@ export default function SessionDetailPage() {
 
   if (error || !session) {
     return (
-      <div className="flex-1 flex flex-col h-full">
+      <div className="flex-1 flex flex-col">
         <div className="page-header">
           <h1>Session Detail</h1>
           <p>View transcripts and actions for this session.</p>
@@ -520,7 +520,7 @@ export default function SessionDetailPage() {
   const timeline = buildTimeline(session.transcript, session.actions);
 
   return (
-    <div className="flex-1 flex flex-col h-full">
+    <div className="flex-1 flex flex-col">
       <div className="page-header">
         <h1>Session Detail</h1>
         <p>View transcripts and actions for this session.</p>

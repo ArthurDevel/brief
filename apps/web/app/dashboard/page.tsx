@@ -232,16 +232,16 @@ function RecentSessionCard({
           <div
             className={
               actions.length > MAX_VISIBLE_ACTIONS
-                ? "max-h-[440px] overflow-y-auto"
-                : ""
+                ? "max-h-[440px] overflow-y-auto overflow-x-auto"
+                : "overflow-x-auto"
             }
           >
-            <table className="w-full text-left text-[13px]">
+            <table className="w-full text-left text-[13px] min-w-[600px] md:min-w-[800px]">
               <thead className="sticky top-0 bg-[var(--bg-surface)]">
                 <tr className="border-b border-[var(--border-color)]">
-                  <th className="whitespace-nowrap pb-4 font-medium text-[var(--text-secondary)]">Tool</th>
-                  <th className="pb-4 font-medium text-[var(--text-secondary)]">From / To</th>
-                  <th className="pb-4 font-medium text-[var(--text-secondary)]">Subject</th>
+                  <th className="whitespace-nowrap pb-4 pr-6 font-medium text-[var(--text-secondary)]">Tool</th>
+                  <th className="pb-4 pr-6 font-medium text-[var(--text-secondary)]">From / To</th>
+                  <th className="pb-4 pr-6 font-medium text-[var(--text-secondary)]">Subject</th>
                   <th className="whitespace-nowrap pb-4 font-medium text-[var(--text-secondary)]">Status</th>
                 </tr>
               </thead>
@@ -250,10 +250,10 @@ function RecentSessionCard({
                   const isProcessing = processingIds.has(action.id) || isBulkProcessing;
                   return (
                     <tr key={action.id} className="border-b border-[var(--border-color)]">
-                      <td className="py-3 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
-                      <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
-                      <td className="max-w-xs truncate py-3 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
-                      <td className="py-3">
+                      <td className="py-3 pr-6 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
+                      <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
+                      <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
+                      <td className="py-3 whitespace-nowrap">
                         {action.status === "pending" ? (
                           <div className="settings-actions !mt-0 !mb-0">
                             <button
@@ -306,19 +306,29 @@ function PreviousSessionCard({
   return (
     <Link href={`/dashboard/sessions/${session.id}`} style={{ textDecoration: "none" }} className="block">
       <div className="settings-panel hover:border-[var(--text-secondary)] transition-colors cursor-pointer" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px 0" }}>
-          {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
-        </h2>
-        <div style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0, display: "flex", justifyContent: "space-between" }}>
-          <div className="flex gap-4">
-            <span>{formatDuration(session.durationSeconds)}</span>
-            <span>{session.actionCount} action{session.actionCount !== 1 ? "s" : ""}</span>
-          </div>
+        <div className="flex items-start justify-between">
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 8px 0" }}>
+            {new Date(session.startedAt).toLocaleDateString("en-US", DATE_FORMAT)}
+          </h2>
           {hasPendingActions && (
-            <span style={{ color: "#d29922", fontWeight: 500 }}>
-              • Pending actions
+            <span style={{ color: "#d29922", fontWeight: 500, fontSize: 13 }}>
+              Pending actions
             </span>
           )}
+        </div>
+        <div className="flex gap-2">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+            <Clock size={12} />
+            {formatRelativeTime(session.startedAt)}
+          </span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+            <Timer size={12} />
+            {formatDuration(session.durationSeconds)}
+          </span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]" style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)" }}>
+            <Zap size={12} />
+            {session.actionCount} action{session.actionCount !== 1 ? "s" : ""}
+          </span>
         </div>
       </div>
     </Link>

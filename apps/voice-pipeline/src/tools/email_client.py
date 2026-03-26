@@ -110,6 +110,15 @@ class ThreadMessage:
     date: str
 
 
+@dataclass
+class FolderInfo:
+    """Info about an IMAP folder."""
+
+    path: str
+    name: str
+    special_use: str | None
+
+
 # ============================================================================
 # CONNECTION MANAGEMENT
 # ============================================================================
@@ -495,7 +504,7 @@ def archive_email(
     undo_recipe = {
         "operation": "move_email",
         "params": {
-            "email_id": email_id,
+            "message_id": message_id,
             "from": archive_folder,
             "to": source_folder,
         },
@@ -529,7 +538,7 @@ def delete_email(
     undo_recipe = {
         "operation": "move_email",
         "params": {
-            "email_id": email_id,
+            "message_id": message_id,
             "from": trash_folder,
             "to": source_folder,
         },
@@ -538,18 +547,101 @@ def delete_email(
 
 
 def move_email(
-    client: IMAPClient, email_id: str, from_folder: str, to_folder: str
+    client: IMAPClient, message_id: str, from_folder: str, to_folder: str
 ) -> None:
-    """Move an email between IMAP folders. Used by undo to reverse archive/delete.
+    """Move an email between IMAP folders by Message-ID header search.
+
+    Used by undo to reverse archive/delete/move. Searches the source folder
+    for the email by its RFC Message-ID header, resolves the current UID,
+    then moves it.
+
+    Args:
+        client: Connected IMAPClient.
+        message_id: The RFC Message-ID header value (e.g. "<abc@example.com>").
+        from_folder: Source folder.
+        to_folder: Destination folder.
+
+    Raises:
+        RuntimeError: If no email with the given Message-ID is found in from_folder.
+    """
+    client.select_folder(from_folder)
+    uids = client.search(["HEADER", "Message-ID", message_id])  # type: ignore[arg-type]
+    if not uids:
+        raise RuntimeError(
+            f"No email with Message-ID {message_id!r} found in {from_folder}"
+        )
+    client.move([uids[0]], to_folder)
+
+
+def list_folders(client: IMAPClient) -> list[FolderInfo]:
+    """List all selectable IMAP folders, excluding INBOX and non-selectable folders.
+
+    Args:
+        client: Connected IMAPClient.
+
+    Returns:
+        List of FolderInfo for each selectable folder.
+    """
+    results: list[FolderInfo] = []
+    for flags, _delimiter, name in client.list_folders():
+        # Skip non-selectable folders (e.g. [Gmail] parent container)
+        if b"\\Noselect" in flags:
+            continue
+        # Skip INBOX (user is already there)
+        if name == "INBOX":
+            continue
+
+        # Extract display name (last path segment)
+        display_name = name.rsplit("/", 1)[-1] if "/" in name else name
+
+        # Check for special-use flag (e.g. \\Trash, \\All, \\Drafts)
+        special_use: str | None = None
+        for flag in flags:
+            flag_str = flag.decode("utf-8", errors="replace") if isinstance(flag, bytes) else str(flag)
+            if flag_str.startswith("\\") and flag_str not in ("\\HasChildren", "\\HasNoChildren", "\\Noselect"):
+                special_use = flag_str
+                break
+
+        results.append(FolderInfo(path=name, name=display_name, special_use=special_use))
+
+    return results
+
+
+def move_email_to_folder(
+    client: IMAPClient,
+    email_id: str,
+    target_folder: str,
+    source_folder: str = "INBOX",
+) -> tuple[dict, str]:
+    """Move an email to a specified folder.
+
+    Fetches the Message-ID header for stable undo, then moves the email.
 
     Args:
         client: Connected IMAPClient.
         email_id: The UID of the email to move.
-        from_folder: Source folder.
-        to_folder: Destination folder.
+        target_folder: Destination folder path.
+        source_folder: The folder the email is currently in.
+
+    Returns:
+        Tuple of (undo_recipe_dict, message_id).
     """
-    client.select_folder(from_folder)
-    client.move([int(email_id)], to_folder)
+    client.select_folder(source_folder)
+
+    # Fetch Message-ID for stable undo recipe
+    message_id = _fetch_message_id(client, int(email_id))
+
+    client.move([int(email_id)], target_folder)
+
+    undo_recipe = {
+        "operation": "move_email",
+        "params": {
+            "message_id": message_id,
+            "from": target_folder,
+            "to": source_folder,
+        },
+    }
+    return undo_recipe, message_id
 
 
 async def send_email(config: SmtpConfig, to: str, subject: str, body: str) -> None:

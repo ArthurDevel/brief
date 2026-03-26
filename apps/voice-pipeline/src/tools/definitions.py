@@ -6,10 +6,10 @@ Port of packages/tools/src/definitions.ts.
 Each definition describes a tool the LLM can call. These are schema-only
 (no handlers) -- handlers live in handlers.py and email_client.py.
 
-- Define all 13 tool schemas (list_inbox, read_email, read_thread,
+- Define all 15 tool schemas (list_inbox, read_email, read_thread,
   search_emails, mark_as_read, draft_email, delete_email, archive_email,
   send_email, batch_archive_emails, batch_delete_emails, save_memory,
-  submit_feature_request)
+  submit_feature_request, list_folders, move_to_folder)
 - Export them as a list for LLM service configuration
 """
 
@@ -21,7 +21,7 @@ from __future__ import annotations
 # ============================================================================
 
 def get_tool_definitions() -> list[dict]:
-    """Return all 13 tool schemas as Python dicts in OpenAI function-calling format.
+    """Return all 15 tool schemas as Python dicts in OpenAI function-calling format.
 
     Returns:
         List of tool definition dicts, each with "type", "function" containing
@@ -317,6 +317,45 @@ def get_tool_definitions() -> list[dict]:
                         },
                     },
                     "required": ["name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_folders",
+                "description": "List all available email folders.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "move_to_folder",
+                "description": (
+                    "Move an email to a specified folder. "
+                    "On Gmail, this is equivalent to applying a label."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "email_id": {
+                            "type": "string",
+                            "description": "The ID of the email to move.",
+                        },
+                        "folder": {
+                            "type": "string",
+                            "description": "The target folder to move the email to.",
+                        },
+                        "source_folder": {
+                            "type": "string",
+                            "description": "The folder the email is currently in. Defaults to INBOX.",
+                        },
+                    },
+                    "required": ["email_id", "folder"],
                 },
             },
         },

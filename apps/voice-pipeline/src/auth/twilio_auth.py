@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 MAX_PIN_ATTEMPTS = 3
 PIN_NUM_DIGITS = 6
 SECONDS_PER_HOUR = 3600
+PIN_INPUT_TIMEOUT = 10
+MAX_NO_INPUT_REPEATS = 3
 
 
 # ============================================================================
@@ -44,11 +46,11 @@ def lookup_user_by_phone(phone: str, supabase: Client) -> dict | None:
         supabase: Supabase client for DB operations.
 
     Returns:
-        Dict with user_id and pin_locked, or None if not found.
+        Dict with user_id, pin_locked, and pin_configured, or None if not found.
     """
     response = (
         supabase.table("user_settings")
-        .select("user_id, pin_locked")
+        .select("user_id, pin_locked, pin_hash")
         .eq("phone->>number", phone)
         .maybe_single()
         .execute()
@@ -62,6 +64,7 @@ def lookup_user_by_phone(phone: str, supabase: Client) -> dict | None:
     return {
         "user_id": data["user_id"],
         "pin_locked": data.get("pin_locked", False),
+        "pin_configured": bool(data.get("pin_hash")),
     }
 
 
@@ -135,12 +138,13 @@ def check_usage_limit(user_id: str, supabase: Client) -> bool:
 # TWIML BUILDERS
 # ============================================================================
 
-def build_twiml_gather_pin(user_id: str, attempt: int) -> str:
+def build_twiml_gather_pin(user_id: str, attempt: int, no_input_count: int = 0) -> str:
     """Build TwiML XML that prompts the caller to enter their PIN via DTMF.
 
     Args:
         user_id: The user ID to pass in the verify-pin callback URL.
         attempt: Current attempt number (for retry tracking).
+        no_input_count: How many times the caller has provided no input (for retry tracking).
 
     Returns:
         TwiML XML string.
@@ -148,13 +152,20 @@ def build_twiml_gather_pin(user_id: str, attempt: int) -> str:
     message = "Please enter your pin, then press pound." if attempt == 1 else "Incorrect pin. Please try again."
     action_url = f"/twilio/verify-pin?userId={quote(user_id)}&amp;attempt={attempt}"
 
+    # Build the fallback after </Gather> depending on no-input retry count
+    if no_input_count < MAX_NO_INPUT_REPEATS:
+        redirect_url = f"/twilio/no-input?userId={quote(user_id)}&amp;attempt={attempt}&amp;noInputCount={no_input_count + 1}"
+        after_gather = f'  <Redirect method="POST">{redirect_url}</Redirect>\n'
+    else:
+        after_gather = "  <Say>No input received. Goodbye.</Say>\n"
+
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
-        f'  <Gather numDigits="{PIN_NUM_DIGITS}" action="{action_url}" method="POST">\n'
+        f'  <Gather numDigits="{PIN_NUM_DIGITS}" action="{action_url}" method="POST" timeout="{PIN_INPUT_TIMEOUT}">\n'
         f"    <Say>{message}</Say>\n"
         "  </Gather>\n"
-        "  <Say>No input received. Goodbye.</Say>\n"
+        f"{after_gather}"
         "</Response>"
     )
 
