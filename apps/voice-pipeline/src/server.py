@@ -640,6 +640,11 @@ async def twilio_voice(request: Request) -> Response:
         twiml = build_twiml_reject("Your account is locked. Please contact support. Goodbye.")
         return Response(content=twiml, media_type="text/xml")
 
+    if not user_record["pin_configured"]:
+        logger.info("[twilio] PIN not configured for user %s", user_record["user_id"])
+        twiml = build_twiml_reject("Not configured. Please complete the onboarding or set your pin in settings.")
+        return Response(content=twiml, media_type="text/xml")
+
     if not check_usage_limit(user_record["user_id"], supabase):
         logger.info("[twilio] Usage limit exceeded for user %s", user_record["user_id"])
         twiml = build_twiml_reject("You have reached your monthly call limit. Goodbye.")

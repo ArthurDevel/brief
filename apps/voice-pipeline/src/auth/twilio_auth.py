@@ -46,11 +46,11 @@ def lookup_user_by_phone(phone: str, supabase: Client) -> dict | None:
         supabase: Supabase client for DB operations.
 
     Returns:
-        Dict with user_id and pin_locked, or None if not found.
+        Dict with user_id, pin_locked, and pin_configured, or None if not found.
     """
     response = (
         supabase.table("user_settings")
-        .select("user_id, pin_locked")
+        .select("user_id, pin_locked, pin_hash")
         .eq("phone->>number", phone)
         .maybe_single()
         .execute()
@@ -64,6 +64,7 @@ def lookup_user_by_phone(phone: str, supabase: Client) -> dict | None:
     return {
         "user_id": data["user_id"],
         "pin_locked": data.get("pin_locked", False),
+        "pin_configured": bool(data.get("pin_hash")),
     }
 
 
