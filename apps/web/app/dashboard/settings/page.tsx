@@ -50,7 +50,7 @@ function SettingsContent() {
   return (
     <div className="flex-1 flex flex-col h-full" style={{ padding: 0 }}>
       {/* Tab bar */}
-      <div style={{ display: "flex", gap: "8px", padding: "24px 32px 16px", borderBottom: "1px solid var(--border-color)", flexShrink: 0 }}>
+      <div className="flex gap-2 px-4 py-4 md:px-8 md:pt-6 md:pb-4 border-b border-[var(--border-color)] shrink-0 overflow-x-auto">
         {TABS.map((tab) => (
           <button
             key={tab.id}
@@ -66,6 +66,7 @@ function SettingsContent() {
               fontSize: "13px",
               transition: "all 0.1s ease",
             }}
+            className="whitespace-nowrap"
           >
             {tab.label}
           </button>
@@ -73,7 +74,7 @@ function SettingsContent() {
       </div>
 
       {/* Tab content */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "48px 64px" }}>
+      <div className="flex-1 overflow-y-auto w-full px-4 py-6 md:px-[64px] md:py-[48px]">
         {activeTab === "general" && <GeneralTab />}
         {activeTab === "email" && <EmailTab />}
         {activeTab === "billing" && <BillingTab />}

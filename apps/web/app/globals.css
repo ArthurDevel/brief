@@ -236,6 +236,13 @@ body {
   margin-bottom: 12px;
 }
 
+@media (max-width: 768px) {
+  .settings-panel {
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+}
+
 .settings-row {
   display: flex;
   align-items: center;

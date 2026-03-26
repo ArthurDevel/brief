@@ -105,13 +105,13 @@ export default function FeatureRequestsTab() {
       {/* Submit form */}
       <div className="settings-panel">
         <h2 >Submit a Request</h2>
-        <form onSubmit={handleSubmit} className="flex gap-3">
+        <form onSubmit={handleSubmit} className="flex flex-col md:flex-row gap-3">
           <input
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Describe the feature you'd like..."
-            className="flex-1 border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
+            className="flex-1 border border-[var(--border-color)] w-full px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
           />
           <button
             type="submit"

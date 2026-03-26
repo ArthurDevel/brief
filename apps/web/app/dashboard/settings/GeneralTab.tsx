@@ -443,8 +443,8 @@ export default function GeneralTab() {
         {/* Phone Number */}
         <section className="settings-panel">
           <h2>Phone Number</h2>
-          <div className="flex gap-3">
-            <div className="w-48">
+          <div className="flex flex-col md:flex-row gap-4 md:gap-3">
+            <div className="w-full md:w-48">
               <label className="mb-1 block text-[13px] font-medium text-[var(--text-secondary)]">Country</label>
               <select
                 value={phone.countryCode}
@@ -508,8 +508,8 @@ export default function GeneralTab() {
             <h2 >Voice Speed</h2>
             {savedSection === "speed" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-[13px] text-[var(--text-secondary)] w-10">1x</span>
+          <div className="flex items-center gap-2 md:gap-4 flex-wrap md:flex-nowrap">
+            <span className="text-[13px] text-[var(--text-secondary)] w-8 md:w-10">1x</span>
             <input
               type="range"
               min={1}
@@ -517,10 +517,10 @@ export default function GeneralTab() {
               step={0.05}
               value={voiceSpeed}
               onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
-              className="flex-1 accent-[var(--btn-primary-bg)]"
+              className="flex-1 w-full md:w-auto accent-[var(--btn-primary-bg)] min-w-[120px]"
             />
-            <span className="text-[13px] text-[var(--text-secondary)] w-12">1.5x</span>
-            <span className="text-[13px] font-medium text-[var(--text-primary)] w-12 text-right">{voiceSpeed.toFixed(2)}x</span>
+            <span className="text-[13px] text-[var(--text-secondary)] w-10 md:w-12">1.5x</span>
+            <span className="text-[13px] font-medium text-[var(--text-primary)] w-10 md:w-12 text-right">{voiceSpeed.toFixed(2)}x</span>
             <button
               type="button"
               onClick={handleSpeedPreview}
@@ -594,7 +594,7 @@ export default function GeneralTab() {
           </p>
           <div className="space-y-3">
             {TOOL_NAMES.map((toolName) => (
-              <div key={toolName} className="flex items-center justify-between">
+              <div key={toolName} className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2">
                 <span className="text-[13px] font-medium text-[var(--text-secondary)]">{TOOL_LABELS[toolName] ?? toolName}</span>
                 <select
                   value={toolApprovalConfig[toolName] ?? ""}
@@ -623,18 +623,18 @@ export default function GeneralTab() {
             Things the assistant remembers about you across calls.
           </p>
 
-          <div className="mb-4 flex gap-2">
+          <div className="mb-4 flex flex-col md:flex-row gap-2">
             <textarea
               value={newMemoryContent}
               onChange={(e) => setNewMemoryContent(e.target.value)}
               placeholder="Add something for the assistant to remember..."
               rows={2}
-              className="flex-1 border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
+              className="flex-1 w-full border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
             />
             <button
               type="button"
               onClick={handleAddMemoryEntry}
-              className="self-end border border-[var(--border-color)] px-4 py-2 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+              className="md:self-end border border-[var(--border-color)] px-4 py-2 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] w-full md:w-auto mt-2 md:mt-0"
             >
               Add
             </button>
