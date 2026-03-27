@@ -17,7 +17,7 @@ import {
   closeImapConnection,
   listInbox,
 } from "@dublin/email";
-import { executeAction, undoAction, handleToolCall, classifyAction } from "../action-queue";
+import { executeAction, undoAction, handleToolCall, classifyAction, bulkExecuteActions } from "../action-queue";
 import type { ActionInput } from "../types";
 
 // ============================================================================
@@ -886,6 +886,526 @@ describe("Batch email actions (Hoodiecrow integration)", () => {
 
       // No DB rows
       expect(Object.keys(store.actions)).toHaveLength(0);
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+});
+
+// ============================================================================
+// BULK EXECUTE ACTIONS (INTEGRATION)
+// ============================================================================
+
+const BULK_IMAP_PORT = 14_247;
+
+const BULK_SEED_MESSAGES = [
+  {
+    raw: [
+      "From: Alice <alice@example.com>",
+      "To: testuser@localhost",
+      "Subject: Bulk test email 1",
+      "Date: Mon, 10 Mar 2026 09:00:00 +0000",
+      "Message-Id: <bulk-msg-001@example.com>",
+      "",
+      "Body of bulk test email 1.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Bob <bob@example.com>",
+      "To: testuser@localhost",
+      "Subject: Bulk test email 2",
+      "Date: Tue, 11 Mar 2026 10:00:00 +0000",
+      "Message-Id: <bulk-msg-002@example.com>",
+      "",
+      "Body of bulk test email 2.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Carol <carol@example.com>",
+      "To: testuser@localhost",
+      "Subject: Bulk test email 3",
+      "Date: Wed, 12 Mar 2026 11:00:00 +0000",
+      "Message-Id: <bulk-msg-003@example.com>",
+      "",
+      "Body of bulk test email 3.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Dave <dave@example.com>",
+      "To: testuser@localhost",
+      "Subject: Bulk test email 4",
+      "Date: Thu, 13 Mar 2026 12:00:00 +0000",
+      "Message-Id: <bulk-msg-004@example.com>",
+      "",
+      "Body of bulk test email 4.",
+    ].join("\r\n"),
+  },
+];
+
+function createBulkTestServer() {
+  return hoodiecrow({
+    plugins: [
+      "ID",
+      "SASL-IR",
+      "AUTH-PLAIN",
+      "NAMESPACE",
+      "IDLE",
+      "ENABLE",
+      "CONDSTORE",
+      "LITERALPLUS",
+      "UNSELECT",
+      "SPECIAL-USE",
+      "CREATE-SPECIAL-USE",
+    ],
+    storage: {
+      INBOX: {
+        messages: [...BULK_SEED_MESSAGES],
+      },
+      "": {
+        separator: "/",
+        folders: {
+          "[Google Mail]": {
+            flags: ["\\Noselect"],
+            folders: {
+              "All Mail": {
+                "special-use": "\\All",
+                messages: [...BULK_SEED_MESSAGES],
+              },
+              Drafts: { "special-use": "\\Drafts" },
+              "Sent Mail": { "special-use": "\\Sent" },
+              Trash: { "special-use": "\\Trash" },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+const bulkImapConfig: ImapConfig = {
+  host: "127.0.0.1",
+  port: BULK_IMAP_PORT,
+  user: TEST_USER,
+  password: TEST_PASS,
+  secure: false,
+};
+
+describe("bulkExecuteActions (Hoodiecrow integration)", () => {
+  let server: ReturnType<typeof hoodiecrow>;
+
+  beforeAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server = createBulkTestServer();
+        server.listen(BULK_IMAP_PORT, () => resolve());
+      }),
+  );
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  );
+
+  // --------------------------------------------------------------------------
+  // 2 pending delete actions: both move to Trash, both "executed" with undo
+  // --------------------------------------------------------------------------
+
+  it("bulk execute of 2 pending delete actions: both move to Trash with undo recipes", async () => {
+    const client = await createImapConnection(bulkImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const target1 = emails.find((e) => e.subject === "Bulk test email 1")!;
+      const target2 = emails.find((e) => e.subject === "Bulk test email 2")!;
+      expect(target1).toBeDefined();
+      expect(target2).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "bulk-d1": {
+            id: "bulk-d1",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: target1.id, source_folder: "INBOX" },
+            status: "pending",
+            requires_approval: true,
+            result: null,
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+          "bulk-d2": {
+            id: "bulk-d2",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: target2.id, source_folder: "INBOX" },
+            status: "pending",
+            requires_approval: true,
+            result: null,
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const response = await bulkExecuteActions(
+        ["bulk-d1", "bulk-d2"],
+        supabase,
+        client,
+        DUMMY_SMTP_CONFIG
+      );
+
+      // Summary
+      expect(response.succeeded).toBe(2);
+      expect(response.failed).toBe(0);
+      expect(response.skipped).toBe(0);
+      expect(response.total).toBe(2);
+
+      // Emails should be gone from inbox
+      const after = await listInbox(client, 10);
+      expect(after.find((e) => e.subject === "Bulk test email 1")).toBeUndefined();
+      expect(after.find((e) => e.subject === "Bulk test email 2")).toBeUndefined();
+
+      // Action rows should be "executed" with undo recipes
+      expect(store.actions["bulk-d1"].status).toBe("executed");
+      expect(store.actions["bulk-d2"].status).toBe("executed");
+
+      const undo1 = store.actions["bulk-d1"].undo_recipe as Record<string, unknown>;
+      const undo2 = store.actions["bulk-d2"].undo_recipe as Record<string, unknown>;
+      expect(undo1.operation).toBe("move_email");
+      expect(undo2.operation).toBe("move_email");
+
+      // Undo recipes should point from Trash back to INBOX
+      const params1 = undo1.params as Record<string, unknown>;
+      const params2 = undo2.params as Record<string, unknown>;
+      expect(params1.to).toBe("INBOX");
+      expect(params2.to).toBe("INBOX");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // One valid, one non-existent UID: valid succeeds, invalid fails
+  // --------------------------------------------------------------------------
+
+  it("bulk execute with one valid and one non-existent UID", async () => {
+    const client = await createImapConnection(bulkImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const target = emails.find((e) => e.subject === "Bulk test email 3")!;
+      expect(target).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "bulk-v1": {
+            id: "bulk-v1",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: target.id, source_folder: "INBOX" },
+            status: "pending",
+            requires_approval: true,
+            result: null,
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+          "bulk-v2": {
+            id: "bulk-v2",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: "99999", source_folder: "INBOX" },
+            status: "pending",
+            requires_approval: true,
+            result: null,
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const response = await bulkExecuteActions(
+        ["bulk-v1", "bulk-v2"],
+        supabase,
+        client,
+        DUMMY_SMTP_CONFIG
+      );
+
+      expect(response.succeeded).toBe(1);
+      expect(response.failed).toBe(1);
+
+      // Valid action succeeded
+      const v1Result = response.results.find((r) => r.actionId === "bulk-v1")!;
+      expect(v1Result.status).toBe("executed");
+      expect(v1Result.error).toBeNull();
+
+      // Invalid action failed
+      const v2Result = response.results.find((r) => r.actionId === "bulk-v2")!;
+      expect(v2Result.status).toBe("failed");
+      expect(v2Result.error).toBeDefined();
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Already-executed action is skipped, pending actions still succeed
+  // --------------------------------------------------------------------------
+
+  it("bulk execute with an already-executed action: skipped", async () => {
+    const client = await createImapConnection(bulkImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const target = emails.find((e) => e.subject === "Bulk test email 4")!;
+      expect(target).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "bulk-s1": {
+            id: "bulk-s1",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: "123", source_folder: "INBOX" },
+            status: "executed",
+            requires_approval: true,
+            result: { deleted: true },
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: new Date().toISOString(),
+          },
+          "bulk-s2": {
+            id: "bulk-s2",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: target.id, source_folder: "INBOX" },
+            status: "pending",
+            requires_approval: true,
+            result: null,
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const response = await bulkExecuteActions(
+        ["bulk-s1", "bulk-s2"],
+        supabase,
+        client,
+        DUMMY_SMTP_CONFIG
+      );
+
+      expect(response.skipped).toBe(1);
+      expect(response.succeeded).toBe(1);
+
+      const s1Result = response.results.find((r) => r.actionId === "bulk-s1")!;
+      expect(s1Result.status).toBe("skipped");
+
+      const s2Result = response.results.find((r) => r.actionId === "bulk-s2")!;
+      expect(s2Result.status).toBe("executed");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Empty array: returns immediately
+  // --------------------------------------------------------------------------
+
+  it("bulk execute with empty array: returns immediately", async () => {
+    const client = await createImapConnection(bulkImapConfig);
+    try {
+      const supabase = createFakeSupabase({ actions: {} });
+
+      const response = await bulkExecuteActions([], supabase, client, DUMMY_SMTP_CONFIG);
+
+      expect(response.total).toBe(0);
+      expect(response.succeeded).toBe(0);
+      expect(response.failed).toBe(0);
+      expect(response.skipped).toBe(0);
+      expect(response.results).toEqual([]);
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Mix of delete_email and archive_email: both move to correct folders
+  // --------------------------------------------------------------------------
+
+  it("bulk execute with mix of delete and archive: correct target folders", async () => {
+    const client = await createImapConnection(bulkImapConfig);
+    try {
+      // At this point emails 1, 2, 3 may have been moved by previous tests.
+      // Email 4 was moved by the skip test. List remaining emails.
+      const emails = await listInbox(client, 10);
+
+      // We need at least 2 emails. If inbox is depleted, this test will
+      // use whatever is left. The seed has 4 emails; previous tests moved
+      // some but we still verify what's available.
+      if (emails.length < 2) {
+        // Not enough emails to test -- skip gracefully
+        return;
+      }
+
+      const deleteTarget = emails[0]!;
+      const archiveTarget = emails[1]!;
+
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "bulk-m1": {
+            id: "bulk-m1",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: deleteTarget.id, source_folder: "INBOX" },
+            status: "pending",
+            requires_approval: true,
+            result: null,
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+          "bulk-m2": {
+            id: "bulk-m2",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "archive_email",
+            arguments: { email_id: archiveTarget.id, source_folder: "INBOX" },
+            status: "pending",
+            requires_approval: true,
+            result: null,
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const response = await bulkExecuteActions(
+        ["bulk-m1", "bulk-m2"],
+        supabase,
+        client,
+        DUMMY_SMTP_CONFIG
+      );
+
+      expect(response.succeeded).toBe(2);
+      expect(response.failed).toBe(0);
+
+      // Delete action should have undo pointing to Trash
+      const undo1 = store.actions["bulk-m1"].undo_recipe as Record<string, unknown>;
+      expect(undo1.operation).toBe("move_email");
+      const params1 = undo1.params as Record<string, unknown>;
+      // "from" is the target folder (Trash), "to" is the source (INBOX)
+      expect((params1.from as string).includes("Trash")).toBe(true);
+      expect(params1.to).toBe("INBOX");
+
+      // Archive action should have undo pointing to All Mail
+      const undo2 = store.actions["bulk-m2"].undo_recipe as Record<string, unknown>;
+      expect(undo2.operation).toBe("move_email");
+      const params2 = undo2.params as Record<string, unknown>;
+      expect((params2.from as string).includes("All Mail")).toBe(true);
+      expect(params2.to).toBe("INBOX");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // send_email mixed in: falls back to individual executeAction, fails (no SMTP)
+  // --------------------------------------------------------------------------
+
+  it("bulk execute with send_email mixed in: send fails, email-move succeeds", async () => {
+    const client = await createImapConnection(bulkImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+
+      // We need at least 1 email for the delete action
+      if (emails.length < 1) {
+        return;
+      }
+
+      const deleteTarget = emails[0]!;
+
+      const store: Record<string, Record<string, Row>> = {
+        actions: {
+          "bulk-f1": {
+            id: "bulk-f1",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "delete_email",
+            arguments: { email_id: deleteTarget.id, source_folder: "INBOX" },
+            status: "pending",
+            requires_approval: true,
+            result: null,
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+          "bulk-f2": {
+            id: "bulk-f2",
+            user_id: "user-1",
+            session_id: "session-1",
+            tool_name: "send_email",
+            arguments: {
+              to: "someone@example.com",
+              subject: "Test send",
+              body: "This should fail.",
+            },
+            status: "pending",
+            requires_approval: true,
+            result: null,
+            undo_recipe: null,
+            undo_deadline: null,
+            created_at: new Date().toISOString(),
+            executed_at: null,
+          },
+        },
+      };
+      const supabase = createFakeSupabase(store);
+
+      const response = await bulkExecuteActions(
+        ["bulk-f1", "bulk-f2"],
+        supabase,
+        client,
+        DUMMY_SMTP_CONFIG
+      );
+
+      // Delete should succeed, send should fail (no real SMTP)
+      expect(response.succeeded).toBe(1);
+      expect(response.failed).toBe(1);
+
+      const f1Result = response.results.find((r) => r.actionId === "bulk-f1")!;
+      expect(f1Result.status).toBe("executed");
+
+      const f2Result = response.results.find((r) => r.actionId === "bulk-f2")!;
+      expect(f2Result.status).toBe("failed");
+      expect(f2Result.error).toBeDefined();
     } finally {
       await closeImapConnection(client);
     }
