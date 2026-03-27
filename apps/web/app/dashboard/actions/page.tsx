@@ -12,6 +12,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
+import SendEmailModal from "../components/SendEmailModal";
 
 // ============================================================================
 // CONSTANTS
@@ -29,6 +30,7 @@ const STATUS_STYLES: Record<string, string> = {
   rejected: "bg-red-100 text-red-700",
   undone: "bg-yellow-100 text-yellow-700",
   failed: "bg-orange-100 text-orange-700",
+  converted: "bg-blue-100 text-blue-700",
 };
 
 // ============================================================================
@@ -118,6 +120,7 @@ function Spinner() {
  * @param props.onReject - Callback when reject is clicked
  * @param props.onUndo - Callback when undo is clicked
  * @param props.processingIds - Set of action IDs currently being processed
+ * @param props.onRowClick - Callback when a send_email row is clicked
  */
 function ActionsTable({
   actions,
@@ -125,12 +128,14 @@ function ActionsTable({
   onReject,
   onUndo,
   processingIds,
+  onRowClick,
 }: {
   actions: ActionRow[];
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onUndo: (id: string) => void;
   processingIds: Set<string>;
+  onRowClick: (action: ActionRow) => void;
 }) {
   if (actions.length === 0) {
     return <p className="text-[13px] text-[var(--text-secondary)]">No actions.</p>;
@@ -157,8 +162,17 @@ function ActionsTable({
         <tbody>
           {sorted.map((action) => {
             const isProcessing = processingIds.has(action.id);
+            const isSendEmail = action.toolName === "send_email";
             return (
-              <tr key={action.id} className="border-b border-[var(--border-color)]">
+              <tr
+                key={action.id}
+                className={`border-b border-[var(--border-color)]${isSendEmail ? " cursor-pointer hover:bg-[var(--bg-hover)]" : ""}`}
+                onClick={(e) => {
+                  if (!isSendEmail) return;
+                  if ((e.target as HTMLElement).closest("button")) return;
+                  onRowClick(action);
+                }}
+              >
                 <td className="py-3 pr-6 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
                 <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
                 <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
@@ -221,6 +235,8 @@ export default function ActionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [selectedAction, setSelectedAction] = useState<ActionRow | null>(null);
+  const [isConverting, setIsConverting] = useState(false);
 
   /**
    * Adds an ID to the processing set.
@@ -294,6 +310,28 @@ export default function ActionsPage() {
     }
   };
 
+  /**
+   * Converts a pending send_email action to a draft in the user's mailbox.
+   * @param actionId - The action ID to convert
+   */
+  const handleConvertToDraft = async (actionId: string) => {
+    setIsConverting(true);
+    try {
+      const res = await fetch(`/api/actions/${actionId}/convert-to-draft`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json();
+        alert(body.error ?? "Failed to convert to draft");
+        return;
+      }
+      await loadActions();
+      setSelectedAction(null);
+    } catch {
+      alert("Failed to convert to draft");
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex-1 flex flex-col">
@@ -329,9 +367,17 @@ export default function ActionsPage() {
             onReject={handleReject}
             onUndo={handleUndo}
             processingIds={processingIds}
+            onRowClick={setSelectedAction}
           />
         </section>
       </div>
+
+      <SendEmailModal
+        action={selectedAction}
+        onClose={() => setSelectedAction(null)}
+        onConvert={handleConvertToDraft}
+        isConverting={isConverting}
+      />
     </div>
   );
 }

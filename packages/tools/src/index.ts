@@ -26,6 +26,7 @@ export {
   classifyAction,
   handleToolCall,
   executeAction,
+  convertActionToDraft,
   undoAction,
   fetchPendingEmailIds,
   fetchQueuedSends,
