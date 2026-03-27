@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
@@ -58,6 +59,13 @@ logger = logging.getLogger(__name__)
 # CONSTANTS
 # ============================================================================
 
+@dataclass
+class PipelineResult:
+    """Bundles the pipeline task with the STT service reference for post-shutdown cleanup."""
+    task: PipelineTask
+    stt: DeepgramSTTService
+
+
 DEFAULT_TEMPO = 1.5
 # Must be shorter than pipecat's 10s function_call_timeout_secs so that
 # our handler returns a proper error before pipecat sends "COMPLETED".
@@ -98,7 +106,7 @@ def create_pipeline(
     imap_holder: dict[str, Any],
     user_recorder: AudioRecorder | None = None,
     assistant_recorder: AudioRecorder | None = None,
-) -> PipelineTask:
+) -> PipelineResult:
     """Build the full Pipecat pipeline with STT, LLM, TTS, and speed control.
 
     Pipeline chain:
@@ -119,7 +127,7 @@ def create_pipeline(
         assistant_recorder: AudioRecorder for assistant TTS audio, or None if recording disabled.
 
     Returns:
-        Configured PipelineTask ready to run.
+        PipelineResult with the configured task and STT service reference.
     """
     sample_rate = audio_config.get("sample_rate", 16000)
     num_channels = audio_config.get("num_channels", 1)
@@ -275,7 +283,7 @@ def create_pipeline(
     # Wire the watchdog to the task (created after pipeline, so set via setter)
     watchdog.set_task(task)
 
-    return task
+    return PipelineResult(task=task, stt=stt)
 
 
 # ============================================================================

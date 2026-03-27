@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.session import ActiveSession
-from src.server import _cleanup_session, _live_pipeline_sessions, lifespan
+from src.server import _cleanup_session, _live_pipeline_sessions, lifespan, cancel_stt_tasks
 
 
 @pytest.fixture
@@ -150,3 +150,43 @@ async def test_lifespan_shutdown_finalizes_orphaned_sessions(
 
     # Session should be removed from the registry
     assert session.session_id not in _live_pipeline_sessions
+
+
+@pytest.mark.asyncio
+async def test_stt_dangling_tasks_cancelled_after_shutdown() -> None:
+    """After the pipeline runner finishes, all surviving asyncio tasks owned
+    by the STT service's task manager must be cancelled.
+    """
+    # Create fake asyncio tasks with a .cancel() method
+    fake_tasks = []
+    for i in range(3):
+        task = MagicMock()
+        task.cancel = MagicMock()
+        # Make the task awaitable -- raises CancelledError when gathered
+        task.__await__ = MagicMock(
+            side_effect=lambda: (_ for _ in ()).throw(asyncio.CancelledError)
+        )
+        fake_tasks.append(task)
+
+    # Mock STT service with a task manager that returns the fake tasks
+    mock_stt = MagicMock()
+    mock_stt._task_manager = MagicMock()
+    mock_stt._task_manager.current_tasks.return_value = fake_tasks
+
+    await cancel_stt_tasks(mock_stt)
+
+    # All tasks should have received .cancel()
+    for task in fake_tasks:
+        assert task.cancel.called, "Task was not cancelled"
+
+
+@pytest.mark.asyncio
+async def test_stt_cleanup_handles_missing_task_manager() -> None:
+    """When the STT service has no task manager (e.g. pipeline failed before
+    start), cancel_stt_tasks must not raise.
+    """
+    mock_stt = MagicMock()
+    mock_stt._task_manager = None
+
+    # Should complete without raising
+    await cancel_stt_tasks(mock_stt)
