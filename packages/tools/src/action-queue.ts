@@ -351,56 +351,94 @@ export async function bulkExecuteActions(
     groups.get(groupKey)!.push(action);
   }
 
-  // Step 5: Process each group under a single mailbox lock
+  // Step 5: Process each group with batched IMAP commands (1 fetch + 1 move per group)
   for (const [groupKey, groupActions] of groups) {
     const [toolName] = groupKey.split("::");
     const targetFolder = folderCache.get(toolName)!;
     const args = groupActions[0].arguments as Record<string, unknown>;
     const sourceFolder = (args.source_folder as string) ?? "INBOX";
 
+    // Build a map of uid -> action for this group
+    const uidToAction = new Map<string, Record<string, unknown>>();
+    for (const action of groupActions) {
+      const actionArgs = action.arguments as Record<string, unknown>;
+      const uid = actionArgs.email_id as string;
+      uidToAction.set(uid, action);
+    }
+
+    const allUids = Array.from(uidToAction.keys());
+    const uidRange = allUids.join(",");
+
     const lock = await imapClient.getMailboxLock(sourceFolder);
     try {
-      for (const action of groupActions) {
-        const actionArgs = action.arguments as Record<string, unknown>;
-        const uid = actionArgs.email_id as string;
+      // Batch fetch all envelopes in one IMAP command
+      const uidToMessageId = new Map<number, string>();
+      for await (const msg of imapClient.fetch(uidRange, { envelope: true, uid: true }, { uid: true })) {
+        if (msg.envelope?.messageId) {
+          uidToMessageId.set(msg.uid, msg.envelope.messageId);
+        }
+      }
 
-        try {
-          // Fetch envelope to get Message-ID
-          const msg = await imapClient.fetchOne(uid, { envelope: true }, { uid: true });
-          if (!msg || !msg.envelope) {
-            throw new Error(`Email with UID ${uid} not found in folder ${sourceFolder}`);
-          }
-          const messageId = msg.envelope.messageId;
+      // Identify which UIDs were found and which were not
+      const foundUids: string[] = [];
+      for (const uid of allUids) {
+        const uidNum = Number(uid);
+        if (uidToMessageId.has(uidNum)) {
+          foundUids.push(uid);
+        } else {
+          // Mark as failed -- email not found
+          const action = uidToAction.get(uid)!;
+          const errorMsg = `Email with UID ${uid} not found in folder ${sourceFolder}`;
+          await supabase
+            .from("actions")
+            .update({ status: "failed", result: { error: errorMsg } })
+            .eq("id", action.id as string);
+          results.push({ actionId: action.id as string, status: "failed", error: errorMsg });
+        }
+      }
 
-          // Move the email
-          await imapClient.messageMove(uid, targetFolder, { uid: true });
+      if (foundUids.length > 0) {
+        // Batch move all found UIDs in one IMAP command
+        const moveRange = foundUids.join(",");
+        await imapClient.messageMove(moveRange, targetFolder, { uid: true });
 
-          // Build undo recipe
+        // Update DB rows and build results
+        const executedAt = new Date().toISOString();
+        const resultData = toolName === "delete_email" ? { deleted: true } : { archived: true };
+
+        for (const uid of foundUids) {
+          const action = uidToAction.get(uid)!;
+          const messageId = uidToMessageId.get(Number(uid))!;
+
           const undoRecipe: UndoRecipe = {
             operation: "move_email",
             params: { messageId, from: targetFolder, to: sourceFolder },
           };
 
-          // Update DB row
           await supabase
             .from("actions")
             .update({
               status: "executed",
-              result: toolName === "delete_email" ? { deleted: true } : { archived: true },
+              result: resultData,
               undo_recipe: undoRecipe,
               undo_deadline: null,
-              executed_at: new Date().toISOString(),
+              executed_at: executedAt,
             })
             .eq("id", action.id as string);
 
           results.push({ actionId: action.id as string, status: "executed", error: null });
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
+        }
+      }
+    } catch (err) {
+      // If the batch IMAP operation fails, mark all unprocessed actions as failed
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      for (const action of groupActions) {
+        const alreadyProcessed = results.some((r) => r.actionId === (action.id as string));
+        if (!alreadyProcessed) {
           await supabase
             .from("actions")
             .update({ status: "failed", result: { error: errorMsg } })
             .eq("id", action.id as string);
-
           results.push({ actionId: action.id as string, status: "failed", error: errorMsg });
         }
       }

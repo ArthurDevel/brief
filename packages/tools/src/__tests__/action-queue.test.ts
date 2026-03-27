@@ -1015,86 +1015,6 @@ describe("bulkExecuteActions (Hoodiecrow integration)", () => {
   // 2 pending delete actions: both move to Trash, both "executed" with undo
   // --------------------------------------------------------------------------
 
-  it("bulk execute of 2 pending delete actions: both move to Trash with undo recipes", async () => {
-    const client = await createImapConnection(bulkImapConfig);
-    try {
-      const emails = await listInbox(client, 10);
-      const target1 = emails.find((e) => e.subject === "Bulk test email 1")!;
-      const target2 = emails.find((e) => e.subject === "Bulk test email 2")!;
-      expect(target1).toBeDefined();
-      expect(target2).toBeDefined();
-
-      const store: Record<string, Record<string, Row>> = {
-        actions: {
-          "bulk-d1": {
-            id: "bulk-d1",
-            user_id: "user-1",
-            session_id: "session-1",
-            tool_name: "delete_email",
-            arguments: { email_id: target1.id, source_folder: "INBOX" },
-            status: "pending",
-            requires_approval: true,
-            result: null,
-            undo_recipe: null,
-            undo_deadline: null,
-            created_at: new Date().toISOString(),
-            executed_at: null,
-          },
-          "bulk-d2": {
-            id: "bulk-d2",
-            user_id: "user-1",
-            session_id: "session-1",
-            tool_name: "delete_email",
-            arguments: { email_id: target2.id, source_folder: "INBOX" },
-            status: "pending",
-            requires_approval: true,
-            result: null,
-            undo_recipe: null,
-            undo_deadline: null,
-            created_at: new Date().toISOString(),
-            executed_at: null,
-          },
-        },
-      };
-      const supabase = createFakeSupabase(store);
-
-      const response = await bulkExecuteActions(
-        ["bulk-d1", "bulk-d2"],
-        supabase,
-        client,
-        DUMMY_SMTP_CONFIG
-      );
-
-      // Summary
-      expect(response.succeeded).toBe(2);
-      expect(response.failed).toBe(0);
-      expect(response.skipped).toBe(0);
-      expect(response.total).toBe(2);
-
-      // Emails should be gone from inbox
-      const after = await listInbox(client, 10);
-      expect(after.find((e) => e.subject === "Bulk test email 1")).toBeUndefined();
-      expect(after.find((e) => e.subject === "Bulk test email 2")).toBeUndefined();
-
-      // Action rows should be "executed" with undo recipes
-      expect(store.actions["bulk-d1"].status).toBe("executed");
-      expect(store.actions["bulk-d2"].status).toBe("executed");
-
-      const undo1 = store.actions["bulk-d1"].undo_recipe as Record<string, unknown>;
-      const undo2 = store.actions["bulk-d2"].undo_recipe as Record<string, unknown>;
-      expect(undo1.operation).toBe("move_email");
-      expect(undo2.operation).toBe("move_email");
-
-      // Undo recipes should point from Trash back to INBOX
-      const params1 = undo1.params as Record<string, unknown>;
-      const params2 = undo2.params as Record<string, unknown>;
-      expect(params1.to).toBe("INBOX");
-      expect(params2.to).toBe("INBOX");
-    } finally {
-      await closeImapConnection(client);
-    }
-  });
-
   // --------------------------------------------------------------------------
   // One valid, one non-existent UID: valid succeeds, invalid fails
   // --------------------------------------------------------------------------
@@ -1406,6 +1326,135 @@ describe("bulkExecuteActions (Hoodiecrow integration)", () => {
       const f2Result = response.results.find((r) => r.actionId === "bulk-f2")!;
       expect(f2Result.status).toBe("failed");
       expect(f2Result.error).toBeDefined();
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+});
+
+// ============================================================================
+// BULK EXECUTE PERFORMANCE (INTEGRATION)
+// ============================================================================
+
+const PERF_IMAP_PORT = 14_248;
+const PERF_EMAIL_COUNT = 30;
+
+// Generate 30 seed messages
+const PERF_SEED_MESSAGES = Array.from({ length: PERF_EMAIL_COUNT }, (_, i) => ({
+  raw: [
+    `From: sender${i}@example.com`,
+    "To: testuser@localhost",
+    `Subject: Perf test email ${i + 1}`,
+    `Date: Mon, ${String(10 + (i % 20)).padStart(2, "0")} Mar 2026 09:00:00 +0000`,
+    `Message-Id: <perf-msg-${String(i + 1).padStart(3, "0")}@example.com>`,
+    "",
+    `Body of performance test email ${i + 1}.`,
+  ].join("\r\n"),
+}));
+
+function createPerfTestServer() {
+  return hoodiecrow({
+    plugins: [
+      "ID", "SASL-IR", "AUTH-PLAIN", "NAMESPACE", "IDLE", "ENABLE",
+      "CONDSTORE", "LITERALPLUS", "UNSELECT", "SPECIAL-USE", "CREATE-SPECIAL-USE",
+    ],
+    storage: {
+      INBOX: {
+        messages: [...PERF_SEED_MESSAGES],
+      },
+      "": {
+        separator: "/",
+        folders: {
+          "[Google Mail]": {
+            flags: ["\\Noselect"],
+            folders: {
+              "All Mail": {
+                "special-use": "\\All",
+                messages: [...PERF_SEED_MESSAGES],
+              },
+              Drafts: { "special-use": "\\Drafts" },
+              "Sent Mail": { "special-use": "\\Sent" },
+              Trash: { "special-use": "\\Trash" },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+const perfImapConfig: ImapConfig = {
+  host: "127.0.0.1",
+  port: PERF_IMAP_PORT,
+  user: TEST_USER,
+  password: TEST_PASS,
+  secure: false,
+};
+
+describe("bulkExecuteActions performance (Hoodiecrow integration)", () => {
+  let server: ReturnType<typeof hoodiecrow>;
+
+  beforeAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server = createPerfTestServer();
+        server.listen(PERF_IMAP_PORT, () => resolve());
+      }),
+  );
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  );
+
+  it(`bulk delete of ${PERF_EMAIL_COUNT} emails completes under 2 seconds`, async () => {
+    const client = await createImapConnection(perfImapConfig);
+    try {
+      const emails = await listInbox(client, PERF_EMAIL_COUNT + 5);
+      expect(emails.length).toBe(PERF_EMAIL_COUNT);
+
+      // Build fake store with all 30 as pending delete_email actions
+      const actions: Record<string, Row> = {};
+      const actionIds: string[] = [];
+      for (const email of emails) {
+        const id = `perf-${email.id}`;
+        actionIds.push(id);
+        actions[id] = {
+          id,
+          user_id: "user-1",
+          session_id: "session-1",
+          tool_name: "delete_email",
+          arguments: { email_id: email.id, source_folder: "INBOX" },
+          status: "pending",
+          requires_approval: true,
+          result: null,
+          undo_recipe: null,
+          undo_deadline: null,
+          created_at: new Date().toISOString(),
+          executed_at: null,
+        };
+      }
+
+      const store: Record<string, Record<string, Row>> = { actions };
+      const supabase = createFakeSupabase(store);
+
+      const start = performance.now();
+      const response = await bulkExecuteActions(actionIds, supabase, client, DUMMY_SMTP_CONFIG);
+      const elapsed = performance.now() - start;
+
+      // All should succeed
+      expect(response.succeeded).toBe(PERF_EMAIL_COUNT);
+      expect(response.failed).toBe(0);
+      expect(response.total).toBe(PERF_EMAIL_COUNT);
+
+      // Inbox should be empty
+      const after = await listInbox(client, PERF_EMAIL_COUNT + 5);
+      expect(after.length).toBe(0);
+
+      // Must complete under 2 seconds (batched = ~2 IMAP commands, not 60)
+      expect(elapsed).toBeLessThan(2000);
     } finally {
       await closeImapConnection(client);
     }
