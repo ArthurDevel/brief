@@ -367,6 +367,9 @@ export async function bulkExecuteActions(
         try {
           // Fetch envelope to get Message-ID
           const msg = await imapClient.fetchOne(uid, { envelope: true }, { uid: true });
+          if (!msg || !msg.envelope) {
+            throw new Error(`Email with UID ${uid} not found in folder ${sourceFolder}`);
+          }
           const messageId = msg.envelope.messageId;
 
           // Move the email
