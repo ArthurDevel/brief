@@ -402,11 +402,11 @@ export async function bulkExecuteActions(
         const moveRange = foundUids.join(",");
         await imapClient.messageMove(moveRange, targetFolder, { uid: true });
 
-        // Update DB rows and build results
+        // Update all DB rows concurrently
         const executedAt = new Date().toISOString();
         const resultData = toolName === "delete_email" ? { deleted: true } : { archived: true };
 
-        for (const uid of foundUids) {
+        await Promise.all(foundUids.map((uid) => {
           const action = uidToAction.get(uid)!;
           const messageId = uidToMessageId.get(Number(uid))!;
 
@@ -415,7 +415,9 @@ export async function bulkExecuteActions(
             params: { messageId, from: targetFolder, to: sourceFolder },
           };
 
-          await supabase
+          results.push({ actionId: action.id as string, status: "executed", error: null });
+
+          return supabase
             .from("actions")
             .update({
               status: "executed",
@@ -425,9 +427,7 @@ export async function bulkExecuteActions(
               executed_at: executedAt,
             })
             .eq("id", action.id as string);
-
-          results.push({ actionId: action.id as string, status: "executed", error: null });
-        }
+        }));
       }
     } catch (err) {
       // If the batch IMAP operation fails, mark all unprocessed actions as failed

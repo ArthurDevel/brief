@@ -156,14 +156,14 @@ export async function POST(
         const enrichedActions = await enrichActionsWithEmailMeta(actions, imapClient, log);
         log(`Enrichment done in ${Date.now() - enrichStart}ms: ${enrichedActions.length} action(s) enriched`);
 
-        // Update enriched actions in the DB
+        // Update enriched actions in the DB concurrently
         const dbStart = Date.now();
-        for (const action of enrichedActions) {
-          await supabase
+        await Promise.all(enrichedActions.map((action) =>
+          supabase
             .from("actions")
             .update({ arguments: action.arguments })
-            .eq("id", action.id);
-        }
+            .eq("id", action.id)
+        ));
         log(`DB updates done in ${Date.now() - dbStart}ms`);
       } finally {
         await closeImapConnection(imapClient);
