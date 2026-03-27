@@ -25,6 +25,7 @@ DEFAULT_CLASSIFICATIONS: dict[str, str] = {
     "search_emails": "read_only",
     "save_memory": "read_only",
     "submit_feature_request": "read_only",
+    "find_contact": "read_only",
     "mark_as_read": "mutating_auto",
     "archive_email": "mutating_auto",
     "draft_email": "mutating_auto",

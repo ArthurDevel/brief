@@ -55,14 +55,17 @@ from src.cost_tracker import CostTracker
 from src.langfuse_client import shutdown_langfuse_client
 from src.langfuse_observer import LangfuseObserver
 from src.tracked_services import UsageTracker
-from src.pipeline import create_pipeline
+from src.pipeline import create_pipeline, PipelineResult
 from src.scheduler import start_scheduler
 from src.session import end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
 from src.tools.email_client import close_imap_connection, create_imap_connection
+from src.tools import contact_sync
 from src.transports.twilio import TwilioTransport, TwilioParams
 from src import session_logger
+from pipecat.services.deepgram.stt import DeepgramSTTService
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -141,31 +144,51 @@ def _to_rtc_ice_servers(raw_servers: list[dict]) -> list[RTCIceServer]:
     return ice_servers
 
 
+RETRYABLE_HOOK_ERRORS = (httpx.ConnectError, httpx.TimeoutException)
+MAX_HOOK_ATTEMPTS = 2
+HOOK_RETRY_DELAY_S = 2
+
+
 async def _trigger_end_of_session_hook(session_id: str, web_app_url: str, internal_api_key: str) -> None:
     """Fire the end-of-session webhook on the web app.
 
     Builds the URL, makes the POST request, and logs the result.
-    Intended to be called via asyncio.create_task() so it runs
-    fire-and-forget without blocking the caller.
+    Retries once after a 2s delay for transient network errors
+    (ConnectError, TimeoutException). All other errors fail immediately.
+
+    This function never raises -- errors are logged as warnings.
 
     Args:
         session_id: The session ID to include in the URL.
         web_app_url: Base URL of the web app.
         internal_api_key: Bearer token for the internal API.
     """
+    url = f"{web_app_url}/api/sessions/{session_id}/end-of-session"
     try:
-        url = f"{web_app_url}/api/sessions/{session_id}/end-of-session"
-        hook_start = asyncio.get_event_loop().time()
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {internal_api_key}"},
-            )
-            response.raise_for_status()
-            elapsed_ms = (asyncio.get_event_loop().time() - hook_start) * 1000
-            logger.info("[server] End-of-session hook completed for session %s in %.0fms", session_id, elapsed_ms)
+        for attempt in range(1, MAX_HOOK_ATTEMPTS + 1):
+            try:
+                hook_start = asyncio.get_event_loop().time()
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {internal_api_key}"},
+                    )
+                    response.raise_for_status()
+                    elapsed_ms = (asyncio.get_event_loop().time() - hook_start) * 1000
+                    logger.info("[server] End-of-session hook completed for session %s in %.0fms (url=%s)", session_id, elapsed_ms, url)
+                    return
+            except RETRYABLE_HOOK_ERRORS as exc:
+                logger.warning(
+                    "[server] End-of-session hook attempt %d/%d failed for session %s (%s): %s (url=%s)",
+                    attempt, MAX_HOOK_ATTEMPTS, session_id, type(exc).__name__, exc, url,
+                )
+                if attempt < MAX_HOOK_ATTEMPTS:
+                    await asyncio.sleep(HOOK_RETRY_DELAY_S)
     except BaseException as exc:
-        logger.warning("[server] End-of-session hook failed for session %s: %s", session_id, exc)
+        logger.warning(
+            "[server] End-of-session hook failed for session %s (%s): %s (url=%s)",
+            session_id, type(exc).__name__, exc, url,
+        )
 
 
 async def _fetch_ice_servers(api_key: str) -> list[RTCIceServer]:
@@ -181,6 +204,38 @@ async def _fetch_ice_servers(api_key: str) -> list[RTCIceServer]:
         resp = await client.get(f"{METERED_CREDENTIALS_URL}?apiKey={api_key}")
         resp.raise_for_status()
         return _to_rtc_ice_servers(resp.json())
+
+
+async def cancel_stt_tasks(stt: DeepgramSTTService) -> None:
+    """Cancel any surviving asyncio tasks owned by the STT service's task manager.
+
+    After the pipeline runner returns, the Deepgram STT service may still have
+    dangling tasks (e.g. connection_handler, keepalive) stuck in a reconnect
+    loop. This function force-cancels them so they do not leak across sessions.
+
+    Args:
+        stt: The DeepgramSTTService instance whose tasks should be cancelled.
+    """
+    if stt._task_manager is None:
+        logger.warning("[server] STT task manager is None -- cannot cancel dangling tasks")
+        return
+
+    tasks = stt._task_manager.current_tasks()
+    if not tasks:
+        return
+
+    for task in tasks:
+        task.cancel()
+
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[server] Timed out waiting for %d STT tasks to cancel", len(tasks))
+
+    logger.info("[server] Cancelled %d dangling STT task(s)", len(tasks))
 
 
 # ============================================================================
@@ -224,7 +279,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             assistant_recorder = AudioRecorder(target_frame_type=TTSAudioRawFrame)
             logger.info("[server] Recording enabled for session %s", session.session_id)
 
-        task = create_pipeline(
+        pipeline_result = create_pipeline(
             transport=transport,
             user_context=user_context,
             session=session,
@@ -238,6 +293,8 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             user_recorder=user_recorder,
             assistant_recorder=assistant_recorder,
         )
+        task = pipeline_result.task
+        stt = pipeline_result.stt
 
         # Register so lifespan shutdown can finalize if the process is killed
         _live_pipeline_sessions[session.session_id] = {
@@ -251,7 +308,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             "assistant_recorder": assistant_recorder,
         }
 
-        return task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder
+        return task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder, stt
 
     except Exception:
         session_logger.stop(session.session_id)
@@ -311,11 +368,10 @@ async def _cleanup_session(
     except BaseException as exc:
         logger.error("[server] Error ending session: %s", exc)
 
-    # Trigger end-of-session processing (e.g. summary email) on the web app
+    # Trigger end-of-session processing (e.g. summary email) on the web app.
+    # Awaited so hook logs are captured before session_logger.stop() below.
     if session_ended:
-        asyncio.create_task(
-            _trigger_end_of_session_hook(session.session_id, settings.web_app_url, settings.internal_api_key)
-        )
+        await _trigger_end_of_session_hook(session.session_id, settings.web_app_url, settings.internal_api_key)
 
     # Combine and upload call recording if recorders were active
     if user_recorder is not None and assistant_recorder is not None:
@@ -331,6 +387,14 @@ async def _cleanup_session(
     log_text = session_logger.stop(session.session_id)
     if log_text:
         await session_logger.upload_session_logs(session.session_id, log_text, supabase)
+
+    # Incremental contact sync (fire-and-forget, never blocks cleanup)
+    if imap_holder.get("config"):
+        try:
+            contact_sync.incremental_sync(imap_holder["config"], session.user_id, supabase)
+            logger.info("[server] Incremental contact sync completed for user %s", session.user_id)
+        except Exception as exc:
+            logger.warning("[server] Incremental contact sync failed for user %s: %s", session.user_id, exc)
 
     _live_pipeline_sessions.pop(session.session_id, None)
 
@@ -373,7 +437,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         ),
     )
 
-    task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder = await _setup_pipeline_session(
+    task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder, stt = await _setup_pipeline_session(
         transport, user_context, settings, supabase, transport_type="webrtc"
     )
 
@@ -391,6 +455,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
+        await cancel_stt_tasks(stt)
         await _cleanup_session(
             imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
             user_recorder=user_recorder, assistant_recorder=assistant_recorder,
@@ -500,6 +565,85 @@ app.add_middleware(
 @app.get("/health")
 async def health() -> JSONResponse:
     return JSONResponse({"status": "ok"})
+
+
+# ============================================================================
+# ENDPOINTS: INTERNAL API
+# ============================================================================
+
+def _run_contact_sync(user_id: str, mode: str = "full") -> None:
+    """Background task: load IMAP config from DB/Vault and run contact sync.
+
+    Args:
+        user_id: The user to sync contacts for.
+        mode: "full" for full scan, "incremental" for delta-only scan.
+    """
+    logger.info("[server] Contact sync background task started for user %s (mode=%s)", user_id, mode)
+    try:
+        settings = load_settings()
+        supabase = create_service_client(settings)
+
+        # Load IMAP config from DB + Vault (same pattern as load_user_context)
+        settings_response = (
+            supabase.table("user_settings")
+            .select("imap_host, imap_port, imap_user, imap_password_secret_id")
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+
+        if not settings_response.data:
+            logger.error("[server] sync-contacts: no settings found for user %s", user_id)
+            return
+
+        row = cast(dict[str, Any], settings_response.data)
+        if not row.get("imap_password_secret_id"):
+            logger.error("[server] sync-contacts: no IMAP credentials for user %s", user_id)
+            return
+
+        from src.tools.vault import retrieve_secret
+        imap_password = retrieve_secret(supabase, str(row["imap_password_secret_id"]))
+
+        from src.session import ImapConfig
+        imap_config = ImapConfig(
+            host=str(row["imap_host"]),
+            port=int(row["imap_port"]),
+            user=str(row["imap_user"]),
+            password=imap_password,
+        )
+
+        if mode == "incremental":
+            count = contact_sync.incremental_sync(imap_config, user_id, supabase)
+            logger.info("[server] Incremental contact sync completed for user %s: %d contacts", user_id, count)
+        else:
+            count = contact_sync.full_sync(imap_config, user_id, supabase)
+            logger.info("[server] Full contact sync completed for user %s: %d contacts", user_id, count)
+
+    except Exception as exc:
+        logger.error("[server] Contact sync failed for user %s (mode=%s): %s", user_id, mode, exc)
+
+
+@app.post("/sync-contacts")
+async def sync_contacts(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
+    """Trigger a full contact sync for a user. Returns immediately, sync runs in background.
+
+    Authenticated with INTERNAL_API_KEY via Bearer header.
+    """
+    settings = load_settings()
+
+    # Authenticate
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer ") or auth_header[7:] != settings.internal_api_key:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    body = await request.json()
+    user_id = body.get("user_id")
+    if not user_id:
+        return JSONResponse({"error": "Missing user_id"}, status_code=400)
+
+    mode = body.get("mode", "full")
+    background_tasks.add_task(_run_contact_sync, user_id, mode)
+    return JSONResponse({"status": "queued"})
 
 
 # ============================================================================
@@ -813,7 +957,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         buffered_messages=buffered_messages,
     )
 
-    task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder = await _setup_pipeline_session(
+    task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder, stt = await _setup_pipeline_session(
         transport, user_context, settings, supabase, transport_type="twilio"
     )
 
@@ -831,6 +975,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
+        await cancel_stt_tasks(stt)
         await _cleanup_session(
             imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
             user_recorder=user_recorder, assistant_recorder=assistant_recorder,

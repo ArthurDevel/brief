@@ -442,7 +442,8 @@ export default function DashboardOverviewPage() {
   };
 
   /**
-   * Bulk operation: approves or rejects all pending actions for the most recent session.
+   * Bulk operation: approves or rejects all pending actions for the most recent session
+   * via a single POST to /api/actions/bulk.
    * @param operation - "approve" or "reject"
    */
   const handleBulk = async (operation: "approve" | "reject") => {
@@ -456,16 +457,23 @@ export default function DashboardOverviewPage() {
 
     addProcessing(BULK_KEY);
     try {
-      for (const action of pending) {
-        const endpoint = operation === "approve" ? "approve" : "reject";
-        const res = await fetch(`/api/actions/${action.id}/${endpoint}`, { method: "POST" });
+      const res = await fetch("/api/actions/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionIds: pending.map((a) => a.id), operation }),
+      });
 
-        if (!res.ok) {
-          const body = await res.json();
-          setError(body.error ?? `Failed to ${operation} action`);
-          break;
-        }
+      if (!res.ok) {
+        const body = await res.json();
+        setError(body.error ?? `Failed to ${operation} actions`);
+        return;
       }
+
+      const result = await res.json();
+      if (result.failed > 0) {
+        setError(`${result.failed} of ${result.total} actions failed to ${operation}`);
+      }
+
       await loadData();
     } catch {
       setError(`Failed to ${operation} actions`);

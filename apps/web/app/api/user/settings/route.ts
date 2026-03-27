@@ -149,7 +149,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
   // Fetch existing settings to check for pre-existing secret IDs
   const { data: existing } = await supabase
     .from("user_settings")
-    .select("imap_password_secret_id, smtp_password_secret_id")
+    .select("imap_password_secret_id, smtp_password_secret_id, imap_user")
     .eq("user_id", user.id)
     .single();
 
@@ -189,6 +189,48 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // Trigger contact sync if IMAP is configured
+  if (body.imapUser) {
+    const imapUserChanged = body.imapUser !== existing?.imap_user;
+    try {
+      if (imapUserChanged) {
+        // Inbox changed: delete old contacts and do a full scan
+        await serviceClient.from("user_contacts").delete().eq("user_id", user.id);
+      }
+
+      // Full sync if inbox changed or no contacts exist yet
+      let syncMode = "incremental";
+      if (imapUserChanged) {
+        syncMode = "full";
+      } else {
+        const { count } = await serviceClient
+          .from("user_contacts")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id);
+        if (!count || count === 0) {
+          syncMode = "full";
+        }
+      }
+      console.log(`[settings] Triggering ${syncMode} contact sync for user ${user.id}`);
+
+      const syncResponse = await fetch(`${process.env.NEXT_PUBLIC_VOICE_PIPELINE_URL}/sync-contacts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.INTERNAL_API_KEY}`,
+        },
+        body: JSON.stringify({
+          user_id: user.id,
+          mode: syncMode,
+        }),
+      });
+
+      console.log(`[settings] Contact sync response: ${syncResponse.status}`);
+    } catch (err) {
+      console.error("[settings] Failed to trigger contact sync:", err);
+    }
   }
 
   return NextResponse.json(mapRowToSettings(data));

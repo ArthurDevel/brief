@@ -16,6 +16,8 @@ export type {
   UndoRecipe,
   UndoResult,
   ActionRow,
+  BulkActionResult,
+  BulkActionResponse,
 } from "./types";
 
 export { toolDefinitions, TOOL_LABELS } from "./definitions";
@@ -28,6 +30,7 @@ export {
   executeAction,
   convertActionToDraft,
   undoAction,
+  bulkExecuteActions,
   fetchPendingEmailIds,
   fetchQueuedSends,
   formatQueuedSends,
