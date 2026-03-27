@@ -332,6 +332,18 @@ export default function ActionsPage() {
     }
   };
 
+  /** Approve action from modal, then close */
+  const handleModalApprove = async (actionId: string) => {
+    await handleApprove(actionId);
+    setSelectedAction(null);
+  };
+
+  /** Reject action from modal, then close */
+  const handleModalReject = async (actionId: string) => {
+    await handleReject(actionId);
+    setSelectedAction(null);
+  };
+
   if (loading) {
     return (
       <div className="flex-1 flex flex-col">
@@ -375,8 +387,10 @@ export default function ActionsPage() {
       <SendEmailModal
         action={selectedAction}
         onClose={() => setSelectedAction(null)}
+        onApprove={handleModalApprove}
+        onReject={handleModalReject}
         onConvert={handleConvertToDraft}
-        isConverting={isConverting}
+        isProcessing={isConverting || (selectedAction ? processingIds.has(selectedAction.id) : false)}
       />
     </div>
   );

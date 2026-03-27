@@ -23,10 +23,14 @@ interface SendEmailModalProps {
   action: ActionRow | null;
   /** Callback to close the modal */
   onClose: () => void;
+  /** Callback when "Approve" is clicked, receives the action ID */
+  onApprove: (id: string) => void;
+  /** Callback when "Reject" is clicked, receives the action ID */
+  onReject: (id: string) => void;
   /** Callback when "Convert to Draft" is clicked, receives the action ID */
   onConvert: (id: string) => void;
-  /** Whether a convert operation is currently in progress */
-  isConverting: boolean;
+  /** Whether an async operation (approve, reject, convert) is in progress */
+  isProcessing: boolean;
 }
 
 // ============================================================================
@@ -68,7 +72,7 @@ function Spinner() {
  * @param props - SendEmailModalProps
  * @returns JSX element or null
  */
-export default function SendEmailModal({ action, onClose, onConvert, isConverting }: SendEmailModalProps) {
+export default function SendEmailModal({ action, onClose, onApprove, onReject, onConvert, isProcessing }: SendEmailModalProps) {
   // Close on Escape key
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -167,27 +171,64 @@ export default function SendEmailModal({ action, onClose, onConvert, isConvertin
           </div>
         </div>
 
-        {/* Footer -- only show Convert to Draft for pending actions */}
+        {/* Footer -- only show action buttons for pending actions */}
         {isPending && (
           <div
-            className="px-6 py-4 flex justify-end"
+            className="px-6 py-4 flex justify-between items-center"
             style={{ borderTop: "1px solid var(--border-color)" }}
           >
+            {/* Approve / Reject */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => onApprove(action.id)}
+                disabled={isProcessing}
+                style={{
+                  background: "var(--btn-primary-bg)",
+                  color: "var(--btn-primary-text)",
+                  padding: "8px 16px",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  border: "none",
+                  cursor: isProcessing ? "not-allowed" : "pointer",
+                }}
+                className="hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
+              >
+                {isProcessing ? <Spinner /> : "Approve"}
+              </button>
+              <button
+                onClick={() => onReject(action.id)}
+                disabled={isProcessing}
+                style={{
+                  background: "var(--bg-main)",
+                  color: "var(--text-primary)",
+                  padding: "8px 16px",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  border: "1px solid var(--border-color)",
+                  cursor: isProcessing ? "not-allowed" : "pointer",
+                }}
+                className="hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
+              >
+                Reject
+              </button>
+            </div>
+
+            {/* Convert to Draft */}
             <button
               onClick={() => onConvert(action.id)}
-              disabled={isConverting}
+              disabled={isProcessing}
               style={{
-                background: "var(--btn-primary-bg)",
-                color: "var(--btn-primary-text)",
+                background: "var(--bg-main)",
+                color: "var(--text-primary)",
                 padding: "8px 16px",
                 fontSize: 13,
                 fontWeight: 500,
-                border: "none",
-                cursor: isConverting ? "not-allowed" : "pointer",
+                border: "1px solid var(--border-color)",
+                cursor: isProcessing ? "not-allowed" : "pointer",
               }}
-              className="hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
+              className="hover:bg-[var(--bg-hover)] disabled:opacity-50 transition-colors inline-flex gap-2 items-center"
             >
-              {isConverting ? <Spinner /> : "Convert to Draft"}
+              {isProcessing ? <Spinner /> : "Convert to Draft"}
             </button>
           </div>
         )}
