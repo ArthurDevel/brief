@@ -221,6 +221,10 @@ async function handleApprove(
     const message = error instanceof Error ? error.message : "Failed to execute bulk actions";
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
-    await closeImapConnection(imapClient);
+    try {
+      await closeImapConnection(imapClient);
+    } catch {
+      // Connection may already be closed -- ignore
+    }
   }
 }
