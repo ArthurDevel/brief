@@ -9,6 +9,7 @@
  * - classifyAction: determine classification with user overrides
  * - handleToolCall: main entry point for processing a tool call
  * - executeAction: execute a pending/approved action
+ * - convertActionToDraft: convert a pending send_email to a mailbox draft
  * - undoAction: reverse an executed action using its undo recipe
  */
 
@@ -179,6 +180,70 @@ export async function executeAction(
     status: "executed",
     result,
     message: `Action ${action.tool_name} executed successfully`,
+  };
+}
+
+/**
+ * Converts a pending send_email action into a draft in the user's mailbox.
+ * Saves the draft via IMAP APPEND, then marks the action as "converted".
+ * On failure the action remains "pending" -- errors propagate to the caller.
+ * @param actionId - The action row ID to convert
+ * @param supabase - Supabase client for DB operations
+ * @param imapClient - Connected ImapFlow client for IMAP APPEND
+ * @returns ActionResult with converted status and draftUid
+ */
+export async function convertActionToDraft(
+  actionId: string,
+  supabase: SupabaseClient,
+  imapClient: ImapFlow
+): Promise<ActionResult> {
+  // Load the action from DB
+  const { data: action, error } = await supabase
+    .from("actions")
+    .select("*")
+    .eq("id", actionId)
+    .single();
+
+  if (error || !action) {
+    throw new Error(`Action ${actionId} not found: ${error?.message ?? "no data"}`);
+  }
+
+  if (action.tool_name !== "send_email") {
+    throw new Error(`Action ${actionId} is not a send_email action (tool_name: "${action.tool_name}")`);
+  }
+
+  if (action.status !== "pending") {
+    throw new Error(`Action ${actionId} is not pending (status: "${action.status}")`);
+  }
+
+  // Save the draft via IMAP APPEND
+  const { saveDraft } = await import("@dublin/email");
+  const recipe = await saveDraft(imapClient, {
+    to: action.arguments.to as string,
+    subject: action.arguments.subject as string,
+    body: action.arguments.body as string,
+  });
+
+  const draftUid = recipe.params.draftUid as string;
+
+  // Mark action as converted
+  const { error: updateError } = await supabase
+    .from("actions")
+    .update({
+      status: "converted",
+      result: { convertedToDraft: true, draftUid },
+    })
+    .eq("id", actionId);
+
+  if (updateError) {
+    throw new Error(`Failed to update action ${actionId}: ${updateError.message}`);
+  }
+
+  return {
+    actionId,
+    status: "converted",
+    result: { convertedToDraft: true, draftUid },
+    message: "Action send_email converted to draft successfully",
   };
 }
 

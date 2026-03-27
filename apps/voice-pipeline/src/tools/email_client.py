@@ -13,7 +13,7 @@ Includes connection management with auto-reconnect.
 - Read full email content by UID
 - Mark emails as read, archive, delete, move
 - Send emails via SMTP (async)
-- Save, send, and delete drafts
+- Save and delete drafts
 - Auto-reconnect wrapper for connection failures
 """
 
@@ -672,26 +672,6 @@ async def send_email(config: SmtpConfig, to: str, subject: str, body: str) -> No
         start_tls=config.port == 587,
     )
 
-
-def send_draft(client: IMAPClient, config: SmtpConfig, draft_uid: str) -> None:
-    """Fetch a draft from IMAP Drafts, extract to/subject/body, send via SMTP, delete draft.
-
-    Note: This function is synchronous for IMAP parts. The SMTP send is handled
-    via aiosmtplib in a separate call. The caller should wrap in asyncio.to_thread().
-
-    Args:
-        client: Connected IMAPClient.
-        config: SMTP configuration for sending.
-        draft_uid: UID of the draft in the Drafts folder.
-
-    Raises:
-        RuntimeError: If draft is not found or has missing fields.
-    """
-    raise NotImplementedError(
-        "send_draft: requires fetching draft from IMAP Drafts by UID, "
-        "extracting to/subject/body, sending via SMTP, then deleting the draft. "
-        "Will be wired up when the pipeline integrates async SMTP sending."
-    )
 
 
 def save_draft(client: IMAPClient, to: str, subject: str, body: str) -> dict:

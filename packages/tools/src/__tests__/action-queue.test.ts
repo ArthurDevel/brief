@@ -17,7 +17,7 @@ import {
   closeImapConnection,
   listInbox,
 } from "@dublin/email";
-import { executeAction, undoAction, handleToolCall, classifyAction, bulkExecuteActions } from "../action-queue";
+import { executeAction, undoAction, handleToolCall, classifyAction, convertActionToDraft, bulkExecuteActions } from "../action-queue";
 import type { ActionInput } from "../types";
 
 // ============================================================================
@@ -2061,6 +2061,155 @@ describe("Overfetch for pending actions", () => {
       expect(markdown).not.toContain("Overfetch email 4");
       expect(markdown).not.toContain("Overfetch email 5");
       expect(markdown).not.toContain("Overfetch email 6");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+});
+
+// ============================================================================
+// CONVERT ACTION TO DRAFT
+// ============================================================================
+
+const CONVERT_IMAP_PORT = 14_247;
+
+function createConvertTestServer() {
+  return hoodiecrow({
+    plugins: [
+      "ID",
+      "SASL-IR",
+      "AUTH-PLAIN",
+      "NAMESPACE",
+      "IDLE",
+      "ENABLE",
+      "CONDSTORE",
+      "LITERALPLUS",
+      "UNSELECT",
+      "SPECIAL-USE",
+      "CREATE-SPECIAL-USE",
+    ],
+    storage: {
+      INBOX: {
+        messages: [],
+      },
+      "": {
+        separator: "/",
+        folders: {
+          "[Google Mail]": {
+            flags: ["\\Noselect"],
+            folders: {
+              "All Mail": { "special-use": "\\All" },
+              Drafts: { "special-use": "\\Drafts" },
+              "Sent Mail": { "special-use": "\\Sent" },
+              Trash: { "special-use": "\\Trash" },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+const convertImapConfig: ImapConfig = {
+  host: "127.0.0.1",
+  port: CONVERT_IMAP_PORT,
+  user: TEST_USER,
+  password: TEST_PASS,
+  secure: false,
+};
+
+describe("convertActionToDraft", () => {
+  let server: ReturnType<typeof hoodiecrow>;
+
+  beforeAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server = createConvertTestServer();
+        server.listen(CONVERT_IMAP_PORT, () => resolve());
+      }),
+  );
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  );
+
+  // --------------------------------------------------------------------------
+  // Happy path: pending send_email -> converted with draftUid
+  // --------------------------------------------------------------------------
+
+  it("converts a pending send_email action to a draft and returns draftUid", async () => {
+    const client = await createImapConnection(convertImapConfig);
+    try {
+      const { store, supabase } = makePendingAction("c1", "send_email", {
+        to: "recipient@example.com",
+        subject: "Convert draft test",
+        body: "This should become a draft.",
+      });
+
+      const result = await convertActionToDraft("c1", supabase, client);
+
+      // Result should indicate conversion with a draftUid
+      expect(result.status).toBe("converted");
+      expect(result.result).toMatchObject({ convertedToDraft: true });
+      expect((result.result as Record<string, unknown>).draftUid).toBeDefined();
+
+      // Action row should be updated to "converted"
+      const action = store.actions["c1"];
+      expect(action.status).toBe("converted");
+      expect((action.result as Record<string, unknown>).convertedToDraft).toBe(true);
+      expect((action.result as Record<string, unknown>).draftUid).toBeDefined();
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Rejects non-pending action
+  // --------------------------------------------------------------------------
+
+  it("rejects a non-pending send_email action", async () => {
+    const store: Record<string, Record<string, Row>> = {
+      actions: {
+        "c2": {
+          id: "c2",
+          user_id: "user-1",
+          session_id: "session-1",
+          tool_name: "send_email",
+          arguments: { to: "someone@example.com", subject: "Test", body: "Body" },
+          status: "executed",
+        },
+      },
+    };
+    const supabase = createFakeSupabase(store);
+    const client = await createImapConnection(convertImapConfig);
+
+    try {
+      await expect(
+        convertActionToDraft("c2", supabase, client),
+      ).rejects.toThrow("not pending");
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Rejects non-send_email action
+  // --------------------------------------------------------------------------
+
+  it("rejects a pending non-send_email action", async () => {
+    const { supabase } = makePendingAction("c3", "archive_email", {
+      email_id: "some-id",
+      source_folder: "INBOX",
+    });
+    const client = await createImapConnection(convertImapConfig);
+
+    try {
+      await expect(
+        convertActionToDraft("c3", supabase, client),
+      ).rejects.toThrow("not a send_email action");
     } finally {
       await closeImapConnection(client);
     }

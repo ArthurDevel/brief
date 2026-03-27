@@ -20,6 +20,7 @@ import { Clock, Timer, Zap } from "lucide-react";
 import type { SessionSummary } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
+import SendEmailModal from "@/app/dashboard/components/SendEmailModal";
 
 // ============================================================================
 // CONSTANTS
@@ -126,6 +127,7 @@ const STATUS_STYLES: Record<string, string> = {
   executed: "bg-green-100 text-green-700",
   rejected: "bg-red-100 text-red-700",
   undone: "bg-gray-100 text-gray-600",
+  converted: "bg-blue-100 text-blue-700",
 };
 
 /**
@@ -158,6 +160,7 @@ function RecentSessionCard({
   onApprove,
   onReject,
   onBulk,
+  onRowClick,
 }: {
   session: SessionSummary;
   actions: ActionRow[];
@@ -165,6 +168,7 @@ function RecentSessionCard({
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onBulk: (operation: "approve" | "reject") => void;
+  onRowClick: (action: ActionRow) => void;
 }) {
   const pendingCount = actions.filter((a) => a.status === "pending").length;
   const isBusy = processingIds.size > 0;
@@ -249,7 +253,15 @@ function RecentSessionCard({
                 {actions.map((action) => {
                   const isProcessing = processingIds.has(action.id) || isBulkProcessing;
                   return (
-                    <tr key={action.id} className="border-b border-[var(--border-color)]">
+                    <tr
+                      key={action.id}
+                      className={`border-b border-[var(--border-color)]${action.toolName === "send_email" ? " cursor-pointer hover:bg-[var(--bg-hover)]" : ""}`}
+                      onClick={(e) => {
+                        if (action.toolName !== "send_email") return;
+                        if ((e.target as HTMLElement).closest("button")) return;
+                        onRowClick(action);
+                      }}
+                    >
                       <td className="py-3 pr-6 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
                       <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
                       <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
@@ -345,6 +357,8 @@ export default function DashboardOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [selectedAction, setSelectedAction] = useState<ActionRow | null>(null);
+  const [isConverting, setIsConverting] = useState(false);
 
   /**
    * Adds an ID to the processing set.
@@ -468,6 +482,40 @@ export default function DashboardOverviewPage() {
     }
   };
 
+  /**
+   * Converts a pending send_email action to a draft in the user's mailbox.
+   * @param actionId - The action ID to convert
+   */
+  const handleConvertToDraft = async (actionId: string) => {
+    setIsConverting(true);
+    try {
+      const res = await fetch(`/api/actions/${actionId}/convert-to-draft`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json();
+        alert(body.error ?? "Failed to convert to draft");
+        return;
+      }
+      await loadData();
+      setSelectedAction(null);
+    } catch {
+      alert("Failed to convert to draft");
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  /** Approve action from modal, then close */
+  const handleModalApprove = async (actionId: string) => {
+    await handleApprove(actionId);
+    setSelectedAction(null);
+  };
+
+  /** Reject action from modal, then close */
+  const handleModalReject = async (actionId: string) => {
+    await handleReject(actionId);
+    setSelectedAction(null);
+  };
+
   if (loading) {
     return (
       <div className="flex-1 flex flex-col">
@@ -531,6 +579,7 @@ export default function DashboardOverviewPage() {
               onApprove={handleApprove}
               onReject={handleReject}
               onBulk={handleBulk}
+              onRowClick={setSelectedAction}
             />
           </div>
         ) : (
@@ -553,6 +602,15 @@ export default function DashboardOverviewPage() {
         )}
 
       </div>
+
+      <SendEmailModal
+        action={selectedAction}
+        onClose={() => setSelectedAction(null)}
+        onApprove={handleModalApprove}
+        onReject={handleModalReject}
+        onConvert={handleConvertToDraft}
+        isProcessing={isConverting || (selectedAction ? processingIds.has(selectedAction.id) : false)}
+      />
     </div>
   );
 }

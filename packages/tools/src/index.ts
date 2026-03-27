@@ -28,6 +28,7 @@ export {
   classifyAction,
   handleToolCall,
   executeAction,
+  convertActionToDraft,
   undoAction,
   bulkExecuteActions,
   fetchPendingEmailIds,

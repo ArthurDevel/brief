@@ -38,7 +38,7 @@ export type ToolName =
   | "submit_feature_request";
 
 /** Lifecycle status of an action in the queue. */
-export type ActionStatus = "pending" | "approved" | "executed" | "undone" | "rejected" | "failed";
+export type ActionStatus = "pending" | "approved" | "executed" | "undone" | "rejected" | "failed" | "converted";
 
 // ============================================================================
 // CLASSIFICATION + APPROVAL

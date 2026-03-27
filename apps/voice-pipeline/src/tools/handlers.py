@@ -631,17 +631,10 @@ def _dispatch_tool(
         return {"drafted": True, "draft_uid": recipe_data["params"]["draft_uid"]}, UndoRecipe(**recipe_data), None
 
     if tool_name == "send_email":
-        # send_email can send a draft by draft_id, or a new email with to/subject/body
-        if args.get("draft_id"):
-            email_client.with_reconnect(
-                imap_holder, config,
-                lambda c: email_client.send_draft(c, smtp_config, args["draft_id"]),
-            )
-        else:
-            # Run async SMTP send in the current event loop
-            asyncio.get_event_loop().run_until_complete(
-                email_client.send_email(smtp_config, args["to"], args["subject"], args["body"])
-            )
+        # Run async SMTP send in the current event loop
+        asyncio.get_event_loop().run_until_complete(
+            email_client.send_email(smtp_config, args["to"], args["subject"], args["body"])
+        )
         return {"sent": True}, None, None
 
     if tool_name == "save_memory":
