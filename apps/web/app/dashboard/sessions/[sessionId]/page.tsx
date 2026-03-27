@@ -467,7 +467,8 @@ export default function SessionDetailPage() {
   };
 
   /**
-   * Processes all pending actions with the given operation (approve or reject).
+   * Bulk operation: approves or rejects all pending actions for the current session
+   * via a single POST to /api/actions/bulk.
    * @param operation - "approve" or "reject"
    */
   const handleBulk = async (operation: "approve" | "reject") => {
@@ -476,15 +477,30 @@ export default function SessionDetailPage() {
     if (pending.length === 0) return;
 
     addProcessing(BULK_KEY);
-    for (const action of pending) {
-      try {
-        await postActionRequest(action.id, operation);
-      } catch {
-        // Continue to next action -- failed ones are marked in the DB by the API
+    try {
+      const res = await fetch("/api/actions/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionIds: pending.map((a) => a.id), operation }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json();
+        setError(body.error ?? `Failed to ${operation} actions`);
+        return;
       }
+
+      const result = await res.json();
+      if (result.failed > 0) {
+        setError(`${result.failed} of ${result.total} actions failed to ${operation}`);
+      }
+
+      await loadSession();
+    } catch {
+      setError(`Failed to ${operation} actions`);
+    } finally {
+      removeProcessing(BULK_KEY);
     }
-    await loadSession();
-    removeProcessing(BULK_KEY);
   };
 
   if (loading) {

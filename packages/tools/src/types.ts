@@ -107,6 +107,30 @@ export interface QueuedSend {
 // ACTION ROW (DB)
 // ============================================================================
 
+// ============================================================================
+// BULK ACTION
+// ============================================================================
+
+/** Result of a single action within a bulk execute operation. */
+export interface BulkActionResult {
+  actionId: string;
+  status: "executed" | "failed" | "skipped";
+  error: string | null;
+}
+
+/** Aggregate response from a bulk execute operation. */
+export interface BulkActionResponse {
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  results: BulkActionResult[];
+}
+
+// ============================================================================
+// ACTION ROW (DB)
+// ============================================================================
+
 /** Mirrors the actions table in the database. */
 export interface ActionRow {
   id: string;
