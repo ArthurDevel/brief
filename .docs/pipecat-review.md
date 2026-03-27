@@ -78,6 +78,12 @@ watchdog = IdleFrameProcessor(callback=on_idle, timeout=10.0, types=[InputAudioR
 
 **Verdict:** The `asyncio.wait_for()` wrapper is unnecessary -- pass `timeout_secs=8.0` to `register_function()`. The handler signature could use the newer `FunctionCallParams` pattern. The IMAP lock and narration logic are legitimately custom.
 
+**FRAMEWORK GAP #1 (2026-03-27, pipecat v0.0.107): Tool call error handling is broken.** If a handler raises an exception, pipecat's `_run_function_call` catches it and pushes a non-fatal `ErrorFrame`, but never calls `result_callback`. The function call stays stuck in `_function_calls_in_progress` forever and the pipeline freezes. Our existing try/except + `result_callback(error_string)` pattern in `_register_tool_handler` is the only working approach -- it must be preserved during migration. Every handler must catch its own errors and return them via `result_callback`. See [#1735](https://github.com/pipecat-ai/pipecat/issues/1735), [#2179](https://github.com/pipecat-ai/pipecat/issues/2179).
+
+**FRAMEWORK GAP #2 (2026-03-27, pipecat v0.0.107): Instant tool handlers cause a race condition.** The `FunctionCallResultFrame` (pushed from a concurrent task) can arrive at the assistant aggregator before the `FunctionCallsStartedFrame` (which must travel through the full pipeline: LLM -> TTS -> transport -> audio_buffer -> aggregator). When this happens, the aggregator drops the result (`tool_call_id is not running`) and the pipeline freezes. Workaround: yield to the event loop (`await asyncio.sleep(0)`) at the start of any handler that may complete instantly. Our IMAP tool handlers are not affected because they always do blocking I/O, but this is relevant for any fast/cached/mock tool responses. See [#3661](https://github.com/pipecat-ai/pipecat/issues/3661).
+
+**FRAMEWORK GAP #3 (2026-03-27, pipecat v0.0.107): `TTSSpeakFrame` in `on_function_calls_started` breaks the TTS.** The official pipecat example uses `tts.queue_frame(TTSSpeakFrame("Let me check on that."))` to speak filler while a tool executes. This breaks the Deepgram websocket TTS context -- the context gets cleaned up immediately after creation, all audio frames fail with "unable to append audio to context", and the TTS gets stuck, blocking subsequent frames (including `FunctionCallResultFrame`) from passing through the pipeline. Our existing HTTP TTS narration approach in `_register_tool_handler` sidesteps this entirely. Do not use `TTSSpeakFrame` via `tts.queue_frame()` during function calls.
+
 ---
 
 ## 6. Audio Speed Processor (WSOLA) -- Keep, legitimately custom
@@ -128,9 +134,13 @@ Three deprecated patterns in `pipeline.py`:
 
 ---
 
-## 11. SmartTurn 16kHz Guard -- Possibly removable
+## 11. SmartTurn 16kHz Guard -- Removable (two paths)
 
-Our `pipeline.py:208` disables SmartTurn for Twilio (sample rate < 16kHz). Pipecat PR #3857 added automatic resampling to 16kHz before SmartTurn inference. If our pipecat version includes this fix (>= 0.0.103), we can remove the guard and enable SmartTurn for Twilio calls too.
+Our `pipeline.py:208` disables SmartTurn for Twilio (sample rate < 16kHz). Pipecat PR #3857 added automatic resampling to 16kHz before SmartTurn inference. The fix landed in **v0.0.104** (not v0.0.103 -- the PR merged March 2, after 0.0.103's Feb 21 release).
+
+**Path A (keep SmartTurn):** If pipecat >= 0.0.104, remove the guard. SmartTurn auto-resamples 8kHz to 16kHz via SOXR.
+
+**Path B (switch to Flux):** DeepgramFluxSTTService completely replaces SmartTurn. Flux handles turn detection natively (including at 8kHz), so SmartTurn, SileroVAD, and the guard can all be removed. This is validated in `testscripts/2026.03.27-builtin-twilio-transport/`.
 
 ---
 
@@ -144,26 +154,25 @@ Our `cancel_stt_tasks()` accesses `stt._task_manager` (private API) to force-can
 
 ## Summary: Priority Actions
 
-**Replace (clear wins, less custom code):**
-1. Twilio transport + transcoder -> `TwilioFrameSerializer` + `WebSocketServerTransport`
+**Replace (clear wins, validated in test script):**
+1. Twilio transport + transcoder -> `TwilioFrameSerializer` + `FastAPIWebsocketTransport`
 2. Markdown stripper -> `MarkdownTextFilter` on TTS service
 3. Audio watchdog -> `IdleFrameProcessor`
 4. Tool call timeouts -> built-in `timeout_secs` on `register_function()`
+5. Audio recording -> `AudioBufferProcessor` (capture + mixing replaced; WAV wrapping is ~10 lines with `wave` module; Supabase upload stays custom)
+6. SmartTurn + SileroVAD -> `DeepgramFluxSTTService` (handles turn detection natively, removes 16kHz guard)
 
-**Update (deprecated APIs):**
-5. `OpenAILLMContext` -> `LLMContext`
-6. `llm.create_context_aggregator()` -> `LLMContextAggregatorPair`
-7. `allow_interruptions` -> start strategy `enable_interruptions`
-
-**Evaluate:**
-8. Audio recording -> `AudioBufferProcessor` (needs investigation for upload flow)
-9. `TrackedDeepgramTTSService` -> native `TTSUsageMetricsData` via observer
-10. SmartTurn 16kHz guard -> check pipecat version, possibly remove
+**Update (deprecated APIs, validated in test script):**
+7. `OpenAILLMContext` -> `LLMContext`
+8. `llm.create_context_aggregator()` -> `LLMContextAggregatorPair`
+9. `allow_interruptions` -> removed (Flux manages turns externally)
+10. `LLMMessagesFrame` -> `context.add_message()` + `LLMRunFrame()`
 
 **Keep as-is (legitimately custom):**
 11. WSOLA speed processor
 12. RMS normalizer
 13. `TrackedOpenAILLMService` (OpenRouter generation ID capture)
-14. Cost tracker
-15. Langfuse observer
-16. STT task cleanup hack
+14. `TrackedDeepgramTTSService` (websocket DeepgramTTSService in SENTENCE mode does NOT emit `TTSUsageMetricsData` -- framework gap in v0.0.107)
+15. Cost tracker
+16. Langfuse observer
+17. STT task cleanup hack
