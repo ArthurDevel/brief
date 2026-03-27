@@ -618,6 +618,35 @@ describe("IMAP client (Hoodiecrow integration)", () => {
   });
 
   // --------------------------------------------------------------------------
+  // fetchEmailMetaBatch — UID vs sequence number regression
+  // --------------------------------------------------------------------------
+
+  it("fetches metadata by UID when UIDs exceed the message count", async () => {
+    // After earlier tests (archive, delete, move), INBOX has fewer messages
+    // than the highest UID. If the code incorrectly treats UIDs as sequence
+    // numbers, this fetch returns 0 results.
+    const client = await createImapConnection(imapConfig);
+    try {
+      const emails = await listInbox(client, 100);
+      expect(emails.length).toBeGreaterThan(0);
+
+      // Find an email whose UID is higher than the total message count
+      const target = emails.find((e) => Number(e.id) > emails.length);
+      expect(target).toBeDefined();
+
+      const requests: EmailMetaRequest[] = [
+        { actionId: "uid-gap", uid: target!.id },
+      ];
+      const results = await fetchEmailMetaBatch(client, requests);
+
+      expect(results.size).toBe(1);
+      expect(results.get("uid-gap")!.subject).toBe(target!.subject);
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
   // saveDraft + deleteDraft
   // --------------------------------------------------------------------------
 

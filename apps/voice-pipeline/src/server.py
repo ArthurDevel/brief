@@ -144,31 +144,51 @@ def _to_rtc_ice_servers(raw_servers: list[dict]) -> list[RTCIceServer]:
     return ice_servers
 
 
+RETRYABLE_HOOK_ERRORS = (httpx.ConnectError, httpx.TimeoutException)
+MAX_HOOK_ATTEMPTS = 2
+HOOK_RETRY_DELAY_S = 2
+
+
 async def _trigger_end_of_session_hook(session_id: str, web_app_url: str, internal_api_key: str) -> None:
     """Fire the end-of-session webhook on the web app.
 
     Builds the URL, makes the POST request, and logs the result.
-    Intended to be called via asyncio.create_task() so it runs
-    fire-and-forget without blocking the caller.
+    Retries once after a 2s delay for transient network errors
+    (ConnectError, TimeoutException). All other errors fail immediately.
+
+    This function never raises -- errors are logged as warnings.
 
     Args:
         session_id: The session ID to include in the URL.
         web_app_url: Base URL of the web app.
         internal_api_key: Bearer token for the internal API.
     """
+    url = f"{web_app_url}/api/sessions/{session_id}/end-of-session"
     try:
-        url = f"{web_app_url}/api/sessions/{session_id}/end-of-session"
-        hook_start = asyncio.get_event_loop().time()
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {internal_api_key}"},
-            )
-            response.raise_for_status()
-            elapsed_ms = (asyncio.get_event_loop().time() - hook_start) * 1000
-            logger.info("[server] End-of-session hook completed for session %s in %.0fms", session_id, elapsed_ms)
+        for attempt in range(1, MAX_HOOK_ATTEMPTS + 1):
+            try:
+                hook_start = asyncio.get_event_loop().time()
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {internal_api_key}"},
+                    )
+                    response.raise_for_status()
+                    elapsed_ms = (asyncio.get_event_loop().time() - hook_start) * 1000
+                    logger.info("[server] End-of-session hook completed for session %s in %.0fms (url=%s)", session_id, elapsed_ms, url)
+                    return
+            except RETRYABLE_HOOK_ERRORS as exc:
+                logger.warning(
+                    "[server] End-of-session hook attempt %d/%d failed for session %s (%s): %s (url=%s)",
+                    attempt, MAX_HOOK_ATTEMPTS, session_id, type(exc).__name__, exc, url,
+                )
+                if attempt < MAX_HOOK_ATTEMPTS:
+                    await asyncio.sleep(HOOK_RETRY_DELAY_S)
     except BaseException as exc:
-        logger.warning("[server] End-of-session hook failed for session %s: %s", session_id, exc)
+        logger.warning(
+            "[server] End-of-session hook failed for session %s (%s): %s (url=%s)",
+            session_id, type(exc).__name__, exc, url,
+        )
 
 
 async def _fetch_ice_servers(api_key: str) -> list[RTCIceServer]:
@@ -348,11 +368,10 @@ async def _cleanup_session(
     except BaseException as exc:
         logger.error("[server] Error ending session: %s", exc)
 
-    # Trigger end-of-session processing (e.g. summary email) on the web app
+    # Trigger end-of-session processing (e.g. summary email) on the web app.
+    # Awaited so hook logs are captured before session_logger.stop() below.
     if session_ended:
-        asyncio.create_task(
-            _trigger_end_of_session_hook(session.session_id, settings.web_app_url, settings.internal_api_key)
-        )
+        await _trigger_end_of_session_hook(session.session_id, settings.web_app_url, settings.internal_api_key)
 
     # Combine and upload call recording if recorders were active
     if user_recorder is not None and assistant_recorder is not None:
