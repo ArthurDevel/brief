@@ -5,10 +5,10 @@
  * (no handlers) -- handlers live in action-queue.ts and the email package.
  *
  * Responsibilities:
- * - Define all 15 tool schemas (list_inbox, read_email, read_thread,
+ * - Define all 16 tool schemas (list_inbox, read_email, read_thread,
  *   search_emails, mark_as_read, draft_email, delete_email, archive_email,
- *   send_email, batch_archive_emails, batch_delete_emails, list_folders,
- *   move_to_folder, save_memory, submit_feature_request)
+ *   send_email, reply_email, batch_archive_emails, batch_delete_emails,
+ *   list_folders, move_to_folder, save_memory, submit_feature_request)
  * - Export them as an array for session.update
  */
 
@@ -187,6 +187,32 @@ export const toolDefinitions: ToolDefinition[] = [
         subject: { type: "string", description: "Email subject (for new emails)." },
         body: { type: "string", description: "Email body (for new emails)." },
       },
+    },
+  },
+
+  {
+    type: "function",
+    name: "reply_email",
+    label: "Reply to Email",
+    description:
+      "Reply to an existing email by its ID. The email_id must come from a prior read_email or read_thread result. The reply is threaded correctly so it appears in the same conversation.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_id: {
+          type: "string",
+          description: "The ID of the email to reply to. Must come from a prior read_email or read_thread result.",
+        },
+        body: {
+          type: "string",
+          description: "The reply body text.",
+        },
+        reply_all: {
+          type: "boolean",
+          description: "Whether to reply to all recipients. Defaults to false.",
+        },
+      },
+      required: ["email_id", "body"],
     },
   },
 

@@ -95,6 +95,22 @@ export interface EmailMeta {
   from: string;
 }
 
+/** Context needed to build a properly threaded reply to an email. */
+export interface ReplyContext {
+  /** Message-ID of the original email */
+  messageId: string;
+  /** Message-IDs from the References header */
+  references: string[];
+  /** Original sender address (e.g. "alice@example.com") */
+  from: string;
+  /** Original To recipients */
+  to: string[];
+  /** Original CC recipients */
+  cc: string[];
+  /** Original subject line */
+  subject: string;
+}
+
 /** A single message within a thread, returned in chronological order. */
 export interface ThreadMessage {
   id: string;

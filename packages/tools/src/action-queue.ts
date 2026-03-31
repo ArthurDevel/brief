@@ -40,14 +40,14 @@ import { getDefaultClassification } from "./classification";
 
 /**
  * Classifies an action based on user config overrides and defaults.
- * send_email is always mutating_queued regardless of user config.
+ * send_email and reply_email are always mutating_queued regardless of user config.
  * @param toolName - The tool being called
  * @param userConfig - User's per-tool classification overrides
  * @returns The effective ActionClassification
  */
 export function classifyAction(toolName: ToolName, userConfig: ToolApprovalConfig): ActionClassification {
-  // send_email is always queued -- cannot be overridden
-  if (toolName === "send_email") {
+  // send_email and reply_email are always queued -- cannot be overridden
+  if (toolName === "send_email" || toolName === "reply_email") {
     return "mutating_queued";
   }
 
@@ -546,6 +546,19 @@ async function dispatchTool(
         subject: args.subject as string,
         body: args.body as string,
       });
+      return { result: { sent: true }, undoRecipe: null };
+    }
+
+    case "reply_email": {
+      const { fetchReplyContext, replyToEmail } = await import("@dublin/email");
+      const context = await fetchReplyContext(imapClient, args.email_id as string);
+      await replyToEmail(
+        smtpConfig,
+        context,
+        args.body as string,
+        (args.reply_all as boolean) ?? false,
+        smtpConfig.user
+      );
       return { result: { sent: true }, undoRecipe: null };
     }
 

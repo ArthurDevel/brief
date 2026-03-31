@@ -644,6 +644,18 @@ def _dispatch_tool(
             )
         return {"sent": True}, None, None
 
+    if tool_name == "reply_email":
+        # Fetch original email headers via IMAP, then send reply via SMTP
+        context = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.fetch_reply_context(c, args["email_id"]),
+        )
+        reply_all = args.get("reply_all", False)
+        asyncio.get_event_loop().run_until_complete(
+            email_client.reply_to_email(smtp_config, context, args["body"], reply_all, smtp_config.user)
+        )
+        return {"sent": True}, None, None
+
     if tool_name == "save_memory":
         result, recipe = _handle_save_memory(supabase, user_id, args["content"])
         return result, recipe, None

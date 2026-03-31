@@ -18,7 +18,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import TurndownService from "turndown";
-import type { ImapConfig, EmailSummary, Email, ThreadMessage, EmailMeta, EmailMetaRequest, FolderInfo } from "./types";
+import type { ImapConfig, EmailSummary, Email, ThreadMessage, EmailMeta, EmailMetaRequest, FolderInfo, ReplyContext } from "./types";
 import type { UndoRecipe } from "@dublin/tools";
 
 // ============================================================================
@@ -415,6 +415,55 @@ export async function readThread(client: ImapFlow, emailId: string): Promise<Thr
 }
 
 /**
+ * Fetches the envelope and headers needed to build a properly threaded reply.
+ * Extracts Message-ID, References, From, all To addresses, all CC addresses,
+ * and the Subject from an email in INBOX.
+ * @param client - Connected ImapFlow client
+ * @param emailId - The UID of the email to fetch context for
+ * @returns ReplyContext with threading and recipient info
+ */
+export async function fetchReplyContext(client: ImapFlow, emailId: string): Promise<ReplyContext> {
+  const lock = await client.getMailboxLock("INBOX");
+
+  try {
+    const uid = Number(emailId);
+    const message = await client.fetchOne(String(uid), {
+      envelope: true,
+      source: true,
+    }, { uid: true });
+
+    if (!message || !message.envelope) {
+      throw new Error(`Email with UID ${emailId} not found`);
+    }
+
+    const envelope = message.envelope;
+
+    // Message-ID is required for threading
+    const messageId = envelope.messageId;
+    if (!messageId) {
+      throw new Error(`Email with UID ${emailId} has no Message-ID header`);
+    }
+
+    // Parse References from raw headers
+    const sourceText = message.source?.toString("utf-8") ?? "";
+    const references = extractReferences(sourceText);
+
+    // Extract raw email address from the first From entry
+    const from = extractEmailAddress(envelope.from);
+
+    // Extract ALL To and CC addresses (not just the first one)
+    const to = extractAllEmailAddresses(envelope.to);
+    const cc = extractAllEmailAddresses(envelope.cc);
+
+    const subject = envelope.subject ?? "(no subject)";
+
+    return { messageId, references, from, to, cc, subject };
+  } finally {
+    lock.release();
+  }
+}
+
+/**
  * Marks an email as read (sets the \Seen flag).
  * Not undoable -- returns null.
  * @param client - Connected ImapFlow client
@@ -720,6 +769,36 @@ async function searchAndFetchMetaInLock(
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+/**
+ * Extracts the raw email address from the first entry in an IMAP address array.
+ * @param addresses - Array of IMAP address objects
+ * @returns Raw email address string (e.g. "alice@example.com")
+ */
+function extractEmailAddress(addresses: Array<{ name?: string; address?: string }> | undefined): string {
+  if (!addresses || addresses.length === 0) {
+    return "";
+  }
+  return addresses[0].address ?? "";
+}
+
+/**
+ * Extracts raw email addresses from ALL entries in an IMAP address array.
+ * @param addresses - Array of IMAP address objects
+ * @returns Array of raw email address strings
+ */
+function extractAllEmailAddresses(addresses: Array<{ name?: string; address?: string }> | undefined): string[] {
+  if (!addresses || addresses.length === 0) {
+    return [];
+  }
+  const result: string[] = [];
+  for (const addr of addresses) {
+    if (addr.address) {
+      result.push(addr.address);
+    }
+  }
+  return result;
+}
 
 /**
  * Formats an IMAP address array into a readable string.

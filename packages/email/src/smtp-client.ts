@@ -12,7 +12,7 @@
 
 import type { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
-import type { SmtpConfig } from "./types";
+import type { SmtpConfig, ReplyContext } from "./types";
 import type { UndoRecipe } from "@dublin/tools";
 import { resolveSpecialUseFolder } from "./imap-client";
 
@@ -46,6 +46,61 @@ export async function sendEmail(
     to: params.to,
     subject: params.subject,
     text: params.body,
+  });
+
+  return null;
+}
+
+/**
+ * Sends a reply to an existing email with proper threading headers.
+ * Builds In-Reply-To, References, and Re: subject. Not undoable.
+ * @param config - SMTP server connection parameters
+ * @param context - Reply context from the original email (message ID, recipients, subject)
+ * @param body - Reply body text
+ * @param replyAll - If true, CC all original To/CC recipients (minus sender)
+ * @param senderAddress - The current user's email address (excluded from CC in reply-all)
+ * @returns null (not undoable)
+ */
+export async function replyToEmail(
+  config: SmtpConfig,
+  context: ReplyContext,
+  body: string,
+  replyAll: boolean,
+  senderAddress: string
+): Promise<null> {
+  const transport = nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.port === 465,
+    auth: {
+      user: config.user,
+      pass: config.password,
+    },
+  });
+
+  // Build subject with Re: prefix only if not already present
+  const subject = /^re:/i.test(context.subject)
+    ? context.subject
+    : `Re: ${context.subject}`;
+
+  // Build References: original references + original message ID
+  const references = [...context.references, context.messageId].join(" ");
+
+  // Build CC list for reply-all: original To + CC, minus our own address
+  const cc = replyAll
+    ? [...context.to, ...context.cc].filter(
+        (addr) => addr.toLowerCase() !== senderAddress.toLowerCase()
+      )
+    : [];
+
+  await transport.sendMail({
+    from: senderAddress,
+    to: context.from,
+    cc: cc.length > 0 ? cc : undefined,
+    subject,
+    text: body,
+    inReplyTo: context.messageId,
+    references,
   });
 
   return null;

@@ -86,6 +86,27 @@ class EmailSummary:
 
 
 @dataclass
+class ReplyContext:
+    """Context needed to build a properly threaded reply to an email.
+
+    Attributes:
+        message_id: Message-ID of the original email.
+        references: Message-IDs from the References header.
+        from_addr: Original sender address.
+        to: Original To recipients.
+        cc: Original CC recipients.
+        subject: Original subject line.
+    """
+
+    message_id: str
+    references: list[str]
+    from_addr: str
+    to: list[str]
+    cc: list[str]
+    subject: str
+
+
+@dataclass
 class Email:
     """Full email content."""
 
@@ -467,6 +488,61 @@ def read_thread(client: IMAPClient, email_id: str) -> list[ThreadMessage]:
     return results
 
 
+def fetch_reply_context(client: IMAPClient, email_id: str) -> ReplyContext:
+    """Fetch the envelope and headers needed to build a properly threaded reply.
+
+    Extracts Message-ID, References, From, all To addresses, all CC addresses,
+    and the Subject from an email in INBOX.
+
+    Args:
+        client: Connected IMAPClient.
+        email_id: The UID of the email to fetch context for.
+
+    Returns:
+        ReplyContext with threading and recipient info.
+
+    Raises:
+        RuntimeError: If the email is not found or has no Message-ID.
+    """
+    client.select_folder("INBOX", readonly=True)
+
+    uid = int(email_id)
+    fetch_data = client.fetch([uid], ["ENVELOPE", "RFC822.HEADER"])
+
+    if uid not in fetch_data:
+        raise RuntimeError(f"Email with UID {email_id} not found")
+
+    data = fetch_data[uid]
+    envelope: Any = data.get(b"ENVELOPE")
+    if not envelope:
+        raise RuntimeError(f"Email with UID {email_id} has no envelope data")
+
+    # Message-ID is required for threading
+    if not envelope.message_id:
+        raise RuntimeError(f"Email with UID {email_id} has no Message-ID header")
+    message_id = _decode_bytes(envelope.message_id)
+
+    # Parse References from raw headers
+    raw_headers: bytes = data.get(b"RFC822.HEADER", b"")  # type: ignore[assignment]
+    references = _extract_references(raw_headers)
+
+    # Extract raw email address from envelope fields
+    from_addr = _extract_email_address(envelope.from_)
+    to = _extract_all_email_addresses(envelope.to)
+    cc = _extract_all_email_addresses(envelope.cc)
+
+    subject = _decode_header(envelope.subject)
+
+    return ReplyContext(
+        message_id=message_id,
+        references=references,
+        from_addr=from_addr,
+        to=to,
+        cc=cc,
+        subject=subject,
+    )
+
+
 def mark_as_read(client: IMAPClient, email_id: str) -> None:
     """Mark an email as read by setting the Seen flag.
 
@@ -673,6 +749,62 @@ async def send_email(config: SmtpConfig, to: str, subject: str, body: str) -> No
     )
 
 
+async def reply_to_email(
+    config: SmtpConfig,
+    context: ReplyContext,
+    body: str,
+    reply_all: bool,
+    sender_address: str,
+) -> None:
+    """Send a reply to an existing email with proper threading headers.
+
+    Builds In-Reply-To, References, and Re: subject prefix.
+    For reply_all, CCs all original To/CC recipients minus the sender.
+
+    Args:
+        config: SMTP server connection parameters.
+        context: Reply context from the original email.
+        body: Reply body text.
+        reply_all: If True, CC all original To/CC recipients (minus sender).
+        sender_address: The current user's email address (excluded from CC).
+
+    Raises:
+        Exception: If SMTP send fails.
+    """
+    msg = EmailMessage()
+    msg["From"] = sender_address
+    msg["To"] = context.from_addr
+
+    # Build CC list for reply-all: original To + CC, minus our own address
+    if reply_all:
+        cc_addrs = [
+            addr for addr in context.to + context.cc
+            if addr.lower() != sender_address.lower()
+        ]
+        if cc_addrs:
+            msg["Cc"] = ", ".join(cc_addrs)
+
+    # Add Re: prefix only if not already present (case-insensitive)
+    subject = context.subject if re.match(r"^re:", context.subject, re.IGNORECASE) else f"Re: {context.subject}"
+    msg["Subject"] = subject
+
+    # Threading headers
+    msg["In-Reply-To"] = context.message_id
+    msg["References"] = " ".join([*context.references, context.message_id])
+
+    msg.set_content(body)
+
+    await aiosmtplib.send(
+        msg,
+        hostname=config.host,
+        port=config.port,
+        username=config.user,
+        password=config.password,
+        use_tls=config.port == 465,
+        start_tls=config.port == 587,
+    )
+
+
 def send_draft(client: IMAPClient, config: SmtpConfig, draft_uid: str) -> None:
     """Fetch a draft from IMAP Drafts, extract to/subject/body, send via SMTP, delete draft.
 
@@ -813,6 +945,45 @@ def _format_address(addresses: tuple | None) -> str:
     if name:
         return f"{name} <{email_addr}>"
     return email_addr or "(unknown)"
+
+
+def _extract_email_address(addresses: tuple | None) -> str:
+    """Extract the raw email address from the first entry in an IMAP envelope address tuple.
+
+    Args:
+        addresses: Tuple of address objects from ENVELOPE, or None.
+
+    Returns:
+        Raw email address string (e.g. "alice@example.com").
+    """
+    if not addresses:
+        return ""
+
+    addr = addresses[0]
+    mailbox = _decode_bytes(addr.mailbox) if addr.mailbox else ""
+    host = _decode_bytes(addr.host) if addr.host else ""
+    return f"{mailbox}@{host}" if mailbox and host else ""
+
+
+def _extract_all_email_addresses(addresses: tuple | None) -> list[str]:
+    """Extract raw email addresses from ALL entries in an IMAP envelope address tuple.
+
+    Args:
+        addresses: Tuple of address objects from ENVELOPE, or None.
+
+    Returns:
+        List of raw email address strings.
+    """
+    if not addresses:
+        return []
+
+    result: list[str] = []
+    for addr in addresses:
+        mailbox = _decode_bytes(addr.mailbox) if addr.mailbox else ""
+        host = _decode_bytes(addr.host) if addr.host else ""
+        if mailbox and host:
+            result.append(f"{mailbox}@{host}")
+    return result
 
 
 def _decode_bytes(value: bytes | str | None) -> str:
