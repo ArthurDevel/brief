@@ -8,6 +8,11 @@ Tests the following built-in replacements:
   4. IdleFrameProcessor instead of custom AudioFrameWatchdog
   5. Built-in timeout_secs on register_function() instead of manual asyncio.wait_for()
   6. AudioBufferProcessor instead of custom AudioRecorder + combine_wav_buffers
+  7. AudioSpeedProcessor (WSOLA) in the new pipeline chain at 8kHz
+  8. AudioNormalizerProcessor (RMS) in the new pipeline chain at 8kHz
+  9. HTTP TTS narration via Deepgram REST API (workaround for Framework Gap #3)
+  10. asyncio.Lock + asyncio.to_thread() for blocking tool calls (IMAP pattern)
+  11. Flux STT cleanup without the cancel_stt_tasks() hack
 
 Key differences from our custom transport (apps/voice-pipeline/src/transports/twilio.py):
   - No manual mulaw<->PCM16 transcoding -- TwilioFrameSerializer uses SOXR internally
@@ -31,25 +36,39 @@ Key differences from our custom processors:
   - No two AudioRecorder instances + combine_wav_buffers -- AudioBufferProcessor handles
     user/bot track separation, buffer synchronization (silence padding), and mixing
     natively. Only WAV wrapping + upload remain custom.
+
+Key differences from our tool handler setup:
+  - FunctionCallParams dataclass replaces the old 6-arg handler signature
+  - asyncio.Lock + asyncio.to_thread() pattern validated with FunctionCallParams
+  - HTTP TTS narration pushes TTSAudioRawFrame via llm.push_frame() before tool execution
+    (bypasses websocket TTS service, avoids Framework Gap #3)
+  - cancel_stt_tasks() hack removed -- Flux handles cleanup via _disconnect_websocket()
+
+Pipeline chain:
+  transport.input() -> watchdog -> stt -> user_agg -> llm -> tts
+  -> speed -> normalizer -> transport.output() -> audio_buffer -> assistant_agg
 """
 
 from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import os
 import random
+import time
 import wave
 from typing import Any
 
+import aiohttp
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import PlainTextResponse
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.frames.frames import InputAudioRawFrame, LLMRunFrame
+from pipecat.frames.frames import InputAudioRawFrame, LLMRunFrame, TTSAudioRawFrame
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -68,6 +87,12 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
+
+# Import our custom processors (legitimately custom, not replaceable)
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "apps", "voice-pipeline"))
+from src.audio.speed import AudioSpeedProcessor
+from src.audio.normalizer import AudioNormalizerProcessor
 
 load_dotenv()
 
@@ -93,6 +118,7 @@ SYSTEM_PROMPT = (
 TTS_VOICE = "aura-2-thalia-en"
 LLM_MODEL = "google/gemini-2.5-flash"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEEPGRAM_HTTP_TTS_URL = "https://api.deepgram.com/v1/speak"
 
 # Timeout for audio watchdog -- cancels pipeline if no audio arrives for this long.
 # Replaces our custom AudioFrameWatchdog (src/audio/watchdog.py).
@@ -106,6 +132,16 @@ TOOL_CALL_TIMEOUT_SECS = 8.0
 # Directory for saving recordings in this test script.
 # In production, recordings are uploaded to Supabase Storage instead.
 RECORDINGS_DIR = "output"
+
+# Short phrases spoken via HTTP TTS before a tool executes, so the user isn't
+# waiting in silence. Mirrors TOOL_NARRATIONS from pipeline.py.
+# Uses Deepgram REST API (not websocket TTS) to avoid Framework Gap #3.
+TOOL_NARRATIONS: dict[str, str] = {
+    "get_weather": "Checking the weather.",
+    "check_calendar": "Checking the calendar.",
+    "set_reminder": "Setting that reminder.",
+    "book_flight": "Looking into that flight.",
+}
 
 # Tool definitions for testing register_function() with timeout_secs.
 TOOLS = ToolsSchema(
@@ -184,6 +220,130 @@ def _write_wav(pcm_data: bytes, sample_rate: int, num_channels: int) -> bytes:
         wf.setframerate(sample_rate)
         wf.writeframes(pcm_data)
     return buf.getvalue()
+
+
+async def _cancel_stt_tasks(stt: DeepgramFluxSTTService) -> None:
+    """Force-cancel dangling asyncio tasks owned by the STT service.
+
+    After the pipeline runner returns, Deepgram STT (both standard and Flux)
+    may still have dangling tasks stuck in a reconnect loop. This function
+    accesses the private _task_manager to cancel them.
+
+    No public API exists for this. May break on pipecat upgrades.
+
+    Args:
+        stt: The DeepgramFluxSTTService instance to clean up.
+    """
+    if not hasattr(stt, "_task_manager") or stt._task_manager is None:
+        return
+
+    tasks = stt._task_manager.current_tasks()
+    if not tasks:
+        return
+
+    for t in tasks:
+        t.cancel()
+
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[cleanup] Timed out waiting for %d STT tasks to cancel", len(tasks))
+
+    logger.info("[cleanup] Cancelled %d dangling STT task(s)", len(tasks))
+
+
+async def _synthesize_narration(
+    text: str,
+    api_key: str,
+    sample_rate: int,
+    voice: str,
+    http_session: aiohttp.ClientSession,
+) -> bytes:
+    """Synthesize a short phrase using Deepgram's HTTP TTS API.
+
+    Uses the REST endpoint instead of the websocket TTS service to avoid
+    Framework Gap #3 (websocket TTS context gets cleaned up before audio
+    chunks arrive, breaking the pipeline).
+
+    Args:
+        text: The phrase to synthesize.
+        api_key: Deepgram API key.
+        sample_rate: Audio sample rate in Hz.
+        voice: Deepgram voice model name.
+        http_session: Shared aiohttp session for connection pooling.
+
+    Returns:
+        Raw PCM linear16 audio bytes.
+    """
+    headers = {"Authorization": f"Token {api_key}", "Content-Type": "application/json"}
+    params = {
+        "model": voice,
+        "encoding": "linear16",
+        "sample_rate": sample_rate,
+        "container": "none",
+    }
+
+    async with http_session.post(
+        DEEPGRAM_HTTP_TTS_URL, headers=headers, json={"text": text}, params=params
+    ) as resp:
+        if resp.status != 200:
+            error_text = await resp.text()
+            raise RuntimeError(f"Deepgram HTTP TTS failed ({resp.status}): {error_text}")
+        return await resp.read()
+
+
+def _simulate_blocking_tool_call(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Simulate a blocking tool call (like IMAP) that runs on a thread.
+
+    In production, this would be handle_tool_call() from tools/handlers.py
+    which does synchronous IMAP operations. Here we use time.sleep() to
+    simulate the blocking I/O.
+
+    Args:
+        tool_name: Name of the tool being called.
+        arguments: Tool arguments from the LLM.
+
+    Returns:
+        Result dict with status, result, and message fields.
+    """
+    time.sleep(0.5)  # simulate blocking I/O (like IMAP fetch)
+
+    if tool_name == "get_weather":
+        location = arguments.get("location", "unknown")
+        conditions = random.choice(["sunny", "cloudy", "rainy", "partly cloudy"])
+        temp = random.randint(5, 35)
+        return {
+            "status": "success",
+            "result": f"{conditions} and {temp} degrees celsius",
+            "message": f"Weather for {location}",
+        }
+    elif tool_name == "check_calendar":
+        user_name = arguments.get("user_name", "unknown")
+        return {
+            "status": "success",
+            "result": "standup at 9:30 AM, design review at 2:00 PM",
+            "message": f"Calendar for {user_name}",
+        }
+    elif tool_name == "set_reminder":
+        message = arguments.get("message", "")
+        minutes = arguments.get("minutes_from_now", 0)
+        return {
+            "status": "success",
+            "result": f"Reminder set for {minutes} minutes from now",
+            "message": message,
+        }
+    elif tool_name == "book_flight":
+        destination = arguments.get("destination", "unknown")
+        return {
+            "status": "error",
+            "result": None,
+            "message": f"Booking service unavailable for {destination}",
+        }
+    else:
+        raise NotImplementedError(f"Unknown tool: {tool_name}")
 
 
 # ============================================================================
@@ -272,92 +432,116 @@ async def twilio_stream(websocket: WebSocket) -> None:
     tts = DeepgramTTSService(
         api_key=os.environ["DEEPGRAM_API_KEY"],
         voice=TTS_VOICE,
+        sample_rate=TWILIO_SAMPLE_RATE,
         text_filter=MarkdownTextFilter(),
     )
 
-    # -- Step 5: Set up LLM context with system prompt and tools.
+    # -- Step 5: Audio speed processor (WSOLA) and normalizer (RMS).
+    # These are legitimately custom -- pipecat has no equivalent.
+    # They intercept TTSAudioRawFrame and process audio in-place.
+    # Both work at any sample rate (configured via constructor).
+    speed_config: dict[str, Any] = {"speed": 1.0}
+    speed_processor = AudioSpeedProcessor(
+        config=speed_config,
+        sample_rate=TWILIO_SAMPLE_RATE,
+        num_channels=1,
+    )
+
+    normalizer_config: dict[str, Any] = {"enabled": True}
+    normalizer = AudioNormalizerProcessor(
+        config=normalizer_config,
+        sample_rate=TWILIO_SAMPLE_RATE,
+    )
+
+    # -- Step 6: Set up LLM context with system prompt and tools.
     context = LLMContext(
         messages=[{"role": "system", "content": SYSTEM_PROMPT}],
         tools=TOOLS,
     )
     context_aggregator = LLMContextAggregatorPair(context)
 
-    # -- Step 6: Register tool handlers with built-in timeout.
-    # Replaces our manual asyncio.wait_for() wrapper in pipeline.py.
-    # timeout_secs is passed directly to register_function() -- pipecat handles
-    # the timeout internally, removing the need for custom timeout management.
+    # -- Step 7: Register tool handlers with built-in timeout.
+    # Mirrors production's _register_tool_handler pattern:
+    #   - asyncio.Lock serializes access (imapclient is not thread-safe)
+    #   - asyncio.to_thread() offloads blocking I/O to a thread
+    #   - HTTP TTS narration speaks a filler phrase before execution
+    #   - Errors are caught and returned via result_callback (Framework Gap #1)
+    #   - FunctionCallParams replaces the old 6-arg handler signature
+    tool_lock = asyncio.Lock()
+    deepgram_api_key = os.environ["DEEPGRAM_API_KEY"]
 
-    async def handle_get_weather(params: FunctionCallParams) -> None:
-        """Mock weather lookup. Simulates a short API delay."""
-        location = params.arguments.get("location", "unknown")
-        logger.info("[tool] get_weather called for location=%s", location)
-        await asyncio.sleep(0.5)  # simulate API call
-        conditions = random.choice(["sunny", "cloudy", "rainy", "partly cloudy"])
-        temp = random.randint(5, 35)
-        await params.result_callback(
-            f"{conditions} and {temp} degrees celsius in {location}."
-        )
+    # Shared HTTP session for narration TTS calls. Created once, closed after pipeline ends.
+    narration_http_session: aiohttp.ClientSession | None = None
 
-    async def handle_check_calendar(params: FunctionCallParams) -> None:
-        """Mock calendar lookup. Returns fake events."""
-        user_name = params.arguments.get("user_name", "unknown")
-        logger.info("[tool] check_calendar called for user_name=%s", user_name)
-        await asyncio.sleep(0.3)  # simulate DB query
-        await params.result_callback(
-            f"{user_name} has 2 events today: "
-            "standup at 9:30 AM and a design review at 2:00 PM."
-        )
+    async def _get_narration_session() -> aiohttp.ClientSession:
+        """Lazy-create a shared aiohttp session for narration TTS calls."""
+        nonlocal narration_http_session
+        if narration_http_session is None:
+            narration_http_session = aiohttp.ClientSession()
+        return narration_http_session
 
-    async def handle_set_reminder(params: FunctionCallParams) -> None:
-        """Mock reminder setter. Logs the reminder and confirms."""
-        message = params.arguments.get("message", "")
-        minutes = params.arguments.get("minutes_from_now", 0)
-        logger.info("[tool] set_reminder: '%s' in %d minutes", message, minutes)
-        await params.result_callback(
-            f"Reminder set: '{message}' in {minutes} minutes."
-        )
+    async def _tool_handler(params: FunctionCallParams) -> None:
+        """Generic tool handler that mirrors the production pattern.
 
-    async def handle_book_flight(params: FunctionCallParams) -> None:
-        """Mock flight booking that always fails.
+        1. Speak a narration phrase via HTTP TTS (if configured)
+        2. Acquire the shared lock (serializes blocking calls)
+        3. Run the blocking tool call on a thread
+        4. Return the result via result_callback
 
-        Returns the error via result_callback so the LLM can inform the user.
+        FRAMEWORK GAP #1 (pipecat v0.0.107): Never let exceptions propagate.
+        Pipecat's _run_function_call catches exceptions but never calls
+        result_callback, causing the pipeline to freeze. Always catch and
+        return errors via result_callback.
 
-        FRAMEWORK GAP #1 (2026-03-27, pipecat v0.0.107): Raising an exception here
-        would cause the pipeline to freeze. Pipecat's _run_function_call catches
-        the exception and pushes a non-fatal ErrorFrame, but never calls
-        result_callback. The function call stays stuck in _function_calls_in_progress
-        forever, and the LLM never gets a tool result back.
-        Workaround: always catch errors inside the handler and return them via
-        result_callback. Never let exceptions propagate out of a tool handler.
-        See: https://github.com/pipecat-ai/pipecat/issues/1735
-        See: https://github.com/pipecat-ai/pipecat/issues/2179
-
-        FRAMEWORK GAP #2 (2026-03-27, pipecat v0.0.107): Tool handlers that complete
-        instantly cause a race condition. The FunctionCallResultFrame arrives at the
-        assistant aggregator before the FunctionCallsStartedFrame (which must travel
-        through the full pipeline: LLM -> TTS -> transport -> audio_buffer ->
-        aggregator). The aggregator drops the result because the tool_call_id is not
-        yet in _function_calls_in_progress, and the pipeline freezes.
-        Workaround: yield to the event loop (asyncio.sleep(0)) so the started frame
-        propagates first.
-        See: https://github.com/pipecat-ai/pipecat/issues/3661
+        Args:
+            params: FunctionCallParams with function_name, arguments, result_callback.
         """
-        destination = params.arguments.get("destination", "unknown")
-        logger.info("[tool] book_flight called for destination=%s", destination)
+        tool_name = params.function_name
+        arguments = params.arguments
 
-        # Yield to event loop so FunctionCallsStartedFrame reaches the aggregator
-        # before our result does. See FRAMEWORK GAP #2 above.
-        await asyncio.sleep(0)
+        # Speak narration so the user knows something is happening.
+        # Uses Deepgram HTTP TTS (not websocket) to avoid Framework Gap #3.
+        narration = TOOL_NARRATIONS.get(tool_name)
+        if narration:
+            try:
+                session = await _get_narration_session()
+                audio_bytes = await _synthesize_narration(
+                    narration, deepgram_api_key, TWILIO_SAMPLE_RATE, TTS_VOICE, session,
+                )
+                await llm.push_frame(TTSAudioRawFrame(
+                    audio=audio_bytes,
+                    sample_rate=TWILIO_SAMPLE_RATE,
+                    num_channels=1,
+                ))
+            except Exception as e:
+                logger.warning("[tool] Narration failed for [%s]: %s", tool_name, e)
 
-        await params.result_callback(
-            f"ERROR: Booking service is currently unavailable for {destination}. "
-            "Please try again later."
-        )
+        start_ms = time.time() * 1000
+        try:
+            # Lock serializes access -- in production this prevents concurrent
+            # IMAP operations on a non-thread-safe imapclient connection.
+            async with tool_lock:
+                result = await asyncio.to_thread(
+                    _simulate_blocking_tool_call, tool_name, dict(arguments),
+                )
 
-    llm.register_function("get_weather", handle_get_weather, timeout_secs=TOOL_CALL_TIMEOUT_SECS)
-    llm.register_function("check_calendar", handle_check_calendar, timeout_secs=TOOL_CALL_TIMEOUT_SECS)
-    llm.register_function("set_reminder", handle_set_reminder, timeout_secs=TOOL_CALL_TIMEOUT_SECS)
-    llm.register_function("book_flight", handle_book_flight, timeout_secs=TOOL_CALL_TIMEOUT_SECS)
+            result_str = json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            logger.error("[tool] [%s] failed: %s", tool_name, e)
+            result = {
+                "status": "error",
+                "result": None,
+                "message": str(e),
+            }
+            result_str = json.dumps(result, ensure_ascii=False)
+
+        duration_ms = time.time() * 1000 - start_ms
+        logger.info("[tool] [%s] completed in %.0fms: %s", tool_name, duration_ms, result.get("status"))
+
+        await params.result_callback(result_str)
+
+    for tool_name in ["get_weather", "check_calendar", "set_reminder", "book_flight"]:
+        llm.register_function(tool_name, _tool_handler, timeout_secs=TOOL_CALL_TIMEOUT_SECS)
 
     # FRAMEWORK GAP #3 (2026-03-27, pipecat v0.0.107): The official pipecat example
     # uses tts.queue_frame(TTSSpeakFrame("Let me check on that.")) inside
@@ -365,14 +549,13 @@ async def twilio_stream(websocket: WebSocket) -> None:
     # the TTS context -- the context gets cleaned up immediately after creation,
     # all audio frames fail with "unable to append audio to context", and the TTS
     # gets stuck, blocking the FunctionCallResultFrame from passing through the
-    # pipeline. Removing the TTSSpeakFrame fixes the freeze. The official example
-    # likely only works when function calls take significant time (real API calls).
+    # pipeline. Our HTTP TTS narration inside the handler sidesteps this entirely.
     @llm.event_handler("on_function_calls_started")
     async def on_function_calls_started(service: Any, function_calls: list[Any]) -> None:
         names = [fc.function_name for fc in function_calls]
         logger.info("[tool] Function calls started: %s", names)
 
-    # -- Step 7: Set up audio idle watchdog.
+    # -- Step 8: Set up audio idle watchdog.
     # IdleFrameProcessor replaces our custom AudioFrameWatchdog (src/audio/watchdog.py).
     # It monitors InputAudioRawFrame arrival and fires the callback after timeout.
     # No manual background task or set_task() wiring needed.
@@ -386,7 +569,7 @@ async def twilio_stream(websocket: WebSocket) -> None:
         types=[InputAudioRawFrame],
     )
 
-    # -- Step 8: Set up audio recording.
+    # -- Step 9: Set up audio recording.
     # AudioBufferProcessor replaces our two custom AudioRecorder instances + combine_wav_buffers
     # (src/audio/recorder.py). It handles:
     #   - Separate user/bot track capture (via on_track_audio_data event)
@@ -435,9 +618,10 @@ async def twilio_stream(websocket: WebSocket) -> None:
                 f.write(wav_bytes)
             logger.info("[recorder] Saved %s track: %s (%d bytes)", label, filepath, len(wav_bytes))
 
-    # -- Step 9: Build the pipeline.
-    # AudioBufferProcessor goes after transport.output() to capture both user and bot audio.
-    # This matches the placement in pipecat's official examples.
+    # -- Step 10: Build the pipeline.
+    # Speed processor and normalizer sit between TTS and transport.output(),
+    # matching production's pipeline chain. AudioBufferProcessor goes after
+    # transport.output() to capture the final (speed-adjusted, normalized) audio.
     pipeline = Pipeline([
         transport.input(),
         audio_watchdog,
@@ -445,6 +629,8 @@ async def twilio_stream(websocket: WebSocket) -> None:
         context_aggregator.user(),
         llm,
         tts,
+        speed_processor,
+        normalizer,
         transport.output(),
         audio_buffer,
         context_aggregator.assistant(),
@@ -459,7 +645,7 @@ async def twilio_stream(websocket: WebSocket) -> None:
         ),
     )
 
-    # -- Step 10: Set up event handlers.
+    # -- Step 11: Set up event handlers.
     # on_client_connected: start recording and send a greeting.
     @transport.event_handler("on_client_connected")
     async def on_connected(transport_instance: Any, client: Any) -> None:
@@ -476,13 +662,25 @@ async def twilio_stream(websocket: WebSocket) -> None:
         logger.info("[twilio] Client disconnected, cancelling pipeline")
         await task.cancel()
 
-    # -- Step 11: Run the pipeline.
+    # -- Step 12: Run the pipeline.
     # handle_sigint=False because we're inside FastAPI (uvicorn handles signals).
     # force_gc=True to clean up after each pipeline run in multi-client apps.
     runner = PipelineRunner(handle_sigint=False, force_gc=True)
     logger.info("[twilio] Starting pipeline for user_id=%s", user_id)
     await runner.run(task)
     logger.info("[twilio] Pipeline finished for user_id=%s", user_id)
+
+    # -- Step 13: Force-cancel dangling STT tasks.
+    # Despite Flux's better task management (_disconnect_websocket cancels
+    # _receive_task and _watchdog_task with 2s timeouts), it still leaves
+    # dangling tasks behind. The cancel_stt_tasks() hack is still needed.
+    # This is a known pipecat gap with no public API -- we access _task_manager
+    # directly. May break on pipecat upgrades.
+    await _cancel_stt_tasks(stt)
+
+    # Close the shared HTTP session used for narration TTS
+    if narration_http_session is not None:
+        await narration_http_session.close()
 
 
 # ============================================================================

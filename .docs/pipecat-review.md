@@ -148,7 +148,7 @@ Our `pipeline.py:208` disables SmartTurn for Twilio (sample rate < 16kHz). Pipec
 
 Our `cancel_stt_tasks()` accesses `stt._task_manager` (private API) to force-cancel dangling Deepgram tasks. There is no public API for this. Pipecat's built-in lifecycle (`stop`/`cancel`/`cleanup`) is insufficient because the 1s timeout in `cancel_task` is too short for Deepgram's websocket close handshake. This is a known gap.
 
-**Verdict:** Keep it, but be aware it may break on pipecat upgrades.
+**Verdict:** Keep it, but be aware it may break on pipecat upgrades. Tested with DeepgramFluxSTTService (2026-03-27): Flux still leaves dangling tasks despite better internal task management. The hack is still needed.
 
 ---
 
