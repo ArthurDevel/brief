@@ -26,10 +26,17 @@ from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from pipecat.frames.frames import InputAudioRawFrame, LLMRunFrame, TTSAudioRawFrame
+from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.runner import PipelineRunner
+from pipecat.runner.utils import parse_telephony_websocket
+from pipecat.serializers.twilio import TwilioFrameSerializer
+from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
+from pipecat.transports.websocket.fastapi import (
+    FastAPIWebsocketParams,
+    FastAPIWebsocketTransport,
+)
 from aiortc import RTCIceServer
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.request_handler import (
@@ -38,7 +45,6 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from src.audio.recorder import AudioRecorder, combine_wav_buffers, upload_recording
 from src.auth.jwt_auth import verify_token
 from src.auth.twilio_auth import (
     MAX_NO_INPUT_REPEATS,
@@ -61,9 +67,7 @@ from src.session import end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
 from src.tools.email_client import close_imap_connection, create_imap_connection
 from src.tools import contact_sync
-from src.transports.twilio import TwilioTransport, TwilioParams
 from src import session_logger
-from pipecat.services.deepgram.stt import DeepgramSTTService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -73,7 +77,8 @@ logger = logging.getLogger(__name__)
 # CONSTANTS
 # ============================================================================
 
-TWILIO_PIPELINE_SAMPLE_RATE = 16000
+TWILIO_PIPELINE_SAMPLE_RATE = 8000
+WEBRTC_PIPELINE_SAMPLE_RATE = 16000
 METERED_CREDENTIALS_URL = "https://0x41.metered.live/api/v1/turn/credentials"
 
 
@@ -206,18 +211,19 @@ async def _fetch_ice_servers(api_key: str) -> list[RTCIceServer]:
         return _to_rtc_ice_servers(resp.json())
 
 
-async def cancel_stt_tasks(stt: DeepgramSTTService) -> None:
+async def cancel_stt_tasks(stt: DeepgramFluxSTTService) -> None:
     """Cancel any surviving asyncio tasks owned by the STT service's task manager.
 
-    After the pipeline runner returns, the Deepgram STT service may still have
-    dangling tasks (e.g. connection_handler, keepalive) stuck in a reconnect
-    loop. This function force-cancels them so they do not leak across sessions.
+    After the pipeline runner returns, the Deepgram Flux STT service may still
+    have dangling tasks stuck in a reconnect loop. This function force-cancels
+    them so they do not leak across sessions.
+
+    No public API exists for this. May break on pipecat upgrades.
 
     Args:
-        stt: The DeepgramSTTService instance whose tasks should be cancelled.
+        stt: The DeepgramFluxSTTService instance whose tasks should be cancelled.
     """
-    if stt._task_manager is None:
-        logger.warning("[server] STT task manager is None -- cannot cancel dangling tasks")
+    if not hasattr(stt, "_task_manager") or stt._task_manager is None:
         return
 
     tasks = stt._task_manager.current_tasks()
@@ -243,14 +249,17 @@ async def cancel_stt_tasks(stt: DeepgramSTTService) -> None:
 # ============================================================================
 
 async def _setup_pipeline_session(transport, user_context, settings, supabase, transport_type):
-    """Set up a pipeline session: create session, IMAP connection, cost tracker, and pipeline task.
+    """Set up a pipeline session: create session, IMAP connection, cost tracker, and pipeline.
 
     Args:
-        transport: Pipecat transport (SmallWebRTC or Twilio).
+        transport: Pipecat transport (SmallWebRTC or FastAPIWebsocketTransport).
         user_context: Loaded user context with IMAP/SMTP config.
         settings: App settings.
         supabase: Supabase client.
         transport_type: "webrtc" or "twilio".
+
+    Returns:
+        Tuple of (pipeline_result, session, cost_tracker, langfuse_observer, imap_holder).
     """
     session = start_session(user_context.user_id, supabase)
     session_logger.start(session.session_id)
@@ -266,18 +275,13 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
     }
 
     try:
+        # Sample rate depends on transport: 8kHz for Twilio (mulaw native),
+        # 16kHz for WebRTC (Flux STT native rate)
+        sample_rate = TWILIO_PIPELINE_SAMPLE_RATE if transport_type == "twilio" else WEBRTC_PIPELINE_SAMPLE_RATE
         audio_config = {
-            "sample_rate": 16000,
+            "sample_rate": sample_rate,
             "num_channels": 1,
         }
-
-        # Create audio recorders if recording is enabled
-        user_recorder: AudioRecorder | None = None
-        assistant_recorder: AudioRecorder | None = None
-        if settings.recording_enabled:
-            user_recorder = AudioRecorder(target_frame_type=InputAudioRawFrame)
-            assistant_recorder = AudioRecorder(target_frame_type=TTSAudioRawFrame)
-            logger.info("[server] Recording enabled for session %s", session.session_id)
 
         pipeline_result = create_pipeline(
             transport=transport,
@@ -290,11 +294,8 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             supabase=supabase,
             settings=settings,
             imap_holder=imap_holder,
-            user_recorder=user_recorder,
-            assistant_recorder=assistant_recorder,
+            recording_enabled=settings.recording_enabled,
         )
-        task = pipeline_result.task
-        stt = pipeline_result.stt
 
         # Register so lifespan shutdown can finalize if the process is killed
         _live_pipeline_sessions[session.session_id] = {
@@ -304,11 +305,10 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             "imap_holder": imap_holder,
             "supabase": supabase,
             "settings": settings,
-            "user_recorder": user_recorder,
-            "assistant_recorder": assistant_recorder,
+            "narration_http_session": pipeline_result.narration_http_session,
         }
 
-        return task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder, stt
+        return pipeline_result, session, cost_tracker, langfuse_observer, imap_holder
 
     except Exception:
         session_logger.stop(session.session_id)
@@ -326,13 +326,12 @@ async def _cleanup_session(
     session,
     supabase,
     settings,
-    user_recorder: AudioRecorder | None = None,
-    assistant_recorder: AudioRecorder | None = None,
+    narration_http_session: dict[str, Any] | None = None,
 ) -> None:
     """Clean up after a pipeline session ends.
 
     Fetches actual LLM costs from OpenRouter before finalizing the session.
-    If recorders are provided, combines and uploads the recording.
+    Closes the narration HTTP session if one was created.
 
     Args:
         imap_holder: Mutable IMAP client holder.
@@ -341,8 +340,7 @@ async def _cleanup_session(
         session: Active session to finalize.
         supabase: Supabase client.
         settings: App settings (for OpenRouter API key).
-        user_recorder: AudioRecorder for user audio, or None.
-        assistant_recorder: AudioRecorder for assistant audio, or None.
+        narration_http_session: Mutable dict holding the shared aiohttp session, or None.
     """
     try:
         close_imap_connection(imap_holder["client"])
@@ -373,15 +371,12 @@ async def _cleanup_session(
     if session_ended:
         await _trigger_end_of_session_hook(session.session_id, settings.web_app_url, settings.internal_api_key)
 
-    # Combine and upload call recording if recorders were active
-    if user_recorder is not None and assistant_recorder is not None:
+    # Close the narration HTTP session if one was lazily created
+    if narration_http_session is not None and narration_http_session.get("session") is not None:
         try:
-            user_buffer = user_recorder.get_buffer()
-            assistant_buffer = assistant_recorder.get_buffer()
-            wav_bytes = combine_wav_buffers(user_buffer, assistant_buffer)
-            await upload_recording(session.session_id, wav_bytes, supabase)
-        except Exception as exc:
-            logger.error("[server] Recording upload failed for session %s: %s", session.session_id, exc)
+            await narration_http_session["session"].close()
+        except BaseException as exc:
+            logger.warning("[server] Error closing narration HTTP session: %s", exc)
 
     # Capture and upload session logs
     log_text = session_logger.stop(session.session_id)
@@ -437,17 +432,20 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         ),
     )
 
-    task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder, stt = await _setup_pipeline_session(
+    pipeline_result, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
         transport, user_context, settings, supabase, transport_type="webrtc"
     )
+    task = pipeline_result.task
 
     @transport.event_handler("on_client_connected")
-    async def on_client_connected(transport, client):
+    async def on_client_connected(transport_instance, client):
         logger.info("[server] WebRTC client connected, sending greeting")
+        if pipeline_result.audio_buffer:
+            await pipeline_result.audio_buffer.start_recording()
         await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
-    async def on_client_disconnected(transport, client):
+    async def on_client_disconnected(transport_instance, client):
         logger.info("[server] WebRTC client disconnected")
         await task.cancel()
 
@@ -455,10 +453,10 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        await cancel_stt_tasks(stt)
+        await cancel_stt_tasks(pipeline_result.stt)
         await _cleanup_session(
             imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
-            user_recorder=user_recorder, assistant_recorder=assistant_recorder,
+            narration_http_session=pipeline_result.narration_http_session,
         )
 
 
@@ -537,8 +535,7 @@ async def lifespan(app: FastAPI):
                 info["session"],
                 info["supabase"],
                 info["settings"],
-                user_recorder=info.get("user_recorder"),
-                assistant_recorder=info.get("assistant_recorder"),
+                narration_http_session=info.get("narration_http_session"),
             )
         except BaseException as exc:
             logger.error("[server] Failed to finalize session %s: %s", sid, exc)
@@ -915,30 +912,32 @@ async def twilio_scheduled_call(request: Request) -> Response:
 async def twilio_stream_ws(websocket: WebSocket) -> None:
     """Handle Twilio media stream WebSocket connections.
 
+    Uses parse_telephony_websocket() to extract stream metadata, then builds
+    a pipeline with TwilioFrameSerializer + FastAPIWebsocketTransport.
+
     userId is passed via <Parameter> in TwiML. Twilio delivers it in
-    the "start" event's customParameters. We intercept the first messages
-    to extract it, then replay them into a queue so the TwilioTransport
-    read loop still sees them.
+    the "start" event's customParameters, available via call_data["body"].
     """
     await websocket.accept()
 
-    # Buffer early messages so the transport can replay them
-    buffered_messages: list[str] = []
-    user_id = ""
-
-    for _ in range(5):
-        raw = await websocket.receive_text()
-        buffered_messages.append(raw)
-        msg = json.loads(raw)
-        if msg.get("event") == "start":
-            custom_params = msg.get("start", {}).get("customParameters", {})
-            user_id = custom_params.get("userId", "")
-            break
+    # parse_telephony_websocket reads the "connected" and "start" messages,
+    # returning (transport_type, call_data). After this call, subsequent
+    # messages flow through the transport's receive loop.
+    _transport_type, call_data = await parse_telephony_websocket(websocket)
+    stream_sid: str = call_data.get("stream_id", "")
+    call_sid: str = call_data.get("call_id", "")
+    body: dict[str, Any] = call_data.get("body", {})
+    user_id: str = body.get("userId", "")
 
     if not user_id:
         logger.error("[twilio] No userId in stream start message")
         await websocket.close(code=1008, reason="Missing userId")
         return
+
+    logger.info(
+        "[twilio] Stream metadata: stream_sid=%s, call_sid=%s, user_id=%s",
+        stream_sid, call_sid, user_id,
+    )
 
     settings = load_settings()
     supabase = create_service_client(settings)
@@ -947,38 +946,48 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
 
     user_context = load_user_context(user_id, supabase)
 
-    transport = TwilioTransport(
+    # TwilioFrameSerializer handles mulaw 8kHz <-> PCM16 transcoding via SOXR
+    serializer = TwilioFrameSerializer(
+        stream_sid=stream_sid,
+        call_sid=call_sid,
+        params=TwilioFrameSerializer.InputParams(auto_hang_up=False),
+    )
+
+    transport = FastAPIWebsocketTransport(
         websocket=websocket,
-        params=TwilioParams(
+        params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            vad_enabled=False,
+            serializer=serializer,
         ),
-        pipeline_sample_rate=TWILIO_PIPELINE_SAMPLE_RATE,
-        buffered_messages=buffered_messages,
     )
 
-    task, session, cost_tracker, langfuse_observer, imap_holder, user_recorder, assistant_recorder, stt = await _setup_pipeline_session(
+    pipeline_result, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
         transport, user_context, settings, supabase, transport_type="twilio"
     )
+    task = pipeline_result.task
 
-    # Let the input transport cancel the pipeline when the caller hangs up,
-    # mirroring WebRTC's on_client_disconnected handler.
-    transport.input().set_pipeline_task(task)
-
-    async def _send_greeting():
-        await asyncio.sleep(0.5)
+    @transport.event_handler("on_client_connected")
+    async def on_client_connected(transport_instance, client):
+        logger.info("[twilio] Client connected, sending greeting")
+        if pipeline_result.audio_buffer:
+            await pipeline_result.audio_buffer.start_recording()
         await task.queue_frames([LLMRunFrame()])
 
-    asyncio.create_task(_send_greeting())
+    @transport.event_handler("on_client_disconnected")
+    async def on_client_disconnected(transport_instance, client):
+        logger.info("[twilio] Client disconnected, cancelling pipeline")
+        await task.cancel()
 
     try:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        await cancel_stt_tasks(stt)
+        await cancel_stt_tasks(pipeline_result.stt)
         await _cleanup_session(
             imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
-            user_recorder=user_recorder, assistant_recorder=assistant_recorder,
+            narration_http_session=pipeline_result.narration_http_session,
         )
 
 
