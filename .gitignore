@@ -10,3 +10,4 @@ package-lock.json
 .venv/
 .claude/settings.local.json
 supabase/.temp/
+.vercel

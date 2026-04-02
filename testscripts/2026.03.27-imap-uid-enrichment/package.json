@@ -1,0 +1,14 @@
+{
+  "name": "imap-uid-enrichment-test",
+  "private": true,
+  "scripts": {
+    "start": "npx tsx test.ts"
+  },
+  "dependencies": {
+    "imapflow": "^1.0.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
+  }
+}

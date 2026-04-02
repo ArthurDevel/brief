@@ -174,19 +174,15 @@ export const toolDefinitions: ToolDefinition[] = [
     type: "function",
     name: "send_email",
     label: "Send Email",
-    description:
-      "Send an email. Can send an existing draft by draft_id, or send a new email directly with to, subject, and body.",
+    description: "Send an email with the given recipient, subject, and body.",
     parameters: {
       type: "object",
       properties: {
-        draft_id: {
-          type: "string",
-          description: "The draft ID to send. If provided, sends the existing draft.",
-        },
-        to: { type: "string", description: "Recipient email address (for new emails)." },
-        subject: { type: "string", description: "Email subject (for new emails)." },
-        body: { type: "string", description: "Email body (for new emails)." },
+        to: { type: "string", description: "Recipient email address." },
+        subject: { type: "string", description: "Email subject line." },
+        body: { type: "string", description: "Email body text." },
       },
+      required: ["to", "subject", "body"],
     },
   },
 

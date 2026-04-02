@@ -39,7 +39,7 @@ export type ToolName =
   | "submit_feature_request";
 
 /** Lifecycle status of an action in the queue. */
-export type ActionStatus = "pending" | "approved" | "executed" | "undone" | "rejected" | "failed";
+export type ActionStatus = "pending" | "approved" | "executed" | "undone" | "rejected" | "failed" | "converted";
 
 // ============================================================================
 // CLASSIFICATION + APPROVAL
@@ -104,6 +104,30 @@ export interface QueuedSend {
   to: string;
   subject: string;
   status: string; // "pending" | "approved"
+}
+
+// ============================================================================
+// ACTION ROW (DB)
+// ============================================================================
+
+// ============================================================================
+// BULK ACTION
+// ============================================================================
+
+/** Result of a single action within a bulk execute operation. */
+export interface BulkActionResult {
+  actionId: string;
+  status: "executed" | "failed" | "skipped";
+  error: string | null;
+}
+
+/** Aggregate response from a bulk execute operation. */
+export interface BulkActionResponse {
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  results: BulkActionResult[];
 }
 
 // ============================================================================

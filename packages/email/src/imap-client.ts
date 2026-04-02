@@ -657,8 +657,7 @@ async function fetchMetaByUidBatch(
   try {
     for await (const message of client.fetch(uidSet, {
       envelope: true,
-      uid: true,
-    })) {
+    }, { uid: true })) {
       const msgUid = String(message.uid);
       const actionId = uidToActionId.get(msgUid);
       if (!actionId || !message.envelope) continue;

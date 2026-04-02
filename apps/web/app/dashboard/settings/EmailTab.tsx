@@ -133,6 +133,7 @@ export default function EmailTab() {
   // UI state
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [connectionFailed, setConnectionFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -202,6 +203,7 @@ export default function EmailTab() {
   async function handleSave() {
     setSaving(true);
     setError(null);
+    setConnectionFailed(false);
     setSaved(false);
 
     // Build the connection params based on provider
@@ -262,13 +264,21 @@ export default function EmailTab() {
       // Step 2: Test connection using stored credentials
       const result = await testConnection();
       if (!result.imap.ok || !result.smtp.ok) {
-        const parts: string[] = [];
-        if (!result.imap.ok) parts.push("receiving emails");
-        if (!result.smtp.ok) parts.push("sending emails");
-        setError(
-          `Your settings were saved, but we could not connect for ${parts.join(" and ")}. `
-          + "Please double-check your email address and app password."
-        );
+        setConnectionFailed(true);
+        if (provider !== "custom") {
+          setError(
+            "We failed to connect to your inbox. Did you use the App Password as described above? "
+            + "This is not your regular password."
+          );
+        } else {
+          const parts: string[] = [];
+          if (!result.imap.ok) parts.push("receiving emails");
+          if (!result.smtp.ok) parts.push("sending emails");
+          setError(
+            `Your settings were saved, but we could not connect for ${parts.join(" and ")}. `
+            + "Please double-check your credentials."
+          );
+        }
         setSaving(false);
         return;
       }
@@ -319,6 +329,7 @@ export default function EmailTab() {
             appPassword={appPassword}
             onAppPasswordChange={setAppPassword}
             hasPassword={hasPassword}
+            connectionFailed={connectionFailed}
             saving={saving}
             saved={saved}
             error={error}
@@ -334,6 +345,7 @@ export default function EmailTab() {
             appPassword={appPassword}
             onAppPasswordChange={setAppPassword}
             hasPassword={hasPassword}
+            connectionFailed={connectionFailed}
             saving={saving}
             saved={saved}
             error={error}
@@ -430,16 +442,19 @@ interface ProviderInstructionsProps {
   appPassword: string;
   onAppPasswordChange: (value: string) => void;
   hasPassword: boolean;
+  connectionFailed: boolean;
   saving: boolean;
   saved: boolean;
   error: string | null;
   onSave: () => void;
 }
 
+const STEP_HIGHLIGHT = "bg-amber-50 border-l-2 border-amber-400 pl-3 -ml-3 py-1 rounded-r";
+
 /**
  * Gmail setup instructions with inline email and app password fields.
  */
-function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, saving, saved, error, onSave }: ProviderInstructionsProps) {
+function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, connectionFailed, saving, saved, error, onSave }: ProviderInstructionsProps) {
   return (
     <div className="mt-6 text-[13px] text-[var(--text-secondary)]">
       <ol className="list-decimal list-outside pl-5 space-y-4 mb-6">
@@ -453,7 +468,7 @@ function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordCha
             />
           </div>
         </li>
-        <li>
+        <li className={connectionFailed ? STEP_HIGHLIGHT : ""}>
           Make sure{" "}
           <a
             href="https://myaccount.google.com/signinoptions/two-step-verification"
@@ -465,7 +480,7 @@ function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordCha
           </a>
           {" "}is enabled on your Google Account
         </li>
-        <li>
+        <li className={connectionFailed ? STEP_HIGHLIGHT : ""}>
           Go to{" "}
           <a
             href="https://myaccount.google.com/apppasswords"
@@ -513,7 +528,7 @@ function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordCha
 /**
  * Outlook setup instructions with inline email and app password fields.
  */
-function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, saving, saved, error, onSave }: ProviderInstructionsProps) {
+function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, connectionFailed, saving, saved, error, onSave }: ProviderInstructionsProps) {
   return (
     <div className="mt-6 text-[13px] text-[var(--text-secondary)]">
       <ol className="list-decimal list-outside pl-5 space-y-4 mb-6">
@@ -538,7 +553,7 @@ function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordC
             Microsoft account security page
           </a>
         </li>
-        <li>
+        <li className={connectionFailed ? STEP_HIGHLIGHT : ""}>
           Enable{" "}
           <a
             href="https://aka.ms/MFASetup"
@@ -550,7 +565,7 @@ function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordC
           </a>
           {" "}if not already active
         </li>
-        <li>
+        <li className={connectionFailed ? STEP_HIGHLIGHT : ""}>
           Go to{" "}
           <a
             href="https://account.live.com/proofs/AppPassword"

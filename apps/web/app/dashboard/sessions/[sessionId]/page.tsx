@@ -21,6 +21,7 @@ import { Clock, Timer, Zap } from "lucide-react";
 import type { SessionDetail, TranscriptEntry } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
+import SendEmailModal from "@/app/dashboard/components/SendEmailModal";
 
 // ============================================================================
 // CONSTANTS
@@ -216,6 +217,7 @@ const STATUS_STYLES: Record<string, string> = {
   rejected: "bg-red-100 text-red-700",
   undone: "bg-yellow-100 text-yellow-700",
   failed: "bg-orange-100 text-orange-700",
+  converted: "bg-blue-100 text-blue-700",
 };
 
 /**
@@ -235,6 +237,7 @@ function ActionsSummary({
   onReject,
   onUndo,
   onBulk,
+  onRowClick,
 }: {
   actions: ActionRow[];
   processingIds: Set<string>;
@@ -242,6 +245,7 @@ function ActionsSummary({
   onReject: (id: string) => void;
   onUndo: (id: string) => void;
   onBulk: (operation: "approve" | "reject") => void;
+  onRowClick: (action: ActionRow) => void;
 }) {
   if (actions.length === 0) return null;
 
@@ -293,8 +297,18 @@ function ActionsSummary({
             const isProcessing = processingIds.has(action.id) || isBulkProcessing;
             const isPending = action.status === "pending";
 
+            const isSendEmail = action.toolName === "send_email";
+
             return (
-              <tr key={action.id} className="border-b border-[var(--border-color)]">
+              <tr
+                key={action.id}
+                className={`border-b border-[var(--border-color)] ${isSendEmail ? "cursor-pointer hover:bg-[var(--bg-hover)]" : ""}`}
+                onClick={(e) => {
+                  if (!isSendEmail) return;
+                  if ((e.target as HTMLElement).closest("button")) return;
+                  onRowClick(action);
+                }}
+              >
                 <td className="py-3 pr-6 text-[13px]">{TOOL_LABELS[action.toolName] ?? action.toolName}</td>
                 <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getContact(action.arguments)}</td>
                 <td className="max-w-xs truncate py-3 pr-6 text-[var(--text-secondary)]">{getSubject(action.arguments)}</td>
@@ -371,6 +385,8 @@ export default function SessionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [selectedAction, setSelectedAction] = useState<ActionRow | null>(null);
+  const [isConverting, setIsConverting] = useState(false);
   const emailActionHandled = useRef(false);
 
   /**
@@ -467,7 +483,8 @@ export default function SessionDetailPage() {
   };
 
   /**
-   * Processes all pending actions with the given operation (approve or reject).
+   * Bulk operation: approves or rejects all pending actions for the current session
+   * via a single POST to /api/actions/bulk.
    * @param operation - "approve" or "reject"
    */
   const handleBulk = async (operation: "approve" | "reject") => {
@@ -476,15 +493,64 @@ export default function SessionDetailPage() {
     if (pending.length === 0) return;
 
     addProcessing(BULK_KEY);
-    for (const action of pending) {
-      try {
-        await postActionRequest(action.id, operation);
-      } catch {
-        // Continue to next action -- failed ones are marked in the DB by the API
+    try {
+      const res = await fetch("/api/actions/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionIds: pending.map((a) => a.id), operation }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json();
+        setError(body.error ?? `Failed to ${operation} actions`);
+        return;
       }
+
+      const result = await res.json();
+      if (result.failed > 0) {
+        setError(`${result.failed} of ${result.total} actions failed to ${operation}`);
+      }
+
+      await loadSession();
+    } catch {
+      setError(`Failed to ${operation} actions`);
+    } finally {
+      removeProcessing(BULK_KEY);
     }
-    await loadSession();
-    removeProcessing(BULK_KEY);
+  };
+
+  /**
+   * Converts a pending send_email action to a draft in the user's mailbox.
+   * @param actionId - The action ID to convert
+   */
+  const handleConvertToDraft = async (actionId: string) => {
+    setIsConverting(true);
+    try {
+      const res = await fetch(`/api/actions/${actionId}/convert-to-draft`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json();
+        alert(body.error ?? "Failed to convert to draft");
+        return;
+      }
+      await loadSession();
+      setSelectedAction(null);
+    } catch {
+      alert("Failed to convert to draft");
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  /** Approve action from modal, then close */
+  const handleModalApprove = async (actionId: string) => {
+    await handleAction(actionId, "approve");
+    setSelectedAction(null);
+  };
+
+  /** Reject action from modal, then close */
+  const handleModalReject = async (actionId: string) => {
+    await handleAction(actionId, "reject");
+    setSelectedAction(null);
   };
 
   if (loading) {
@@ -555,6 +621,7 @@ export default function SessionDetailPage() {
         onReject={(id) => handleAction(id, "reject")}
         onUndo={(id) => handleAction(id, "undo")}
         onBulk={handleBulk}
+        onRowClick={setSelectedAction}
       />
 
       {/* Timeline */}
@@ -577,6 +644,15 @@ export default function SessionDetailPage() {
         </div>
       </div>
       </div>
+
+      <SendEmailModal
+        action={selectedAction}
+        onClose={() => setSelectedAction(null)}
+        onApprove={handleModalApprove}
+        onReject={handleModalReject}
+        onConvert={handleConvertToDraft}
+        isProcessing={isConverting || (selectedAction ? processingIds.has(selectedAction.id) : false)}
+      />
     </div>
   );
 }

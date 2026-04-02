@@ -191,30 +191,24 @@ def get_tool_definitions() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "send_email",
-                "description": (
-                    "Send an email. Can send an existing draft by draft_id, "
-                    "or send a new email directly with to, subject, and body."
-                ),
+                "description": "Send an email with the given recipient, subject, and body.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "draft_id": {
-                            "type": "string",
-                            "description": "The draft ID to send. If provided, sends the existing draft.",
-                        },
                         "to": {
                             "type": "string",
-                            "description": "Recipient email address (for new emails).",
+                            "description": "Recipient email address.",
                         },
                         "subject": {
                             "type": "string",
-                            "description": "Email subject (for new emails).",
+                            "description": "Email subject line.",
                         },
                         "body": {
                             "type": "string",
-                            "description": "Email body (for new emails).",
+                            "description": "Email body text.",
                         },
                     },
+                    "required": ["to", "subject", "body"],
                 },
             },
         },
