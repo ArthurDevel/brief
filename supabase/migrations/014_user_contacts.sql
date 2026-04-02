@@ -11,7 +11,7 @@
 -- TABLE
 -- ============================================================================
 
-create table user_contacts (
+create table if not exists user_contacts (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   email text not null,
@@ -28,16 +28,23 @@ create table user_contacts (
 -- INDEXES
 -- ============================================================================
 
-create index idx_user_contacts_user_id on user_contacts(user_id);
+create index if not exists idx_user_contacts_user_id on user_contacts(user_id);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================================
 
-create trigger user_contacts_updated_at
-  before update on user_contacts
-  for each row
-  execute function update_updated_at();
+do $$
+begin
+  if not exists (
+    select 1 from pg_trigger where tgname = 'user_contacts_updated_at'
+  ) then
+    create trigger user_contacts_updated_at
+      before update on user_contacts
+      for each row
+      execute function update_updated_at();
+  end if;
+end $$;
 
 -- ============================================================================
 -- ROW LEVEL SECURITY
@@ -45,24 +52,32 @@ create trigger user_contacts_updated_at
 
 alter table user_contacts enable row level security;
 
-create policy "Users can view their own contacts"
-  on user_contacts for select
-  using (auth.uid() = user_id);
-
-create policy "Users can insert their own contacts"
-  on user_contacts for insert
-  with check (auth.uid() = user_id);
-
-create policy "Users can update their own contacts"
-  on user_contacts for update
-  using (auth.uid() = user_id);
-
-create policy "Users can delete their own contacts"
-  on user_contacts for delete
-  using (auth.uid() = user_id);
+do $$
+begin
+  if not exists (select 1 from pg_policies where policyname = 'Users can view their own contacts' and tablename = 'user_contacts') then
+    create policy "Users can view their own contacts" on user_contacts for select using (auth.uid() = user_id);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'Users can insert their own contacts' and tablename = 'user_contacts') then
+    create policy "Users can insert their own contacts" on user_contacts for insert with check (auth.uid() = user_id);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'Users can update their own contacts' and tablename = 'user_contacts') then
+    create policy "Users can update their own contacts" on user_contacts for update using (auth.uid() = user_id);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'Users can delete their own contacts' and tablename = 'user_contacts') then
+    create policy "Users can delete their own contacts" on user_contacts for delete using (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- ============================================================================
 -- ADD contacts_synced_at TO user_settings
 -- ============================================================================
 
-alter table user_settings add column contacts_synced_at timestamptz;
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_name = 'user_settings' and column_name = 'contacts_synced_at'
+  ) then
+    alter table user_settings add column contacts_synced_at timestamptz;
+  end if;
+end $$;
