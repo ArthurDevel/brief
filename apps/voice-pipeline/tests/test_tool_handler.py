@@ -14,6 +14,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pipecat.services.llm_service import FunctionCallParams
 
 from src.pipeline import _register_tool_handler
 from src.session import ActiveSession, SmtpConfig, UserContext, MemoryEntry
@@ -51,7 +52,7 @@ def _capture_handler(tool_name: str, **kwargs):
     mock_llm = MagicMock()
     captured = {}
 
-    def capture(name, handler):
+    def capture(name, handler, **kwargs):
         captured[name] = handler
 
     mock_llm.register_function = capture
@@ -78,14 +79,15 @@ async def _call_handler(handler, tool_name: str = "archive_email", args: dict | 
     """Call the captured handler and return the parsed JSON result."""
     result_callback = AsyncMock()
 
-    await handler(
-        tool_name,
-        "tool_call_123",
-        args or {"email_id": "1"},
-        MagicMock(),   # llm_instance
-        None,          # context
-        result_callback,
+    params = FunctionCallParams(
+        function_name=tool_name,
+        tool_call_id="tool_call_123",
+        arguments=args or {"email_id": "1"},
+        llm=MagicMock(),
+        context=MagicMock(),
+        result_callback=result_callback,
     )
+    await handler(params)
 
     result_callback.assert_called_once()
     return json.loads(result_callback.call_args[0][0])

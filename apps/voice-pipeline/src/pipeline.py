@@ -1,12 +1,14 @@
 """
 Core Pipecat pipeline factory for the voice pipeline.
 
-Builds the full audio processing pipeline with STT, LLM (with function
-calling), TTS, and pitch-preserving speed control.
+Builds the full audio processing pipeline with Flux STT (native turn detection),
+LLM (with function calling), TTS (with markdown filtering), and pitch-preserving
+speed control. Recording is handled via AudioBufferProcessor when enabled.
 
 - create_pipeline: build and configure the full pipeline with all components
 - Tool call handlers route through tools/handlers.py
 - IMAP operations wrapped in asyncio.to_thread() to avoid blocking
+- AudioBufferProcessor captures merged + separate tracks, fires events for WAV upload
 """
 
 from __future__ import annotations
@@ -19,28 +21,25 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
-from pipecat.frames.frames import LLMMessagesFrame, TTSAudioRawFrame
+from pipecat.frames.frames import InputAudioRawFrame, LLMMessagesFrame, TTSAudioRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
-)
-from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from pipecat.processors.idle_frame_processor import IdleFrameProcessor
+from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.transports.base_transport import BaseTransport
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
-from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
 
 from supabase import Client
 
-from src.audio.markdown_stripper import MarkdownStripperProcessor
-from src.audio.recorder import AudioRecorder
 from src.audio.normalizer import AudioNormalizerProcessor
+from src.audio.recorder import write_wav, upload_recording
 from src.audio.speed import AudioSpeedProcessor
-from src.audio.watchdog import AudioFrameWatchdog
 from src.config import LLM_MODEL, Settings
 from src.cost_tracker import CostTracker
 from src.langfuse_observer import LangfuseObserver
@@ -61,15 +60,25 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineResult:
-    """Bundles the pipeline task with the STT service reference for post-shutdown cleanup."""
+    """Bundles the pipeline task with service references for post-shutdown cleanup."""
     task: PipelineTask
-    stt: DeepgramSTTService
+    stt: DeepgramFluxSTTService
+    audio_buffer: AudioBufferProcessor | None
+    narration_http_session: dict[str, aiohttp.ClientSession | None]
 
 
 DEFAULT_TEMPO = 1.5
 # Must be shorter than pipecat's 10s function_call_timeout_secs so that
 # our handler returns a proper error before pipecat sends "COMPLETED".
 TOOL_CALL_TIMEOUT_SECS = 8.0
+
+# Safety net timeout on register_function(). Higher than TOOL_CALL_TIMEOUT_SECS
+# to account for lock wait time. The manual asyncio.wait_for() inside the lock
+# remains the primary timeout mechanism.
+REGISTER_FUNCTION_TIMEOUT_SECS = 20.0
+
+# Cancels the pipeline if no audio frames arrive for this duration.
+AUDIO_IDLE_TIMEOUT_SECS = 10.0
 
 DEEPGRAM_HTTP_TTS_URL = "https://api.deepgram.com/v1/speak"
 
@@ -105,38 +114,38 @@ def create_pipeline(
     supabase: Client,
     settings: Settings,
     imap_holder: dict[str, Any],
-    user_recorder: AudioRecorder | None = None,
-    assistant_recorder: AudioRecorder | None = None,
+    recording_enabled: bool = False,
 ) -> PipelineResult:
     """Build the full Pipecat pipeline with STT, LLM, TTS, and speed control.
 
     Pipeline chain:
-        transport.input() -> STT -> context_aggregator.user() -> LLM (with tools)
-        -> TTS -> speed_processor -> normalizer -> transport.output() -> context_aggregator.assistant()
+        transport.input() -> watchdog -> stt -> user_agg -> llm -> tts
+        -> speed -> normalizer -> transport.output() -> [audio_buffer] -> assistant_agg
 
     Args:
         transport: The Pipecat transport (WebRTC or Twilio).
         user_context: User context with memory, credentials, and preferences.
         session: The active session tracker.
         cost_tracker: Observer tracking STT/LLM/TTS usage for cost calculation.
+        langfuse_observer: Observer for Langfuse tracing.
+        usage_tracker: Tracks usage metrics for the tracked services.
         audio_config: Dict with "sample_rate" and "num_channels" keys.
         supabase: Supabase client for DB operations.
         settings: Application settings.
         imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}
             for IMAP operations with reconnect support.
-        user_recorder: AudioRecorder for user mic audio, or None if recording disabled.
-        assistant_recorder: AudioRecorder for assistant TTS audio, or None if recording disabled.
+        recording_enabled: Whether to capture audio via AudioBufferProcessor.
 
     Returns:
-        PipelineResult with the configured task and STT service reference.
+        PipelineResult with the configured task, STT service, audio buffer, and
+        narration HTTP session references.
     """
     sample_rate = audio_config.get("sample_rate", 16000)
     num_channels = audio_config.get("num_channels", 1)
 
-    # -- STT (Deepgram) --
-    stt = DeepgramSTTService(
+    # -- STT (Deepgram Flux -- handles turn detection natively) --
+    stt = DeepgramFluxSTTService(
         api_key=settings.deepgram_api_key,
-        audio_passthrough=True,
     )
 
     # -- LLM (OpenRouter, OpenAI-compatible) --
@@ -147,12 +156,13 @@ def create_pipeline(
         base_url="https://openrouter.ai/api/v1",
     )
 
-    # -- TTS (Deepgram) --
+    # -- TTS (Deepgram with markdown filtering) --
     tts = TrackedDeepgramTTSService(
         usage_tracker=usage_tracker,
         api_key=settings.deepgram_api_key,
         voice=user_context.voice_preference,
         sample_rate=sample_rate,
+        text_filter=MarkdownTextFilter(),
     )
 
     # -- Speed processor (WSOLA) --
@@ -201,28 +211,24 @@ def create_pipeline(
     tools = get_tool_definitions()
 
     messages: list[Any] = [{"role": "system", "content": system_prompt}]
-    context = OpenAILLMContext(messages=messages, tools=tools)  # type: ignore[arg-type]
-
-    # SmartTurn v3 requires 16kHz audio (breaks silently at 8kHz/Twilio).
-    # Use it for WebRTC, fall back to basic aggregator for Twilio.
-    if sample_rate >= 16000:
-        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-            context,  # type: ignore[arg-type]
-            user_params=LLMUserAggregatorParams(
-                user_turn_strategies=UserTurnStrategies(
-                    stop=[TurnAnalyzerUserTurnStopStrategy(
-                        turn_analyzer=LocalSmartTurnAnalyzerV3()
-                    )]
-                ),
-                vad_analyzer=SileroVADAnalyzer(),
-            ),
+    # Convert OpenAI-format tool dicts to FunctionSchema objects.
+    # The OpenAI adapter only reads standard_tools (ignores custom_tools).
+    standard_tools = [
+        FunctionSchema(
+            name=t["function"]["name"],
+            description=t["function"]["description"],
+            properties=t["function"]["parameters"].get("properties", {}),
+            required=t["function"]["parameters"].get("required", []),
         )
-        logger.info("SmartTurn v3 enabled (16kHz)")
-    else:
-        basic = llm.create_context_aggregator(context)
-        user_aggregator = basic.user()
-        assistant_aggregator = basic.assistant()
-        logger.info("SmartTurn v3 disabled (sample rate < 16kHz, using basic turn detection)")
+        for t in tools
+    ]
+    tools_schema = ToolsSchema(standard_tools=list(standard_tools))  # type: ignore[arg-type]
+    context = LLMContext(messages=messages, tools=tools_schema)
+
+    # -- Context aggregators (Flux STT handles turn detection natively) --
+    context_aggregator = LLMContextAggregatorPair(context)  # type: ignore[arg-type]
+    user_aggregator = context_aggregator.user()
+    assistant_aggregator = context_aggregator.assistant()
 
     # -- Register function call handlers --
     # Each handler routes through tools/handlers.py handle_tool_call().
@@ -251,21 +257,69 @@ def create_pipeline(
             narration_http_session=narration_http_session,
         )
 
-    # -- Audio watchdog (cancels pipeline if audio frames stop arriving) --
-    watchdog = AudioFrameWatchdog()
+    # -- Audio idle watchdog (cancels pipeline if audio frames stop arriving) --
+    async def _on_audio_idle(processor: IdleFrameProcessor) -> None:
+        logger.warning("[watchdog] No audio for %.0fs, cancelling pipeline", AUDIO_IDLE_TIMEOUT_SECS)
+        await task.cancel()
+
+    watchdog = IdleFrameProcessor(
+        callback=_on_audio_idle,
+        timeout=AUDIO_IDLE_TIMEOUT_SECS,
+        types=[InputAudioRawFrame],
+    )
+
+    # -- Audio recording (AudioBufferProcessor, conditional) --
+    audio_buffer: AudioBufferProcessor | None = None
+    if recording_enabled:
+        audio_buffer = AudioBufferProcessor(
+            sample_rate=sample_rate,
+            num_channels=num_channels,
+        )
+
+        @audio_buffer.event_handler("on_audio_data")
+        async def on_audio_data(
+            buffer: AudioBufferProcessor,
+            audio: bytes,
+            sample_rate: int,
+            num_channels: int,
+        ) -> None:
+            """Save merged (user + bot) audio as WAV and upload to Supabase."""
+            if not audio:
+                return
+            wav_bytes = write_wav(audio, sample_rate, num_channels)
+            await upload_recording(session.session_id, wav_bytes, supabase)
+
+        @audio_buffer.event_handler("on_track_audio_data")
+        async def on_track_audio_data(
+            buffer: AudioBufferProcessor,
+            user_audio: bytes,
+            bot_audio: bytes,
+            sample_rate: int,
+            num_channels: int,
+        ) -> None:
+            """Save separate user and bot audio tracks as WAV and upload to Supabase."""
+            for label, audio_data in [("user", user_audio), ("bot", bot_audio)]:
+                if not audio_data:
+                    continue
+                wav_bytes = write_wav(audio_data, sample_rate, 1)
+                track_session_id = f"{session.session_id}_{label}"
+                await upload_recording(track_session_id, wav_bytes, supabase)
 
     # -- Assemble pipeline --
-    # Optional recorders capture audio for debug recording (when recording_enabled=True).
-    # user_recorder goes after watchdog (captures InputAudioRawFrame from mic).
-    # assistant_recorder goes after speed_processor (captures TTSAudioRawFrame from TTS).
-    pipeline_chain: list[Any] = [transport.input(), watchdog]
-    if user_recorder is not None:
-        pipeline_chain.append(user_recorder)
-    markdown_stripper = MarkdownStripperProcessor()
-    pipeline_chain.extend([stt, user_aggregator, llm, markdown_stripper, tts, speed_processor, normalizer])
-    if assistant_recorder is not None:
-        pipeline_chain.append(assistant_recorder)
-    pipeline_chain.extend([transport.output(), assistant_aggregator])
+    pipeline_chain: list[Any] = [
+        transport.input(),
+        watchdog,
+        stt,
+        user_aggregator,
+        llm,
+        tts,
+        speed_processor,
+        normalizer,
+        transport.output(),
+    ]
+    if audio_buffer is not None:
+        pipeline_chain.append(audio_buffer)
+    pipeline_chain.append(assistant_aggregator)
 
     pipeline = Pipeline(pipeline_chain)
 
@@ -274,17 +328,18 @@ def create_pipeline(
         params=PipelineParams(
             audio_in_sample_rate=sample_rate,
             audio_out_sample_rate=sample_rate,
-            allow_interruptions=True,
             enable_metrics=True,
             enable_usage_metrics=True,
             observers=[cost_tracker, langfuse_observer],
         ),
     )
 
-    # Wire the watchdog to the task (created after pipeline, so set via setter)
-    watchdog.set_task(task)
-
-    return PipelineResult(task=task, stt=stt)
+    return PipelineResult(
+        task=task,
+        stt=stt,
+        audio_buffer=audio_buffer,
+        narration_http_session=narration_http_session,
+    )
 
 
 # ============================================================================
@@ -357,6 +412,10 @@ def _register_tool_handler(
     access (imapclient is not thread-safe). A timeout ensures the handler
     returns an error before pipecat's hardcoded "COMPLETED" fires.
 
+    The timeout_secs on register_function() is a safety net (20s) that
+    accounts for lock wait time + IMAP timeout. The manual asyncio.wait_for()
+    inside the lock (8s) remains the primary timeout mechanism.
+
     If a narration phrase is configured in TOOL_NARRATIONS for this tool,
     the handler synthesizes it via Deepgram's HTTP TTS API and pushes
     raw audio frames through the pipeline. This bypasses pipecat's
@@ -377,22 +436,28 @@ def _register_tool_handler(
         tts_voice: Deepgram voice model for narration synthesis.
         narration_http_session: Shared mutable dict holding the aiohttp session.
     """
-    async def handler(function_name, tool_call_id, args, llm_instance, context, result_callback):
+    async def handler(params: FunctionCallParams) -> None:
         """Handle a function call from the LLM."""
+        function_name = params.function_name
+        args = dict(params.arguments)
+
         # Speak a short narration so the user knows something is happening.
         # Uses Deepgram HTTP TTS (not websocket) to avoid audio context race condition.
         narration = TOOL_NARRATIONS.get(function_name)
         if narration:
             try:
+                logger.debug(f"[narration] Synthesizing narration for [{function_name}]: {narration}")
                 audio_bytes = await _synthesize_narration(
                     narration, deepgram_api_key, tts_sample_rate, tts_voice,
                     narration_http_session,
                 )
+                logger.debug(f"[narration] Got {len(audio_bytes)} bytes, pushing TTSAudioRawFrame at {tts_sample_rate}Hz")
                 await llm.push_frame(TTSAudioRawFrame(
                     audio=audio_bytes,
                     sample_rate=tts_sample_rate,
                     num_channels=1,
                 ))
+                logger.debug(f"[narration] push_frame completed for [{function_name}]")
             except Exception as e:
                 logger.warning(f"Narration failed for [{function_name}]: {e}")
 
@@ -451,6 +516,6 @@ def _register_tool_handler(
             duration_ms=duration_ms,
         )
 
-        await result_callback(result_str)
+        await params.result_callback(result_str)
 
-    llm.register_function(tool_name, handler)
+    llm.register_function(tool_name, handler, timeout_secs=REGISTER_FUNCTION_TIMEOUT_SECS)
