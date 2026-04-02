@@ -6,6 +6,7 @@
 
 import type { Metadata } from "next";
 import { IBM_Plex_Serif } from "next/font/google";
+import { PostHogProvider, PostHogPageView } from "@posthog/next";
 import "./globals.css";
 
 const ibmPlexSerif = IBM_Plex_Serif({
@@ -23,7 +24,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${ibmPlexSerif.variable}`}>
       <body className="bg-[var(--bg-main)] text-[var(--text-primary)] antialiased" style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif' }}>
-        {children}
+        <PostHogProvider clientOptions={{ api_host: "/ingest" }}>
+          <PostHogPageView />
+          {children}
+        </PostHogProvider>
       </body>
     </html>
   );
