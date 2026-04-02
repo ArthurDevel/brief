@@ -1,13 +1,14 @@
 /**
- * Supabase auth middleware for the Next.js web app.
+ * Combined middleware for the Next.js web app.
  *
- * Checks the Supabase session on every request and enforces access control:
- * - Unauthenticated users are redirected to /login (except for /login and /api/auth routes)
- * - Authenticated users on /login are redirected to /dashboard
- * - Refreshes the Supabase session cookie on each request
+ * Composes two middleware layers:
+ * - PostHog: proxies /ingest requests to PostHog servers (avoids ad blockers)
+ *   and seeds an identity cookie so client + server share the same user ID
+ * - Supabase auth: checks session on every request and enforces access control
  */
 
 import { createServerClient } from "@supabase/ssr";
+import { postHogMiddleware } from "@posthog/next";
 import { NextResponse, type NextRequest } from "next/server";
 
 // ============================================================================
@@ -15,19 +16,31 @@ import { NextResponse, type NextRequest } from "next/server";
 // ============================================================================
 
 /** Routes that do not require authentication. */
-const PUBLIC_ROUTES = ["/login", "/api/auth"];
+const PUBLIC_ROUTES = ["/login", "/api/auth", "/ingest"];
+
+/** PostHog middleware handler (proxy + identity cookie). */
+const posthogHandler = postHogMiddleware({
+  proxy: {
+    host: process.env.NEXT_PUBLIC_POSTHOG_HOST || "https://eu.i.posthog.com",
+  },
+});
 
 // ============================================================================
 // MIDDLEWARE
 // ============================================================================
 
 /**
- * Checks Supabase session and redirects based on auth state.
+ * Runs PostHog proxy for /ingest routes, then Supabase auth for everything else.
  * @param request - The incoming Next.js request
  * @returns NextResponse with appropriate redirect or pass-through
  */
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // PostHog proxy: delegate /ingest requests to @posthog/next
+  if (pathname.startsWith("/ingest")) {
+    return posthogHandler(request);
+  }
 
   // Allow public routes through without auth check
   const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route))
