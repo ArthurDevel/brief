@@ -109,12 +109,12 @@ export async function replyToEmail(
 /**
  * Saves an email draft by appending to the Drafts folder via IMAP.
  * @param client - Connected ImapFlow client
- * @param params - Draft parameters (to, subject, body)
+ * @param params - Draft parameters (to, subject, body, and optional cc/threading headers)
  * @returns UndoRecipe to delete the created draft
  */
 export async function saveDraft(
   client: ImapFlow,
-  params: { to: string; subject: string; body: string }
+  params: { to: string; subject: string; body: string; cc?: string; inReplyTo?: string; references?: string }
 ): Promise<UndoRecipe> {
   const rawMessage = buildRawMessage(params);
 
@@ -180,19 +180,30 @@ export async function testSmtpConnection(config: SmtpConfig): Promise<{ ok: bool
 
 /**
  * Builds a raw RFC 2822 email message from parameters.
- * @param params - Email parameters (to, subject, body)
+ * @param params - Email parameters (to, subject, body, and optional cc/threading headers)
  * @returns Raw email string suitable for IMAP APPEND
  */
-function buildRawMessage(params: { to: string; subject: string; body: string }): string {
+function buildRawMessage(params: { to: string; subject: string; body: string; cc?: string; inReplyTo?: string; references?: string }): string {
   const date = new Date().toUTCString();
 
-  return [
+  const headers: string[] = [
     `To: ${params.to}`,
     `Subject: ${params.subject}`,
     `Date: ${date}`,
-    `Content-Type: text/plain; charset=utf-8`,
-    `MIME-Version: 1.0`,
-    ``,
-    params.body,
-  ].join("\r\n");
+  ];
+
+  if (params.cc) {
+    headers.push(`Cc: ${params.cc}`);
+  }
+  if (params.inReplyTo) {
+    headers.push(`In-Reply-To: ${params.inReplyTo}`);
+  }
+  if (params.references) {
+    headers.push(`References: ${params.references}`);
+  }
+
+  headers.push(`Content-Type: text/plain; charset=utf-8`);
+  headers.push(`MIME-Version: 1.0`);
+
+  return [...headers, ``, params.body].join("\r\n");
 }

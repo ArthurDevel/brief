@@ -297,14 +297,14 @@ function ActionsSummary({
             const isProcessing = processingIds.has(action.id) || isBulkProcessing;
             const isPending = action.status === "pending";
 
-            const isSendEmail = action.toolName === "send_email";
+            const isEmailAction = action.toolName === "send_email" || action.toolName === "reply_email";
 
             return (
               <tr
                 key={action.id}
-                className={`border-b border-[var(--border-color)] ${isSendEmail ? "cursor-pointer hover:bg-[var(--bg-hover)]" : ""}`}
+                className={`border-b border-[var(--border-color)] ${isEmailAction ? "cursor-pointer hover:bg-[var(--bg-hover)]" : ""}`}
                 onClick={(e) => {
-                  if (!isSendEmail) return;
+                  if (!isEmailAction) return;
                   if ((e.target as HTMLElement).closest("button")) return;
                   onRowClick(action);
                 }}
@@ -520,7 +520,7 @@ export default function SessionDetailPage() {
   };
 
   /**
-   * Converts a pending send_email action to a draft in the user's mailbox.
+   * Converts a pending send_email or reply_email action to a draft in the user's mailbox.
    * @param actionId - The action ID to convert
    */
   const handleConvertToDraft = async (actionId: string) => {

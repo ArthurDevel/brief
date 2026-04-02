@@ -1,10 +1,12 @@
 /**
- * Modal that displays send_email action details (to, subject, body).
+ * Modal that displays email action details (send_email or reply_email).
  *
  * Responsibilities:
  * - Show email fields from the action's arguments
+ * - For send_email: show To, Subject, Body
+ * - For reply_email: show replying-to email ID, Body, Reply All flag
  * - Render body with preserved line breaks (whitespace-pre-wrap)
- * - Offer "Convert to Draft" button for pending actions only
+ * - Offer Approve, Reject, and "Convert to Draft" buttons for pending actions
  * - Close on backdrop click, X button, or Escape key
  */
 
@@ -67,7 +69,7 @@ function Spinner() {
 // ============================================================================
 
 /**
- * Modal component that displays send_email action details.
+ * Modal component that displays send_email or reply_email action details.
  * Returns null when no action is selected.
  * @param props - SendEmailModalProps
  * @returns JSX element or null
@@ -89,8 +91,7 @@ export default function SendEmailModal({ action, onClose, onApprove, onReject, o
 
   if (!action) return null;
 
-  const to = getField(action.arguments, "to");
-  const subject = getField(action.arguments, "subject");
+  const isReply = action.toolName === "reply_email";
   const body = getField(action.arguments, "body");
   const isPending = action.status === "pending";
 
@@ -115,7 +116,7 @@ export default function SendEmailModal({ action, onClose, onApprove, onReject, o
           style={{ borderBottom: "1px solid var(--border-color)" }}
         >
           <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>
-            Email Details
+            {isReply ? "Reply Details" : "Email Details"}
           </h2>
           <button
             onClick={onClose}
@@ -128,47 +129,97 @@ export default function SendEmailModal({ action, onClose, onApprove, onReject, o
 
         {/* Body */}
         <div className="px-6 py-4 flex flex-col gap-4">
-          {/* To field */}
-          <div>
-            <label
-              className="block text-xs font-medium mb-1"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              To
-            </label>
-            <p className="text-[13px] m-0" style={{ color: "var(--text-primary)" }}>
-              {to}
-            </p>
-          </div>
+          {isReply ? (
+            <>
+              {/* Replying to email ID */}
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Replying To
+                </label>
+                <p className="text-[13px] m-0" style={{ color: "var(--text-primary)" }}>
+                  Email #{getField(action.arguments, "email_id")}
+                </p>
+              </div>
 
-          {/* Subject field */}
-          <div>
-            <label
-              className="block text-xs font-medium mb-1"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              Subject
-            </label>
-            <p className="text-[13px] m-0" style={{ color: "var(--text-primary)" }}>
-              {subject}
-            </p>
-          </div>
+              {/* Body field */}
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Body
+                </label>
+                <p
+                  className="text-[13px] m-0 whitespace-pre-wrap"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {body}
+                </p>
+              </div>
 
-          {/* Body field */}
-          <div>
-            <label
-              className="block text-xs font-medium mb-1"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              Body
-            </label>
-            <p
-              className="text-[13px] m-0 whitespace-pre-wrap"
-              style={{ color: "var(--text-primary)" }}
-            >
-              {body}
-            </p>
-          </div>
+              {/* Reply All indicator -- only shown when reply_all is true */}
+              {action.arguments.reply_all && (
+                <div>
+                  <label
+                    className="block text-xs font-medium mb-1"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    Reply All
+                  </label>
+                  <p className="text-[13px] m-0" style={{ color: "var(--text-primary)" }}>
+                    Yes
+                  </p>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {/* To field */}
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  To
+                </label>
+                <p className="text-[13px] m-0" style={{ color: "var(--text-primary)" }}>
+                  {getField(action.arguments, "to")}
+                </p>
+              </div>
+
+              {/* Subject field */}
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Subject
+                </label>
+                <p className="text-[13px] m-0" style={{ color: "var(--text-primary)" }}>
+                  {getField(action.arguments, "subject")}
+                </p>
+              </div>
+
+              {/* Body field */}
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Body
+                </label>
+                <p
+                  className="text-[13px] m-0 whitespace-pre-wrap"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {body}
+                </p>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Footer -- only show action buttons for pending actions */}

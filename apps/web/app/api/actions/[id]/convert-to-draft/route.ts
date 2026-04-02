@@ -1,9 +1,9 @@
 /**
- * API route to convert a pending send_email action into a mailbox draft.
+ * API route to convert a pending send_email or reply_email action into a mailbox draft.
  *
- * Loads the action, validates it is a pending send_email, retrieves IMAP
- * credentials from Vault, opens an IMAP connection, saves the draft via
- * IMAP APPEND, and marks the action as "converted".
+ * Loads the action, validates it is a pending send_email or reply_email,
+ * retrieves IMAP credentials from Vault, opens an IMAP connection, saves
+ * the draft via IMAP APPEND, and marks the action as "converted".
  *
  * Responsibilities:
  * - Authenticate the request and verify action ownership
@@ -24,7 +24,7 @@ import type { ActionResult } from "@dublin/tools";
 // ============================================================================
 
 /**
- * Converts a pending send_email action into a draft in the user's mailbox.
+ * Converts a pending send_email or reply_email action into a draft in the user's mailbox.
  * @param request - The incoming request
  * @param context - Route params containing the action ID
  * @returns JSON response with ActionResult
@@ -57,8 +57,8 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 
-  if (action.tool_name !== "send_email") {
-    return NextResponse.json({ error: `Action is not a send_email action (tool_name: ${action.tool_name})` }, { status: 400 });
+  if (action.tool_name !== "send_email" && action.tool_name !== "reply_email") {
+    return NextResponse.json({ error: `Action is not a send_email or reply_email action (tool_name: ${action.tool_name})` }, { status: 400 });
   }
 
   if (action.status !== "pending") {

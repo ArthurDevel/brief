@@ -184,7 +184,8 @@ export async function executeAction(
 }
 
 /**
- * Converts a pending send_email action into a draft in the user's mailbox.
+ * Converts a pending send_email or reply_email action into a draft in the user's mailbox.
+ * For reply_email, fetches the original email's reply context to build threading headers.
  * Saves the draft via IMAP APPEND, then marks the action as "converted".
  * On failure the action remains "pending" -- errors propagate to the caller.
  * @param actionId - The action row ID to convert
@@ -208,21 +209,49 @@ export async function convertActionToDraft(
     throw new Error(`Action ${actionId} not found: ${error?.message ?? "no data"}`);
   }
 
-  if (action.tool_name !== "send_email") {
-    throw new Error(`Action ${actionId} is not a send_email action (tool_name: "${action.tool_name}")`);
+  if (action.tool_name !== "send_email" && action.tool_name !== "reply_email") {
+    throw new Error(`Action ${actionId} is not a send_email or reply_email action (tool_name: "${action.tool_name}")`);
   }
 
   if (action.status !== "pending") {
     throw new Error(`Action ${actionId} is not pending (status: "${action.status}")`);
   }
 
-  // Save the draft via IMAP APPEND
-  const { saveDraft } = await import("@dublin/email");
-  const recipe = await saveDraft(imapClient, {
-    to: action.arguments.to as string,
-    subject: action.arguments.subject as string,
-    body: action.arguments.body as string,
-  });
+  let recipe: import("./types").UndoRecipe;
+
+  if (action.tool_name === "reply_email") {
+    // Fetch reply context from the original email, then save as draft with threading headers
+    const { fetchReplyContext, saveDraft } = await import("@dublin/email");
+    const context = await fetchReplyContext(imapClient, action.arguments.email_id as string);
+
+    const replyAll = (action.arguments.reply_all as boolean) ?? false;
+    const senderAddress = action.arguments._sender_address as string | undefined;
+
+    // Build subject with Re: prefix
+    const subject = /^re:/i.test(context.subject) ? context.subject : `Re: ${context.subject}`;
+
+    // Build CC for reply-all
+    const ccAddrs = replyAll
+      ? [...context.to, ...context.cc].filter(addr => senderAddress ? addr.toLowerCase() !== senderAddress.toLowerCase() : true)
+      : [];
+
+    recipe = await saveDraft(imapClient, {
+      to: context.from,
+      subject,
+      body: action.arguments.body as string,
+      cc: ccAddrs.length > 0 ? ccAddrs.join(", ") : undefined,
+      inReplyTo: context.messageId,
+      references: [...context.references, context.messageId].join(" "),
+    });
+  } else {
+    // send_email: save draft directly from action arguments
+    const { saveDraft } = await import("@dublin/email");
+    recipe = await saveDraft(imapClient, {
+      to: action.arguments.to as string,
+      subject: action.arguments.subject as string,
+      body: action.arguments.body as string,
+    });
+  }
 
   const draftUid = recipe.params.draftUid as string;
 
@@ -243,7 +272,7 @@ export async function convertActionToDraft(
     actionId,
     status: "converted",
     result: { convertedToDraft: true, draftUid },
-    message: "Action send_email converted to draft successfully",
+    message: `Action ${action.tool_name} converted to draft successfully`,
   };
 }
 
