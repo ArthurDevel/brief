@@ -33,6 +33,7 @@ DEFAULT_CLASSIFICATIONS: dict[str, str] = {
     "batch_delete_emails": "mutating_queued",
     "delete_email": "mutating_queued",
     "send_email": "mutating_queued",
+    "reply_email": "mutating_queued",
     "list_folders": "read_only",
     "move_to_folder": "mutating_auto",
 }
@@ -58,8 +59,8 @@ def classify_action(tool_name: str, user_config: dict[str, str]) -> str:
     Raises:
         ValueError: If tool_name is not a known tool.
     """
-    # send_email is always queued -- cannot be overridden
-    if tool_name == "send_email":
+    # send_email and reply_email are always queued -- cannot be overridden
+    if tool_name in ("send_email", "reply_email"):
         return "mutating_queued"
 
     # Check user overrides first

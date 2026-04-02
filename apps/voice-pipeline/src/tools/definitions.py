@@ -215,6 +215,38 @@ def get_tool_definitions() -> list[dict]:
         {
             "type": "function",
             "function": {
+                "name": "reply_email",
+                "description": (
+                    "Reply to an existing email by its ID. The email_id must come from "
+                    "a prior read_email or read_thread result. The reply is threaded "
+                    "correctly so it appears in the same conversation."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "email_id": {
+                            "type": "string",
+                            "description": (
+                                "The ID of the email to reply to. Must come from a prior "
+                                "read_email or read_thread result."
+                            ),
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "The reply body text.",
+                        },
+                        "reply_all": {
+                            "type": "boolean",
+                            "description": "Whether to reply to all recipients. Defaults to false.",
+                        },
+                    },
+                    "required": ["email_id", "body"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "batch_archive_emails",
                 "description": (
                     "Archive multiple emails at once by their IDs. "

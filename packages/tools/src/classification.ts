@@ -31,6 +31,7 @@ const DEFAULT_CLASSIFICATIONS: Record<ToolName, ActionClassification> = {
   batch_delete_emails: "mutating_queued",
   delete_email: "mutating_queued",
   send_email: "mutating_queued",
+  reply_email: "mutating_queued",
 };
 
 // ============================================================================

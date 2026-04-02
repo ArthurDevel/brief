@@ -30,6 +30,7 @@ export type ToolName =
   | "delete_email"
   | "archive_email"
   | "send_email"
+  | "reply_email"
   | "batch_archive_emails"
   | "batch_delete_emails"
   | "list_folders"

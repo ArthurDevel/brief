@@ -162,7 +162,7 @@ function ActionsTable({
         <tbody>
           {sorted.map((action) => {
             const isProcessing = processingIds.has(action.id);
-            const isSendEmail = action.toolName === "send_email";
+            const isSendEmail = action.toolName === "send_email" || action.toolName === "reply_email";
             return (
               <tr
                 key={action.id}
@@ -311,7 +311,7 @@ export default function ActionsPage() {
   };
 
   /**
-   * Converts a pending send_email action to a draft in the user's mailbox.
+   * Converts a pending send_email or reply_email action to a draft in the user's mailbox.
    * @param actionId - The action ID to convert
    */
   const handleConvertToDraft = async (actionId: string) => {

@@ -255,9 +255,9 @@ function RecentSessionCard({
                   return (
                     <tr
                       key={action.id}
-                      className={`border-b border-[var(--border-color)]${action.toolName === "send_email" ? " cursor-pointer hover:bg-[var(--bg-hover)]" : ""}`}
+                      className={`border-b border-[var(--border-color)]${action.toolName === "send_email" || action.toolName === "reply_email" ? " cursor-pointer hover:bg-[var(--bg-hover)]" : ""}`}
                       onClick={(e) => {
-                        if (action.toolName !== "send_email") return;
+                        if (action.toolName !== "send_email" && action.toolName !== "reply_email") return;
                         if ((e.target as HTMLElement).closest("button")) return;
                         onRowClick(action);
                       }}
@@ -483,7 +483,7 @@ export default function DashboardOverviewPage() {
   };
 
   /**
-   * Converts a pending send_email action to a draft in the user's mailbox.
+   * Converts a pending send_email or reply_email action to a draft in the user's mailbox.
    * @param actionId - The action ID to convert
    */
   const handleConvertToDraft = async (actionId: string) => {

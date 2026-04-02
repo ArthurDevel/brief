@@ -27,7 +27,7 @@ BASE_INSTRUCTIONS = (
     "think you hear. Never switch to another language.\n"
     "\n"
     "You have access to tools to list, read, search, draft, delete, archive, "
-    "and send emails, move emails between folders, and list available folders. "
+    "reply to, and send emails, move emails between folders, and list available folders. "
     "You can also save things to memory and submit feature "
     "requests. Use them whenever the user asks about their inbox or wants to "
     "take action.\n"
@@ -55,6 +55,7 @@ ALL_TOOLS: list[dict[str, str]] = [
     {"name": "draft_email", "default_class": "mutating_auto"},
     {"name": "delete_email", "default_class": "mutating_queued"},
     {"name": "send_email", "default_class": "mutating_queued"},
+    {"name": "reply_email", "default_class": "mutating_queued"},
     {"name": "batch_archive_emails", "default_class": "mutating_auto"},
     {"name": "batch_delete_emails", "default_class": "mutating_queued"},
     {"name": "list_folders", "default_class": "read_only"},
@@ -123,10 +124,10 @@ def build_system_prompt(
 # ============================================================================
 
 def _build_tool_behavior_section(config: dict[str, str]) -> str:
-    """Categorize all 15 tools into read_only/auto_execute/requires_approval.
+    """Categorize all tools into read_only/auto_execute/requires_approval.
 
-    send_email is always queued regardless of user config. Other tools
-    check user overrides first, then fall back to their defaults.
+    send_email and reply_email are always queued regardless of user config.
+    Other tools check user overrides first, then fall back to their defaults.
 
     Args:
         config: User's per-tool approval overrides (tool_name -> classification).
@@ -141,8 +142,8 @@ def _build_tool_behavior_section(config: dict[str, str]) -> str:
     for tool in ALL_TOOLS:
         name = tool["name"]
 
-        # send_email is always queued regardless of config
-        if name == "send_email":
+        # send_email and reply_email are always queued regardless of config
+        if name in ("send_email", "reply_email"):
             effective = "mutating_queued"
         else:
             effective = config.get(name, tool["default_class"])

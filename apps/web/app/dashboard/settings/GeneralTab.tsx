@@ -30,6 +30,7 @@ const TOOL_NAMES = [
   "draft_email",
   "delete_email",
   "send_email",
+  "reply_email",
 ] as const;
 
 const CLASSIFICATION_OPTIONS: ActionClassification[] = [
@@ -592,7 +593,7 @@ export default function GeneralTab() {
             {savedSection === "tools" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
           </div>
           <p className="mb-4 text-[13px] text-[var(--text-secondary)]">
-            Control which actions require manual approval. &quot;send_email&quot; always requires approval.
+            Control which actions require manual approval. &quot;send_email&quot; and &quot;reply_email&quot; always require approval.
           </p>
           <div className="space-y-3">
             {TOOL_NAMES.map((toolName) => (
@@ -603,7 +604,7 @@ export default function GeneralTab() {
                   onChange={(e) =>
                     handleToolApprovalChange(toolName, e.target.value as ActionClassification)
                   }
-                  disabled={toolName === "send_email"}
+                  disabled={toolName === "send_email" || toolName === "reply_email"}
                   className="border border-[var(--border-color)] px-3 py-1.5 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)] disabled:bg-[var(--bg-hover)] disabled:text-[var(--text-secondary)]"
                 >
                   <option value="">Default ({getDefaultClassification(toolName)})</option>

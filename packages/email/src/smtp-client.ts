@@ -12,7 +12,7 @@
 
 import type { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
-import type { SmtpConfig } from "./types";
+import type { SmtpConfig, ReplyContext } from "./types";
 import type { UndoRecipe } from "@dublin/tools";
 import { resolveSpecialUseFolder } from "./imap-client";
 
@@ -52,14 +52,69 @@ export async function sendEmail(
 }
 
 /**
+ * Sends a reply to an existing email with proper threading headers.
+ * Builds In-Reply-To, References, and Re: subject. Not undoable.
+ * @param config - SMTP server connection parameters
+ * @param context - Reply context from the original email (message ID, recipients, subject)
+ * @param body - Reply body text
+ * @param replyAll - If true, CC all original To/CC recipients (minus sender)
+ * @param senderAddress - The current user's email address (excluded from CC in reply-all)
+ * @returns null (not undoable)
+ */
+export async function replyToEmail(
+  config: SmtpConfig,
+  context: ReplyContext,
+  body: string,
+  replyAll: boolean,
+  senderAddress: string
+): Promise<null> {
+  const transport = nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.port === 465,
+    auth: {
+      user: config.user,
+      pass: config.password,
+    },
+  });
+
+  // Build subject with Re: prefix only if not already present
+  const subject = /^re:/i.test(context.subject)
+    ? context.subject
+    : `Re: ${context.subject}`;
+
+  // Build References: original references + original message ID
+  const references = [...context.references, context.messageId].join(" ");
+
+  // Build CC list for reply-all: original To + CC, minus our own address
+  const cc = replyAll
+    ? [...context.to, ...context.cc].filter(
+        (addr) => addr.toLowerCase() !== senderAddress.toLowerCase()
+      )
+    : [];
+
+  await transport.sendMail({
+    from: senderAddress,
+    to: context.from,
+    cc: cc.length > 0 ? cc : undefined,
+    subject,
+    text: body,
+    inReplyTo: context.messageId,
+    references,
+  });
+
+  return null;
+}
+
+/**
  * Saves an email draft by appending to the Drafts folder via IMAP.
  * @param client - Connected ImapFlow client
- * @param params - Draft parameters (to, subject, body)
+ * @param params - Draft parameters (to, subject, body, and optional cc/threading headers)
  * @returns UndoRecipe to delete the created draft
  */
 export async function saveDraft(
   client: ImapFlow,
-  params: { to: string; subject: string; body: string }
+  params: { to: string; subject: string; body: string; cc?: string; inReplyTo?: string; references?: string }
 ): Promise<UndoRecipe> {
   const rawMessage = buildRawMessage(params);
 
@@ -125,19 +180,30 @@ export async function testSmtpConnection(config: SmtpConfig): Promise<{ ok: bool
 
 /**
  * Builds a raw RFC 2822 email message from parameters.
- * @param params - Email parameters (to, subject, body)
+ * @param params - Email parameters (to, subject, body, and optional cc/threading headers)
  * @returns Raw email string suitable for IMAP APPEND
  */
-function buildRawMessage(params: { to: string; subject: string; body: string }): string {
+function buildRawMessage(params: { to: string; subject: string; body: string; cc?: string; inReplyTo?: string; references?: string }): string {
   const date = new Date().toUTCString();
 
-  return [
+  const headers: string[] = [
     `To: ${params.to}`,
     `Subject: ${params.subject}`,
     `Date: ${date}`,
-    `Content-Type: text/plain; charset=utf-8`,
-    `MIME-Version: 1.0`,
-    ``,
-    params.body,
-  ].join("\r\n");
+  ];
+
+  if (params.cc) {
+    headers.push(`Cc: ${params.cc}`);
+  }
+  if (params.inReplyTo) {
+    headers.push(`In-Reply-To: ${params.inReplyTo}`);
+  }
+  if (params.references) {
+    headers.push(`References: ${params.references}`);
+  }
+
+  headers.push(`Content-Type: text/plain; charset=utf-8`);
+  headers.push(`MIME-Version: 1.0`);
+
+  return [...headers, ``, params.body].join("\r\n");
 }
