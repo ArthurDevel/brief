@@ -194,7 +194,14 @@ def create_pipeline(
             else:
                 email_context = "This is the user's first call. They have no unread emails."
         else:
-            count = count_emails_since(imap_holder["client"], last_ended_at)
+            # Convert last_ended_at to the user's local timezone before comparing
+            # against Gmail's naive local-time envelope dates. Without this,
+            # the UTC hour (e.g. 18:21) would be compared against local-time
+            # envelope dates (e.g. 11:25), incorrectly filtering out all emails.
+            since_for_count = last_ended_at
+            if user_context.timezone is not None:
+                since_for_count = last_ended_at.astimezone(ZoneInfo(user_context.timezone))
+            count = count_emails_since(imap_holder["client"], since_for_count)
             if count > 0:
                 email_context = f"You have {count} new emails since the last call."
             else:
