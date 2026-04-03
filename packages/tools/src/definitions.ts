@@ -45,7 +45,7 @@ export const CAPABILITIES_MARKDOWN = `Here is what I can help you with:
 
 **Finding contacts** -- look up people by name so you can quickly email them.
 
-**Summarizing newsletters** -- I can give you a quick summary of your newsletter emails.
+**Daily newsletter recap** -- I can give you a daily summary of all the newsletters you received, so you stay informed without reading each one.
 
 **Memory** -- I can save your preferences and details you tell me, so I remember them next time.
 
