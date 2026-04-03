@@ -50,6 +50,7 @@ OPENROUTER_COST_MAX_RETRIES = 3
 # ============================================================================
 
 LLM_MODEL = "google/gemini-3-flash-preview"
+NEWSLETTER_LLM_MODEL = LLM_MODEL
 
 
 @dataclass

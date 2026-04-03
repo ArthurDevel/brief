@@ -6,10 +6,11 @@ Port of packages/tools/src/definitions.ts.
 Each definition describes a tool the LLM can call. These are schema-only
 (no handlers) -- handlers live in handlers.py and email_client.py.
 
-- Define all 15 tool schemas (list_inbox, read_email, read_thread,
+- Define all 17 tool schemas (list_inbox, read_email, read_thread,
   search_emails, mark_as_read, draft_email, delete_email, archive_email,
   send_email, batch_archive_emails, batch_delete_emails, save_memory,
-  submit_feature_request, list_folders, move_to_folder)
+  submit_feature_request, list_folders, move_to_folder,
+  get_newsletter_summary, set_newsletter_config)
 - Export them as a list for LLM service configuration
 """
 
@@ -44,7 +45,7 @@ CAPABILITIES_MARKDOWN = """Here is what I can help you with:
 # ============================================================================
 
 def get_tool_definitions() -> list[dict]:
-    """Return all 15 tool schemas as Python dicts in OpenAI function-calling format.
+    """Return all 17 tool schemas as Python dicts in OpenAI function-calling format.
 
     Returns:
         List of tool definition dicts, each with "type", "function" containing
@@ -425,6 +426,52 @@ def get_tool_definitions() -> list[dict]:
                 "parameters": {
                     "type": "object",
                     "properties": {},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_newsletter_summary",
+                "description": (
+                    "Retrieve yesterday's newsletter summary. Returns the summary text "
+                    "and whether it was already listened to."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "set_newsletter_config",
+                "description": (
+                    "Update the user's newsletter preferences. All parameters are optional "
+                    "(partial update). Use this when the user wants to enable/disable newsletter "
+                    "summaries, add/remove newsletter senders, or set custom summary instructions."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Whether newsletter summaries are enabled.",
+                        },
+                        "newsletters": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of sender email addresses to track for newsletters.",
+                        },
+                        "summary_prompt": {
+                            "type": "string",
+                            "description": (
+                                "Custom instructions for the newsletter summary "
+                                "(e.g. 'focus on AI news', 'keep it short')."
+                            ),
+                        },
+                    },
                 },
             },
         },

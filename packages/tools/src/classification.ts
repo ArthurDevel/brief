@@ -33,6 +33,8 @@ const DEFAULT_CLASSIFICATIONS: Record<ToolName, ActionClassification> = {
   delete_email: "mutating_queued",
   send_email: "mutating_queued",
   reply_email: "mutating_queued",
+  get_newsletter_summary: "mutating_auto",
+  set_newsletter_config: "mutating_auto",
 };
 
 // ============================================================================
