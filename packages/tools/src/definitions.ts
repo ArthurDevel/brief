@@ -30,6 +30,29 @@ export interface ToolDefinition {
 }
 
 // ============================================================================
+// CAPABILITIES MARKDOWN
+// ============================================================================
+
+// NOTE: keep in sync with apps/voice-pipeline/src/tools/definitions.py
+/** Markdown summary of all capabilities this assistant has. */
+export const CAPABILITIES_MARKDOWN = `Here is what I can help you with:
+
+**Reading emails** -- check your inbox, search for specific emails, and read full threads or individual messages.
+
+**Managing emails** -- archive, delete, label, move to folders, and mark emails as read.
+
+**Sending emails** -- compose and send new emails, reply to existing conversations, or save drafts for later.
+
+**Finding contacts** -- look up people by name so you can quickly email them.
+
+**Summarizing newsletters** -- I can give you a quick summary of your newsletter emails.
+
+**Memory** -- I can save your preferences and details you tell me, so I remember them next time.
+
+**Feature requests** -- if there is something you wish I could do, just tell me and I will pass it along to the team.
+`;
+
+// ============================================================================
 // TOOL DEFINITIONS
 // ============================================================================
 
@@ -314,6 +337,16 @@ export const toolDefinitions: ToolDefinition[] = [
         },
       },
       required: ["description"],
+    },
+  },
+  {
+    type: "function",
+    name: "what_can_you_do",
+    label: "Capabilities",
+    description: "Returns a summary of all capabilities this assistant has.",
+    parameters: {
+      type: "object",
+      properties: {},
     },
   },
 ];
