@@ -1,16 +1,17 @@
 /**
  * Authenticated proxy for triggering an initial onboarding call.
  *
- * Verifies the user's Supabase session, then forwards the request
- * to the voice pipeline's /trigger-call endpoint with internal auth.
+ * Verifies the user's identity via Supabase session or onboarding token,
+ * then forwards the request to the voice pipeline's /trigger-call endpoint.
  *
  * Responsibilities:
- * - Verify Supabase auth session
+ * - Verify auth: Supabase session first, onboarding_token JWT as fallback
  * - Forward POST to voice pipeline with INTERNAL_API_KEY
  * - Add CORS headers for cross-subdomain requests from the lander
  */
 
 import { cookies } from "next/headers";
+import { jwtVerify } from "jose";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
 
@@ -21,6 +22,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/client";
 const VOICE_PIPELINE_URL = process.env.NEXT_PUBLIC_VOICE_PIPELINE_URL;
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
 const LANDER_URL = process.env.LANDER_URL;
+const ONBOARDING_TOKEN_SECRET = process.env.ONBOARDING_TOKEN_SECRET;
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -35,6 +37,28 @@ function getCorsHeaders(): Record<string, string> {
     "Access-Control-Allow-Origin": LANDER_URL || "",
     "Access-Control-Allow-Credentials": "true",
   };
+}
+
+/**
+ * Verify the onboarding_token JWT cookie and extract the userId.
+ * Used as a fallback when the user has no Supabase session (e.g. during
+ * onboarding before email confirmation).
+ * @param token - The raw JWT string from the onboarding_token cookie
+ * @returns The userId from the token payload, or null if invalid/missing
+ */
+async function getUserIdFromOnboardingToken(token: string): Promise<string | null> {
+  if (!ONBOARDING_TOKEN_SECRET) {
+    throw new Error("ONBOARDING_TOKEN_SECRET is not set");
+  }
+
+  try {
+    const secret = new TextEncoder().encode(ONBOARDING_TOKEN_SECRET);
+    const { payload } = await jwtVerify(token, secret);
+    const userId = payload.userId as string | undefined;
+    return userId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ============================================================================
@@ -61,12 +85,26 @@ export async function POST(request: NextRequest): Promise<NextResponse<TriggerCa
     throw new Error("INTERNAL_API_KEY is not set");
   }
 
-  // Verify Supabase session
+  // Resolve userId: try Supabase session first, fall back to onboarding token
   const cookieStore = await cookies();
-  const supabase = createServerSupabaseClient(cookieStore);
-  const { data: { user }, error } = await supabase.auth.getUser();
+  let userId: string | null = null;
 
-  if (error || !user) {
+  // Try Supabase session
+  const supabase = createServerSupabaseClient(cookieStore);
+  const { data: { user } } = await supabase.auth.getUser();
+  if (user) {
+    userId = user.id;
+  }
+
+  // Fall back to onboarding_token cookie (pre-email-confirmation flow)
+  if (!userId) {
+    const onboardingToken = cookieStore.get("onboarding_token")?.value;
+    if (onboardingToken) {
+      userId = await getUserIdFromOnboardingToken(onboardingToken);
+    }
+  }
+
+  if (!userId) {
     return NextResponse.json(
       { success: false, error: "unauthorized" },
       { status: 401, headers: corsHeaders }
@@ -80,7 +118,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<TriggerCa
       "Content-Type": "application/json",
       "Authorization": `Bearer ${INTERNAL_API_KEY}`,
     },
-    body: JSON.stringify({ user_id: user.id }),
+    body: JSON.stringify({ user_id: userId }),
   });
 
   const result = await response.json();
