@@ -96,6 +96,7 @@ TOOL_NARRATIONS: dict[str, str] = {
     "batch_archive_emails": "Archiving those emails.",
     "batch_delete_emails": "Deleting those emails.",
     "find_contact": "Looking up that contact.",
+    "what_can_you_do": "Checking my capabilities.",
 }
 
 
