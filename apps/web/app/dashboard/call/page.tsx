@@ -16,7 +16,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useCall } from "@/contexts/CallContext";
-import { Smartphone, Monitor, QrCode, UserPlus } from "lucide-react";
+import { Smartphone, Monitor, QrCode, UserPlus, PhoneOutgoing } from "lucide-react";
 import * as QRCode from "qrcode";
 import type { UserSettings, CompanyPhone, UserPhone } from "@/lib/types";
 
@@ -67,6 +67,8 @@ export default function CallPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
+  const [callMeStatus, setCallMeStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [callMeError, setCallMeError] = useState<string | null>(null);
 
   // Fetch user settings and company phones on mount
   useEffect(() => {
@@ -132,6 +134,34 @@ export default function CallPage() {
     a.click();
     URL.revokeObjectURL(url);
   }, [matchedCompanyPhone]);
+
+  /**
+   * Triggers an outbound call from the voice pipeline to the user's phone.
+   */
+  const triggerCallMe = useCallback(async () => {
+    setCallMeStatus("loading");
+    setCallMeError(null);
+
+    try {
+      const res = await fetch("/api/trigger-call", { method: "POST" });
+      const data = await res.json();
+
+      if (data.success) {
+        setCallMeStatus("success");
+      } else {
+        setCallMeStatus("error");
+        const messages: Record<string, string> = {
+          no_phone_configured: "No phone number configured. Add one in Settings.",
+          country_not_supported: "Your country is not yet supported for outbound calls.",
+          usage_limit_exceeded: "You have reached your monthly call limit.",
+        };
+        setCallMeError(messages[data.error] ?? "Failed to initiate call.");
+      }
+    } catch {
+      setCallMeStatus("error");
+      setCallMeError("Failed to initiate call.");
+    }
+  }, []);
 
   // ============================================================================
   // RENDER
@@ -216,6 +246,29 @@ export default function CallPage() {
                       </div>
                     )}
                     <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
+                  </div>
+
+                  {/* Call me button */}
+                  <div className="mt-5 pt-5 border-t border-[var(--border-color)]">
+                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-3">
+                      Or have your assistant call you right now.
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={triggerCallMe}
+                        disabled={callMeStatus === "loading" || callMeStatus === "success"}
+                        className="flex items-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-4 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <PhoneOutgoing className="w-4 h-4" />
+                        {callMeStatus === "loading" ? "Calling..." : callMeStatus === "success" ? "Call initiated" : "Call me"}
+                      </button>
+                      {callMeStatus === "success" && (
+                        <span className="text-[13px] font-medium text-green-600">Your phone should ring shortly.</span>
+                      )}
+                    </div>
+                    {callMeStatus === "error" && callMeError && (
+                      <p className="mt-2 text-[13px] font-medium text-red-600">{callMeError}</p>
+                    )}
                   </div>
                 </>
               ) : (
