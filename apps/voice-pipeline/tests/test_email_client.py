@@ -9,7 +9,7 @@ not the TypeScript package.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from imapclient import IMAPClient
@@ -569,3 +569,78 @@ class TestCountEmailsSinceTimeGranularity:
         count = count_emails_since(mock_client, since)
 
         assert count == 0
+
+
+# --------------------------------------------------------------------------
+# Regression: naive envelope dates with non-UTC since offset
+# Reproduces production bug where list_inbox returned 0 results despite
+# emails existing in the window. Root cause: naive envelope dates assumed
+# UTC, but since had a -07:00 offset, making the comparison wrong.
+# --------------------------------------------------------------------------
+
+PDT = timezone(timedelta(hours=-7))
+
+
+class TestNaiveEnvelopeDateWithNonUtcSince:
+    """Reproduce bug: since with -07:00 offset vs naive envelope dates."""
+
+    @patch("src.tools.email_client._fetch_summaries")
+    def test_list_inbox_finds_emails_when_since_has_non_utc_offset(
+        self, mock_fetch_summaries: MagicMock
+    ) -> None:
+        """Emails at 9:00 and 9:15 AM should be found when since is 8:47 AM PDT.
+
+        Production scenario: LLM sent since="2026-04-03T08:47:57-07:00",
+        envelope dates were naive (no tzinfo), list_inbox returned 0 results.
+        """
+        mock_client = MagicMock()
+
+        # since = 8:47 AM PDT (= 15:47 UTC)
+        since = datetime(2026, 4, 3, 8, 47, 57, tzinfo=PDT)
+
+        # IMAP SINCE (date-only) returns UIDs for April 3
+        mock_client.search.return_value = [1, 2, 3]
+
+        # Envelope dates are NAIVE -- imapclient sometimes returns these
+        # without tzinfo. The emails were at 9:00 AM and 9:15 AM local time.
+        # uid 1: 8:30 AM (before since) -- should be excluded
+        # uid 2: 9:00 AM (after since) -- should be included
+        # uid 3: 9:15 AM (after since) -- should be included
+        mock_client.fetch.side_effect = [
+            # First fetch call: _filter_uids_by_datetime fetches ENVELOPE
+            {
+                1: {b"ENVELOPE": _make_envelope(datetime(2026, 4, 3, 8, 30, 0))},
+                2: {b"ENVELOPE": _make_envelope(datetime(2026, 4, 3, 9, 0, 0))},
+                3: {b"ENVELOPE": _make_envelope(datetime(2026, 4, 3, 9, 15, 0))},
+            },
+            # Second fetch call: _fetch_summaries (content doesn't matter for this test)
+            {},
+        ]
+        mock_fetch_summaries.return_value = ["summary_2", "summary_3"]
+
+        result = list_inbox(mock_client, limit=20, since=since)
+
+        # Should find UIDs 2 and 3 -- they are after 8:47 AM in the same timezone
+        mock_fetch_summaries.assert_called_once_with(mock_client, [2, 3])
+        assert result == ["summary_2", "summary_3"]
+
+    def test_count_emails_since_with_non_utc_offset_and_naive_envelopes(self) -> None:
+        """count_emails_since should correctly count when since has -07:00 offset."""
+        mock_client = MagicMock()
+
+        # since = 8:47 AM PDT
+        since = datetime(2026, 4, 3, 8, 47, 57, tzinfo=PDT)
+
+        mock_client.search.return_value = [1, 2, 3]
+
+        # Naive envelope dates (same local time frame as since)
+        mock_client.fetch.return_value = {
+            1: {b"ENVELOPE": _make_envelope(datetime(2026, 4, 3, 8, 30, 0))},
+            2: {b"ENVELOPE": _make_envelope(datetime(2026, 4, 3, 9, 0, 0))},
+            3: {b"ENVELOPE": _make_envelope(datetime(2026, 4, 3, 9, 15, 0))},
+        }
+
+        count = count_emails_since(mock_client, since)
+
+        # Should count 2 emails (uid 2 and 3), not 0
+        assert count == 2
