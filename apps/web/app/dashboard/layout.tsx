@@ -12,14 +12,15 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { CallProvider } from "@/contexts/CallContext";
 import { EmailStatusProvider } from "@/contexts/EmailStatusContext";
 import ActiveCallBar from "@/components/ActiveCallBar";
+import { createBrowserClient } from "@/lib/supabase/client";
 import EmailStatusBanner from "./EmailStatusBanner";
-import { Home, Phone, Activity, Clock, Settings, Menu, X } from "lucide-react";
+import { Home, Phone, Activity, Clock, Settings, Menu, X, User, LogOut } from "lucide-react";
 
 // ============================================================================
 // CONSTANTS
@@ -55,8 +56,12 @@ function isActive(href: string, pathname: string): boolean {
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [isFreePlan, setIsFreePlan] = useState<boolean>(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState<boolean>(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   // Close Mobile Menu automatically upon navigation
   useEffect(() => {
@@ -69,6 +74,36 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       .then((data) => setIsFreePlan(data.plan === "free"))
       .catch(() => {});
   }, []);
+
+  // Fetch the authenticated user's email
+  useEffect(() => {
+    const supabase = createBrowserClient();
+    supabase.auth.getUser().then(({ data }) => {
+      setUserEmail(data.user?.email ?? null);
+    });
+  }, []);
+
+  // Close user menu when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent): void {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+    }
+    if (isUserMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isUserMenuOpen]);
+
+  /**
+   * Signs the user out and redirects to the login page.
+   */
+  async function handleLogout(): Promise<void> {
+    const supabase = createBrowserClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+  }
 
   return (
     <CallProvider>
@@ -123,6 +158,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   Upgrade to Pro
                 </Link>
               </div>
+            </div>
+          )}
+
+          {/* User menu */}
+          {userEmail && (
+            <div className="sidebar-user-menu" ref={userMenuRef}>
+              {isUserMenuOpen && (
+                <button className="sidebar-user-logout" onClick={handleLogout}>
+                  <LogOut size={14} strokeWidth={1.75} />
+                  Log out
+                </button>
+              )}
+              <button
+                className="sidebar-user-button"
+                onClick={() => setIsUserMenuOpen((prev) => !prev)}
+              >
+                <User size={16} strokeWidth={1.75} />
+                <span className="sidebar-user-email">{userEmail}</span>
+              </button>
             </div>
           )}
         </aside>

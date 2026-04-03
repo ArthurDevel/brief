@@ -169,6 +169,62 @@ body {
   padding: 12px 0;
 }
 
+.sidebar-user-menu {
+  position: relative;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-color);
+  margin-top: auto;
+}
+
+.sidebar-user-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.sidebar-user-button:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-user-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.sidebar-user-logout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.sidebar-user-logout:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .sidebar-section-label {
   padding: 16px 24px 8px;
   font-size: 11px;
