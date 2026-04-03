@@ -27,6 +27,7 @@ from supabase import Client
 from src.session import ImapConfig, SmtpConfig
 from src.tools.classification import classify_action
 from src.tools.contact_matcher import rank_contacts
+from src.tools.definitions import CAPABILITIES_MARKDOWN
 from src.tools import email_client
 from src.tools.markdown_formatter import format_email_summaries, format_email, format_folders, format_thread
 
@@ -688,6 +689,9 @@ def _dispatch_tool(
             ),
         )
         return {"moved": True}, UndoRecipe(**recipe_data), message_id
+
+    if tool_name == "what_can_you_do":
+        return ({"markdown": CAPABILITIES_MARKDOWN}, None, None)
 
     raise ValueError(f"Unknown tool: {tool_name}")
 

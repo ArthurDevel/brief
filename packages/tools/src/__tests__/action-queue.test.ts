@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import hoodiecrow from "hoodiecrow-imap";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { ImapFlow } from "imapflow";
 import type { ImapConfig } from "@dublin/email";
 import {
   createImapConnection,
@@ -18,7 +19,7 @@ import {
   listInbox,
 } from "@dublin/email";
 import { executeAction, undoAction, handleToolCall, classifyAction, convertActionToDraft, bulkExecuteActions } from "../action-queue";
-import type { ActionInput } from "../types";
+import type { ActionInput, ActionResult } from "../types";
 
 // ============================================================================
 // TEST SERVER SETUP
@@ -2213,5 +2214,34 @@ describe("convertActionToDraft", () => {
     } finally {
       await closeImapConnection(client);
     }
+  });
+});
+
+// ============================================================================
+// WHAT_CAN_YOU_DO TOOL
+// ============================================================================
+
+describe("what_can_you_do", () => {
+  it("returns capabilities markdown", async () => {
+    const store: Record<string, Record<string, Row>> = { actions: {} };
+    const supabase = createFakeSupabase(store) as unknown as SupabaseClient;
+
+    const input: ActionInput = {
+      userId: "user-1",
+      sessionId: "session-1",
+      toolName: "what_can_you_do",
+      arguments: {},
+    };
+
+    const result: ActionResult = await handleToolCall(
+      input,
+      {},
+      null as unknown as ImapFlow,
+      DUMMY_SMTP_CONFIG,
+      supabase,
+    );
+
+    expect(result.status).toBe("executed");
+    expect((result.result as Record<string, unknown>).markdown).toContain("archive");
   });
 });

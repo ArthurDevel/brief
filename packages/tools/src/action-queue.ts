@@ -36,6 +36,7 @@ interface SmtpConfig {
   password: string;
 }
 import { getDefaultClassification } from "./classification";
+import { CAPABILITIES_MARKDOWN } from "./definitions";
 
 // ============================================================================
 // MAIN HANDLERS
@@ -911,6 +912,10 @@ async function dispatchTool(
 
     case "submit_feature_request": {
       return await handleFeatureRequest(supabase, userId, args.description as string);
+    }
+
+    case "what_can_you_do": {
+      return { result: { markdown: CAPABILITIES_MARKDOWN }, undoRecipe: null };
     }
 
     default:

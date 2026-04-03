@@ -36,6 +36,7 @@ DEFAULT_CLASSIFICATIONS: dict[str, str] = {
     "reply_email": "mutating_queued",
     "list_folders": "read_only",
     "move_to_folder": "mutating_auto",
+    "what_can_you_do": "read_only",
 }
 
 

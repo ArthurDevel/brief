@@ -299,3 +299,36 @@ class TestMessageIdInArguments:
 
         assert result.status == "executed"
         assert "message_id" not in inserted_row["arguments"]
+
+
+class TestWhatCanYouDo:
+    """what_can_you_do should return capabilities markdown."""
+
+    def test_returns_capabilities_markdown(self):
+        """handle_tool_call with what_can_you_do returns executed status
+        and includes capability text."""
+        from src.tools.handlers import handle_tool_call, ActionInput
+
+        # Mock Supabase to allow the normal execute-and-store flow
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.insert.return_value.execute.return_value.data = [
+            {"id": "fake-action-id"}
+        ]
+
+        result = handle_tool_call(
+            input=ActionInput(
+                user_id="test-user",
+                session_id="test-session",
+                tool_name="what_can_you_do",
+                arguments={},
+            ),
+            user_config={},
+            imap_holder={"client": MagicMock(), "config": MagicMock()},
+            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert result.result is not None
+        assert "archive" in result.result["markdown"].lower()
+        assert "read" in result.result["markdown"].lower()
