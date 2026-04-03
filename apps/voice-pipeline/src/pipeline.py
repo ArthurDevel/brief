@@ -18,7 +18,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -209,6 +209,31 @@ def create_pipeline(
                 email_context = "No new emails since the last call."
     except Exception:
         logger.warning("[pipeline] Failed to fetch email count for greeting, skipping")
+
+    # -- Check for unlistened newsletter summary --
+    try:
+        if user_context.timezone is not None:
+            nl_tz = ZoneInfo(user_context.timezone)
+        else:
+            nl_tz = ZoneInfo("UTC")
+        nl_yesterday = (datetime.now(nl_tz) - timedelta(days=1)).date()
+
+        nl_response = (
+            supabase.table("newsletter_summaries")
+            .select("id")
+            .eq("user_id", session.user_id)
+            .eq("summary_date", nl_yesterday.isoformat())
+            .eq("listened", False)
+            .execute()
+        )
+        if nl_response.data:
+            nl_line = "You have an unlistened newsletter summary from yesterday."
+            if email_context:
+                email_context += f" {nl_line}"
+            else:
+                email_context = nl_line
+    except Exception:
+        logger.warning("[pipeline] Failed to check newsletter summary, skipping")
 
     # -- Build session metadata and system prompt --
     # Use the user's local timezone if available, otherwise fall back to UTC

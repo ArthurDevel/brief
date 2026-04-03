@@ -35,6 +35,7 @@ from src.config import Settings
 
 SCHEDULER_INTERVAL_SECONDS = 30
 DUE_WINDOW_MINUTES = 5
+NEWSLETTER_TRIGGER_HOUR_UTC = 6
 
 DAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -329,21 +330,26 @@ async def start_scheduler(settings: Settings, supabase_factory: Callable[[], Cli
 # ============================================================================
 
 async def _scheduler_loop(settings: Settings, supabase_factory: Callable[[], Client]) -> None:
-    """Infinite loop that checks for due users and initiates calls.
+    """Infinite loop that checks for due users, initiates calls, and triggers newsletter generation.
 
     Fetches company phone numbers once per tick, then checks for due users
-    and initiates calls. Sleeps for SCHEDULER_INTERVAL_SECONDS between ticks.
+    and initiates calls. Once daily at NEWSLETTER_TRIGGER_HOUR_UTC, triggers
+    the newsletter summary job. Sleeps for SCHEDULER_INTERVAL_SECONDS between ticks.
     Catches all exceptions to keep running.
 
     Args:
         settings: Application settings.
         supabase_factory: Callable that creates a fresh Supabase client.
     """
+    last_newsletter_run: datetime | None = None
+
     while True:
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
         try:
             supabase = supabase_factory()
+
+            # -- Scheduled calls --
             company_phones = fetch_company_phones(supabase, settings.app_environment)
             due_users = get_due_users(supabase)
 
@@ -356,5 +362,46 @@ async def _scheduler_loop(settings: Settings, supabase_factory: Callable[[], Cli
                 except Exception as exc:
                     logger.error("[scheduler] Error initiating call for user {}: {}", user.user_id, exc)
 
+            # -- Daily newsletter generation --
+            last_newsletter_run = await _maybe_run_newsletter_job(
+                supabase, settings, last_newsletter_run
+            )
+
         except Exception as exc:
             logger.exception("[scheduler] Error in scheduler tick")
+
+
+async def _maybe_run_newsletter_job(
+    supabase: Client,
+    settings: Settings,
+    last_newsletter_run: datetime | None,
+) -> datetime | None:
+    """Trigger the daily newsletter job if it hasn't run today after the trigger hour.
+
+    Args:
+        supabase: Supabase client for DB operations.
+        settings: Application settings with OpenRouter API key.
+        last_newsletter_run: Timestamp of the last successful newsletter run, or None.
+
+    Returns:
+        Updated last_newsletter_run timestamp (unchanged if not triggered, now if triggered).
+    """
+    now_utc = datetime.now(ZoneInfo("UTC"))
+
+    # Only trigger at or after the configured hour
+    if now_utc.hour < NEWSLETTER_TRIGGER_HOUR_UTC:
+        return last_newsletter_run
+
+    # Skip if already run today
+    if last_newsletter_run is not None and last_newsletter_run.date() == now_utc.date():
+        return last_newsletter_run
+
+    logger.info("[scheduler] Triggering daily newsletter generation")
+    try:
+        from src.newsletter import run_daily_newsletter_job
+        generated = await run_daily_newsletter_job(supabase, settings.openrouter_api_key)
+        logger.info("[scheduler] Newsletter job completed: {} summary(ies) generated", generated)
+        return now_utc
+    except Exception as exc:
+        logger.error("[scheduler] Newsletter job failed: {}", exc)
+        return last_newsletter_run

@@ -19,12 +19,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from supabase import Client
 
-from src.session import ImapConfig, SmtpConfig
+from src.session import ImapConfig, SmtpConfig, _timezone_from_country_code
 from src.tools.classification import classify_action
 from src.tools.contact_matcher import rank_contacts
 from src.tools.definitions import CAPABILITIES_MARKDOWN
@@ -721,6 +722,14 @@ def _dispatch_tool(
     if tool_name == "what_can_you_do":
         return ({"markdown": CAPABILITIES_MARKDOWN}, None, None)
 
+    if tool_name == "get_newsletter_summary":
+        result = _handle_get_newsletter_summary(supabase, user_id)
+        return result, None, None
+
+    if tool_name == "set_newsletter_config":
+        result = _handle_set_newsletter_config(supabase, user_id, args)
+        return result, None, None
+
     raise ValueError(f"Unknown tool: {tool_name}")
 
 
@@ -966,3 +975,149 @@ def _move_email_by_uid(
     """
     client.select_folder(from_folder)
     client.move([int(email_id)], to_folder)
+
+
+def _resolve_user_timezone(supabase: Client, user_id: str) -> str:
+    """Resolve the user's IANA timezone using the same chain as session.py.
+
+    Resolution order:
+    1. call_schedule.timezone (explicit IANA timezone)
+    2. _timezone_from_country_code(phone.countryCode) (fallback)
+    3. "UTC" (last resort)
+
+    Args:
+        supabase: Supabase client for DB operations.
+        user_id: The user ID to resolve timezone for.
+
+    Returns:
+        IANA timezone string.
+    """
+    response = (
+        supabase.table("user_settings")
+        .select("call_schedule, phone")
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
+
+    if response.data is None:
+        return "UTC"
+
+    settings = cast(dict[str, Any], response.data)
+
+    call_schedule = settings.get("call_schedule")
+    user_timezone: str | None = call_schedule.get("timezone") if call_schedule else None
+    if user_timezone is None:
+        phone = settings.get("phone")
+        if phone and phone.get("countryCode"):
+            user_timezone = _timezone_from_country_code(phone["countryCode"])
+
+    return user_timezone or "UTC"
+
+
+def _handle_get_newsletter_summary(
+    supabase: Client,
+    user_id: str,
+) -> dict[str, Any]:
+    """Handle the get_newsletter_summary tool.
+
+    Queries the user's timezone, computes yesterday's date, and fetches the
+    newsletter summary for that date. If found and not yet listened, marks
+    it as listened.
+
+    Args:
+        supabase: Supabase client for DB operations.
+        user_id: The user ID.
+
+    Returns:
+        Dict with summary, email_count, and listened_already -- or a message
+        if no summary is available.
+    """
+    # Resolve user timezone and compute yesterday's date
+    user_timezone = _resolve_user_timezone(supabase, user_id)
+    tz = ZoneInfo(user_timezone)
+    now_local = datetime.now(tz)
+    yesterday = (now_local - timedelta(days=1)).date()
+
+    # Query newsletter_summaries for yesterday
+    response = (
+        supabase.table("newsletter_summaries")
+        .select("id, summary, email_count, listened")
+        .eq("user_id", user_id)
+        .eq("summary_date", yesterday.isoformat())
+        .execute()
+    )
+
+    rows = cast(list[dict[str, Any]], response.data or [])
+    if not rows:
+        return {"message": "No newsletter summary available for yesterday."}
+
+    row = rows[0]
+    listened_already = bool(row["listened"])
+
+    # Mark as listened if not already
+    if not listened_already:
+        supabase.table("newsletter_summaries").update({
+            "listened": True,
+            "listened_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", row["id"]).execute()
+
+    return {
+        "summary": row["summary"],
+        "email_count": row["email_count"],
+        "listened_already": listened_already,
+    }
+
+
+def _handle_set_newsletter_config(
+    supabase: Client,
+    user_id: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Handle the set_newsletter_config tool.
+
+    Reads the current newsletter_config from user_settings, merges with
+    provided args, and writes back. Initializes a base config if the
+    current value is null.
+
+    Args:
+        supabase: Supabase client for DB operations.
+        user_id: The user ID.
+        args: Tool arguments (enabled, newsletters, summary_prompt -- all optional).
+
+    Returns:
+        Dict with updated=True and the new config.
+    """
+    # Read current newsletter_config
+    response = (
+        supabase.table("user_settings")
+        .select("newsletter_config")
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
+
+    if response.data is None:
+        raise RuntimeError(f"User settings not found for {user_id}")
+
+    settings = cast(dict[str, Any], response.data)
+    current_config = cast(dict[str, Any] | None, settings.get("newsletter_config"))
+
+    # Initialize base config if null
+    if current_config is None:
+        current_config = {"enabled": False, "newsletters": [], "summary_prompt": None}
+
+    # Merge provided args into current config
+    if "enabled" in args:
+        current_config["enabled"] = args["enabled"]
+    if "newsletters" in args:
+        current_config["newsletters"] = args["newsletters"]
+    if "summary_prompt" in args:
+        current_config["summary_prompt"] = args["summary_prompt"]
+
+    # Write back
+    supabase.table("user_settings").update({
+        "newsletter_config": current_config,
+    }).eq("user_id", user_id).execute()
+
+    return {"updated": True, "config": current_config}

@@ -5,10 +5,11 @@
  * (no handlers) -- handlers live in action-queue.ts and the email package.
  *
  * Responsibilities:
- * - Define all 16 tool schemas (list_inbox, read_email, read_thread,
+ * - Define all 18 tool schemas (list_inbox, read_email, read_thread,
  *   search_emails, mark_as_read, draft_email, delete_email, archive_email,
  *   send_email, reply_email, batch_archive_emails, batch_delete_emails,
- *   list_folders, move_to_folder, save_memory, submit_feature_request)
+ *   list_folders, move_to_folder, save_memory, submit_feature_request,
+ *   get_newsletter_summary, set_newsletter_config)
  * - Export them as an array for session.update
  */
 
@@ -347,6 +348,45 @@ export const toolDefinitions: ToolDefinition[] = [
     parameters: {
       type: "object",
       properties: {},
+    },
+  },
+
+  {
+    type: "function",
+    name: "get_newsletter_summary",
+    label: "Get Newsletter Summary",
+    description:
+      "Retrieve yesterday's newsletter summary. Returns the summary text and whether it was already listened to.",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+
+  {
+    type: "function",
+    name: "set_newsletter_config",
+    label: "Set Newsletter Config",
+    description:
+      "Update the user's newsletter preferences. All parameters are optional (partial update). Use this when the user wants to enable/disable newsletter summaries, add/remove newsletter senders, or set custom summary instructions.",
+    parameters: {
+      type: "object",
+      properties: {
+        enabled: {
+          type: "boolean",
+          description: "Whether newsletter summaries are enabled.",
+        },
+        newsletters: {
+          type: "array",
+          items: { type: "string" },
+          description: "List of sender email addresses to track for newsletters.",
+        },
+        summary_prompt: {
+          type: "string",
+          description:
+            "Custom instructions for the newsletter summary (e.g. 'focus on AI news', 'keep it short').",
+        },
+      },
     },
   },
 ];

@@ -28,9 +28,9 @@ BASE_INSTRUCTIONS = (
     "\n"
     "You have access to tools to list, read, search, draft, delete, archive, "
     "reply to, and send emails, move emails between folders, and list available folders. "
-    "You can also save things to memory and submit feature "
-    "requests. Use them whenever the user asks about their inbox or wants to "
-    "take action.\n"
+    "You can also save things to memory, submit feature requests, and retrieve or "
+    "configure daily newsletter summaries. Use them whenever the user asks about "
+    "their inbox or wants to take action.\n"
     "\n"
     "Speak fast and be brief. Use short sentences. No filler words. Get to "
     "the point immediately. When listing emails, just say the sender and "
@@ -63,6 +63,8 @@ ALL_TOOLS: list[dict[str, str]] = [
     {"name": "save_memory", "default_class": "read_only"},
     {"name": "submit_feature_request", "default_class": "read_only"},
     {"name": "find_contact", "default_class": "read_only"},
+    {"name": "get_newsletter_summary", "default_class": "mutating_auto"},
+    {"name": "set_newsletter_config", "default_class": "mutating_auto"},
 ]
 
 

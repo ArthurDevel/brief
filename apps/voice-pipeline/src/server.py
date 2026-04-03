@@ -620,6 +620,28 @@ def _run_contact_sync(user_id: str, mode: str = "full") -> None:
         logger.error("[server] Contact sync failed for user %s (mode=%s): %s", user_id, mode, exc)
 
 
+@app.post("/api/newsletter/generate-daily")
+async def generate_daily_newsletter(request: Request) -> JSONResponse:
+    """Trigger the daily newsletter summary job for all opted-in users.
+
+    Protected by INTERNAL_API_KEY via Bearer header. Returns the count of
+    summaries generated.
+    """
+    settings = load_settings()
+
+    # Authenticate
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer ") or auth_header[7:] != settings.internal_api_key:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    from src.newsletter import run_daily_newsletter_job
+
+    supabase = create_service_client(settings)
+    generated = await run_daily_newsletter_job(supabase, settings.openrouter_api_key)
+
+    return JSONResponse({"generated": generated})
+
+
 @app.post("/sync-contacts")
 async def sync_contacts(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     """Trigger a full contact sync for a user. Returns immediately, sync runs in background.

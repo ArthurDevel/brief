@@ -37,6 +37,8 @@ DEFAULT_CLASSIFICATIONS: dict[str, str] = {
     "list_folders": "read_only",
     "move_to_folder": "mutating_auto",
     "what_can_you_do": "read_only",
+    "get_newsletter_summary": "mutating_auto",
+    "set_newsletter_config": "mutating_auto",
 }
 
 

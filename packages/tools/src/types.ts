@@ -37,7 +37,9 @@ export type ToolName =
   | "move_to_folder"
   | "save_memory"
   | "submit_feature_request"
-  | "what_can_you_do";
+  | "what_can_you_do"
+  | "get_newsletter_summary"
+  | "set_newsletter_config";
 
 /** Lifecycle status of an action in the queue. */
 export type ActionStatus = "pending" | "approved" | "executed" | "undone" | "rejected" | "failed" | "converted";
