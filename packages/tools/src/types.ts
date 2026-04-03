@@ -36,7 +36,8 @@ export type ToolName =
   | "list_folders"
   | "move_to_folder"
   | "save_memory"
-  | "submit_feature_request";
+  | "submit_feature_request"
+  | "what_can_you_do";
 
 /** Lifecycle status of an action in the queue. */
 export type ActionStatus = "pending" | "approved" | "executed" | "undone" | "rejected" | "failed" | "converted";

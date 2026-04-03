@@ -17,6 +17,29 @@ from __future__ import annotations
 
 
 # ============================================================================
+# CONSTANTS
+# ============================================================================
+
+# NOTE: keep in sync with packages/tools/src/definitions.ts
+CAPABILITIES_MARKDOWN = """Here is what I can help you with:
+
+**Reading emails** -- check your inbox, search for specific emails, and read full threads or individual messages.
+
+**Managing emails** -- archive, delete, label, move to folders, and mark emails as read.
+
+**Sending emails** -- compose and send new emails, reply to existing conversations, or save drafts for later.
+
+**Finding contacts** -- look up people by name so you can quickly email them.
+
+**Daily newsletter recap** -- I can give you a daily summary of all the newsletters you received, so you stay informed without reading each one.
+
+**Memory** -- I can save your preferences and details you tell me, so I remember them next time.
+
+**Feature requests** -- if there is something you wish I could do, just tell me and I will pass it along to the team.
+"""
+
+
+# ============================================================================
 # TOOL DEFINITIONS
 # ============================================================================
 
@@ -34,6 +57,8 @@ def get_tool_definitions() -> list[dict]:
                 "name": "list_inbox",
                 "description": (
                     "List recent emails in the user's inbox. "
+                    "When session context provides a last_call_datetime, use the since parameter "
+                    "to show only emails received since then. "
                     "Returns sender, subject, snippet, and date for each email."
                 ),
                 "parameters": {
@@ -42,6 +67,13 @@ def get_tool_definitions() -> list[dict]:
                         "limit": {
                             "type": "number",
                             "description": "Maximum number of emails to return. Defaults to 20.",
+                        },
+                        "since": {
+                            "type": "string",
+                            "description": (
+                                "ISO 8601 datetime. Only return emails received after this time. "
+                                "When used, the limit parameter is ignored."
+                            ),
                         },
                     },
                 },
@@ -382,6 +414,17 @@ def get_tool_definitions() -> list[dict]:
                         },
                     },
                     "required": ["email_id", "folder"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "what_can_you_do",
+                "description": "Returns a summary of all capabilities this assistant has.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
                 },
             },
         },

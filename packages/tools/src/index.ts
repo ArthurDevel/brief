@@ -20,7 +20,7 @@ export type {
   BulkActionResponse,
 } from "./types";
 
-export { toolDefinitions, TOOL_LABELS } from "./definitions";
+export { toolDefinitions, TOOL_LABELS, CAPABILITIES_MARKDOWN } from "./definitions";
 export type { ToolDefinition } from "./definitions";
 
 export { getDefaultClassification } from "./classification";

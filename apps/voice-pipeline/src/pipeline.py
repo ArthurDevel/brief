@@ -18,7 +18,9 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiohttp
 from pipecat.frames.frames import InputAudioRawFrame, LLMMessagesFrame, TTSAudioRawFrame
@@ -45,7 +47,7 @@ from src.cost_tracker import CostTracker
 from src.langfuse_observer import LangfuseObserver
 from src.tracked_services import TrackedDeepgramTTSService, TrackedOpenAILLMService, UsageTracker
 from src.prompt import build_system_prompt
-from src.session import ActiveSession, SmtpConfig, UserContext, get_last_session_end_time
+from src.session import ActiveSession, SessionMetadata, SmtpConfig, UserContext, get_last_session_end_time
 from src.tools.definitions import get_tool_definitions
 from src.tools.email_client import count_emails_since, count_unread_emails
 from src.tools.handlers import ActionInput, handle_tool_call
@@ -96,6 +98,7 @@ TOOL_NARRATIONS: dict[str, str] = {
     "batch_archive_emails": "Archiving those emails.",
     "batch_delete_emails": "Deleting those emails.",
     "find_contact": "Looking up that contact.",
+    "what_can_you_do": "Checking my capabilities.",
 }
 
 
@@ -182,6 +185,7 @@ def create_pipeline(
 
     # -- Fetch email count for greeting --
     email_context: str | None = None
+    last_ended_at: datetime | None = None
     try:
         last_ended_at = get_last_session_end_time(session.user_id, supabase)
         if last_ended_at is None:
@@ -191,8 +195,14 @@ def create_pipeline(
             else:
                 email_context = "This is the user's first call. They have no unread emails."
         else:
-            since_date = last_ended_at.date()
-            count = count_emails_since(imap_holder["client"], since_date)
+            # Convert last_ended_at to the user's local timezone before comparing
+            # against Gmail's naive local-time envelope dates. Without this,
+            # the UTC hour (e.g. 18:21) would be compared against local-time
+            # envelope dates (e.g. 11:25), incorrectly filtering out all emails.
+            since_for_count = last_ended_at
+            if user_context.timezone is not None:
+                since_for_count = last_ended_at.astimezone(ZoneInfo(user_context.timezone))
+            count = count_emails_since(imap_holder["client"], since_for_count)
             if count > 0:
                 email_context = f"You have {count} new emails since the last call."
             else:
@@ -200,12 +210,28 @@ def create_pipeline(
     except Exception:
         logger.warning("[pipeline] Failed to fetch email count for greeting, skipping")
 
-    # -- Build system prompt and LLM context --
+    # -- Build session metadata and system prompt --
+    # Use the user's local timezone if available, otherwise fall back to UTC
+    if user_context.timezone is not None:
+        user_tz = ZoneInfo(user_context.timezone)
+        current_dt_str = datetime.now(user_tz).isoformat()
+        last_call_dt_str = last_ended_at.astimezone(user_tz).isoformat() if last_ended_at is not None else None
+    else:
+        current_dt_str = datetime.now(timezone.utc).isoformat()
+        last_call_dt_str = last_ended_at.isoformat() if last_ended_at is not None else None
+
+    session_metadata = SessionMetadata(
+        current_datetime=current_dt_str,
+        user_email=user_context.imap_config.user,
+        last_call_datetime=last_call_dt_str,
+    )
+
     system_prompt = build_system_prompt(
         user_context.memory_entries,
         user_context.tool_approval_config,
         email_context=email_context,
         email_provider=user_context.email_provider,
+        session_metadata=session_metadata,
     )
 
     tools = get_tool_definitions()

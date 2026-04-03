@@ -46,6 +46,7 @@ T = TypeVar("T")
 
 SNIPPET_LENGTH = 100
 PARTIAL_FETCH_BYTES = 8192
+SINCE_FILTER_CAP = 100
 
 
 def resolve_special_use_folder(client: IMAPClient, flag: bytes) -> str:
@@ -216,20 +217,38 @@ def with_reconnect(
 # MAIN HANDLERS
 # ============================================================================
 
-def list_inbox(client: IMAPClient, limit: int) -> list[EmailSummary]:
+def list_inbox(
+    client: IMAPClient,
+    limit: int,
+    since: datetime | None = None,
+) -> list[EmailSummary]:
     """List recent emails in the inbox.
 
     Uses BODYSTRUCTURE to identify the text/plain part, then fetches
     only that part for the snippet. Avoids downloading full email bodies.
 
+    When `since` is provided, returns only emails received after that datetime.
+    The `limit` parameter is ignored in this case; results are capped at
+    SINCE_FILTER_CAP internally.
+
     Args:
         client: Connected IMAPClient.
-        limit: Maximum number of emails to return.
+        limit: Maximum number of emails to return (ignored when since is set).
+        since: When set, only return emails received after this datetime.
 
     Returns:
         List of EmailSummary in reverse chronological order.
     """
     client.select_folder("INBOX", readonly=True)
+
+    if since is not None:
+        # Use IMAP SINCE (date-only) as coarse filter, then refine by datetime
+        uids = client.search(["SINCE", since.date()])  # type: ignore[arg-type]
+        if not uids:
+            return []
+        filtered_uids = _filter_uids_by_datetime(client, uids, since)
+        capped_uids = filtered_uids[-SINCE_FILTER_CAP:]
+        return _fetch_summaries(client, capped_uids)
 
     all_uids = client.search(["ALL"])  # type: ignore[arg-type]
     if not all_uids:
@@ -262,22 +281,25 @@ def search_emails(client: IMAPClient, query: str) -> list[EmailSummary]:
     return _fetch_summaries(client, uids)
 
 
-def count_emails_since(client: IMAPClient, since: date) -> int:
-    """Count the number of emails in the inbox received since a given date.
+def count_emails_since(client: IMAPClient, since: datetime) -> int:
+    """Count the number of emails in the inbox received after a given datetime.
 
-    Note: IMAP SINCE is date-granular (not time-granular). It includes all
-    emails from the given date onward, ignoring the time component.
+    Uses IMAP SINCE (date-only) as a coarse filter, then fetches envelope
+    dates and counts only those strictly after the full datetime.
 
     Args:
         client: Connected IMAPClient.
-        since: The date from which to count emails (inclusive).
+        since: Count emails received after this datetime.
 
     Returns:
-        Number of emails since the given date.
+        Number of emails after the given datetime.
     """
     client.select_folder("INBOX", readonly=True)
-    uids = client.search(["SINCE", since])  # type: ignore[arg-type]
-    return len(uids)
+    uids = client.search(["SINCE", since.date()])  # type: ignore[arg-type]
+    if not uids:
+        return 0
+    filtered = _filter_uids_by_datetime(client, uids, since)
+    return len(filtered)
 
 
 def count_unread_emails(client: IMAPClient) -> int:
@@ -857,6 +879,57 @@ def delete_draft(client: IMAPClient, draft_uid: str) -> None:
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def _filter_uids_by_datetime(
+    client: IMAPClient,
+    uids: list[int],
+    since: datetime,
+) -> list[int]:
+    """Filter UIDs to only those with an envelope date strictly after `since`.
+
+    Fetches ENVELOPE for each UID and compares envelope.date against the
+    given datetime. This provides time-granular filtering on top of IMAP's
+    date-only SINCE criterion.
+
+    Args:
+        client: Connected IMAPClient (folder must already be selected).
+        uids: UIDs to check.
+        since: Only keep UIDs whose envelope date is after this datetime.
+
+    Returns:
+        Filtered list of UIDs, preserving original order.
+    """
+    if not uids:
+        return []
+
+    # Precompute both forms of `since` for comparison:
+    # - Aware: for comparing against timezone-aware envelope dates (e.g. Outlook)
+    # - Naive: for comparing against naive envelope dates (e.g. Gmail)
+    since_aware = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+    since_naive = since.replace(tzinfo=None)
+
+    fetch_data = client.fetch(uids, ["ENVELOPE"])
+    filtered: list[int] = []
+
+    for uid in uids:
+        data = fetch_data.get(uid)
+        if not data:
+            continue
+        envelope: Any = data.get(b"ENVELOPE")
+        if not envelope or not envelope.date:
+            continue
+        env_date: datetime = envelope.date
+        if env_date.tzinfo is not None:
+            # Timezone-aware: compare in UTC (handles cross-timezone correctly)
+            passes = env_date > since_aware
+        else:
+            # Naive (Gmail): compare as naive local times
+            passes = env_date > since_naive
+        if passes:
+            filtered.append(uid)
+
+    return filtered
+
 
 def _fetch_message_id(client: IMAPClient, uid: int) -> str:
     """Fetch the RFC Message-ID from the envelope for a given UID.
