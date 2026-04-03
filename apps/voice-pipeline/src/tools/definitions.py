@@ -57,6 +57,8 @@ def get_tool_definitions() -> list[dict]:
                 "name": "list_inbox",
                 "description": (
                     "List recent emails in the user's inbox. "
+                    "When session context provides a last_call_datetime, use the since parameter "
+                    "to show only emails received since then. "
                     "Returns sender, subject, snippet, and date for each email."
                 ),
                 "parameters": {
@@ -65,6 +67,13 @@ def get_tool_definitions() -> list[dict]:
                         "limit": {
                             "type": "number",
                             "description": "Maximum number of emails to return. Defaults to 20.",
+                        },
+                        "since": {
+                            "type": "string",
+                            "description": (
+                                "ISO 8601 datetime. Only return emails received after this time. "
+                                "When used, the limit parameter is ignored."
+                            ),
                         },
                     },
                 },
