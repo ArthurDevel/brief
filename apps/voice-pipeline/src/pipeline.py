@@ -97,6 +97,12 @@ TOOL_NARRATIONS: dict[str, str] = {
     "delete_email": "Deleting that email.",
     "batch_archive_emails": "Archiving those emails.",
     "batch_delete_emails": "Deleting those emails.",
+    "mark_as_read": "Marking that as read.",
+    "reply_email": "Sending that reply.",
+    "move_to_folder": "Moving that email.",
+    "list_folders": "Checking your folders.",
+    "save_memory": "Saving that to memory.",
+    "submit_feature_request": "Submitting your feedback.",
     "find_contact": "Looking up that contact.",
     "what_can_you_do": "Checking my capabilities.",
 }
