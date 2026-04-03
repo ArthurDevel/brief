@@ -18,7 +18,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -312,6 +312,7 @@ def create_pipeline(
             tts_sample_rate=sample_rate,
             tts_voice=user_context.voice_preference,
             narration_http_session=narration_http_session,
+            openrouter_api_key=settings.openrouter_api_key,
         )
 
     # -- Audio idle watchdog (cancels pipeline if audio frames stop arriving) --
@@ -448,6 +449,33 @@ async def _synthesize_narration(
         return await resp.read()
 
 
+async def _trigger_on_demand_newsletter(
+    supabase: Client,
+    user_id: str,
+    target_date_str: str,
+    api_key: str,
+) -> None:
+    """Fire-and-forget background task for on-demand newsletter generation.
+
+    Runs the sync generate_on_demand_for_user in a thread so it does not
+    block the event loop.
+
+    Args:
+        supabase: Supabase client for DB operations.
+        user_id: The user to generate a summary for.
+        target_date_str: ISO date string (YYYY-MM-DD) to summarize.
+        api_key: OpenRouter API key for LLM calls.
+    """
+    try:
+        from src.newsletter import generate_on_demand_for_user
+        target_date = date.fromisoformat(target_date_str)
+        await asyncio.to_thread(
+            generate_on_demand_for_user, supabase, user_id, target_date, api_key
+        )
+    except Exception as exc:
+        logger.warning("[pipeline] On-demand newsletter generation failed: %s", exc)
+
+
 def _register_tool_handler(
     llm: TrackedOpenAILLMService,
     tool_name: str,
@@ -461,6 +489,7 @@ def _register_tool_handler(
     tts_sample_rate: int,
     tts_voice: str,
     narration_http_session: dict[str, aiohttp.ClientSession | None],
+    openrouter_api_key: str,
 ) -> None:
     """Register a single function call handler on the LLM service.
 
@@ -492,6 +521,7 @@ def _register_tool_handler(
         tts_sample_rate: Audio sample rate for narration synthesis.
         tts_voice: Deepgram voice model for narration synthesis.
         narration_http_session: Shared mutable dict holding the aiohttp session.
+        openrouter_api_key: OpenRouter API key for on-demand newsletter generation.
     """
     async def handler(params: FunctionCallParams) -> None:
         """Handle a function call from the LLM."""
@@ -548,6 +578,16 @@ def _register_tool_handler(
                 "message": action_result.message,
             }
             result_str = json.dumps(result_dict, ensure_ascii=False)
+
+            # If the tool returned an on_demand_task, spawn background generation
+            if isinstance(action_result.result, dict) and "on_demand_task" in action_result.result:
+                on_demand = action_result.result["on_demand_task"]
+                asyncio.create_task(_trigger_on_demand_newsletter(
+                    supabase,
+                    on_demand["user_id"],
+                    on_demand["target_date"],
+                    openrouter_api_key,
+                ))
         except asyncio.TimeoutError:
             logger.error(f"Tool call [{function_name}] timed out after {TOOL_CALL_TIMEOUT_SECS}s")
             result_dict = {

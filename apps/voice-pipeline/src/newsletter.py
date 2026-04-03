@@ -85,6 +85,7 @@ class NewsletterEmail:
     body: str
     from_addr: str
     date: str
+    message_id: str
 
 
 @dataclass
@@ -122,6 +123,7 @@ async def run_daily_newsletter_job(supabase: Client, api_key: str) -> int:
 
     logger.info("[newsletter] Processing %d opted-in user(s)", len(users))
     generated = 0
+    skipped = 0
 
     for user in users:
         try:
@@ -130,16 +132,62 @@ async def run_daily_newsletter_job(supabase: Client, api_key: str) -> int:
             now_local = datetime.now(tz)
             target_date = (now_local - timedelta(days=1)).date()
 
-            await generate_daily_summary_for_user(user, target_date, api_key, supabase)
-            generated += 1
+            result = await generate_daily_summary_for_user(user, target_date, api_key, supabase)
+            if result is None:
+                skipped += 1
+            else:
+                generated += 1
         except Exception as exc:
             logger.error(
                 "[newsletter] Failed to generate summary for user %s: %s",
                 user.user_id, exc,
             )
 
-    logger.info("[newsletter] Generated %d summary(ies)", generated)
+    logger.info("[newsletter] Generated %d, skipped %d", generated, skipped)
     return generated
+
+
+def generate_on_demand_for_user(
+    supabase: Client,
+    user_id: str,
+    target_date: date,
+    api_key: str,
+) -> None:
+    """Generate a newsletter summary on-demand for a single user (sync, blocking).
+
+    Queries user_settings for the user's IMAP credentials and newsletter config,
+    builds an OptedInUser, and runs the full summary generation pipeline. The
+    async LLM call is handled internally via asyncio.run().
+
+    Designed to be called from asyncio.to_thread() so it does not block the
+    event loop.
+
+    Args:
+        supabase: Supabase client with service role permissions.
+        user_id: The user to generate a summary for.
+        target_date: The calendar date to summarize.
+        api_key: OpenRouter API key for LLM calls.
+    """
+    try:
+        user = _build_opted_in_user(supabase, user_id)
+        if user is None:
+            logger.warning(
+                "[newsletter] On-demand generation skipped for user %s: missing config or credentials",
+                user_id,
+            )
+            return
+
+        import asyncio as _asyncio
+        _asyncio.run(generate_daily_summary_for_user(user, target_date, api_key, supabase))
+        logger.info(
+            "[newsletter] On-demand summary generated for user %s, date %s",
+            user_id, target_date.isoformat(),
+        )
+    except Exception as exc:
+        logger.error(
+            "[newsletter] On-demand generation failed for user %s: %s",
+            user_id, exc,
+        )
 
 
 # ============================================================================
@@ -228,6 +276,74 @@ def get_opted_in_users(supabase: Client) -> list[OptedInUser]:
         ))
 
     return users
+
+
+def _build_opted_in_user(supabase: Client, user_id: str) -> OptedInUser | None:
+    """Build an OptedInUser for a single user by querying user_settings.
+
+    Returns None if the user has no valid newsletter config or IMAP credentials.
+
+    Args:
+        supabase: Supabase client with service role permissions.
+        user_id: The user ID to look up.
+
+    Returns:
+        An OptedInUser instance, or None if config/credentials are missing.
+    """
+    response = (
+        supabase.table("user_settings")
+        .select(
+            "user_id, newsletter_config, "
+            "imap_host, imap_port, imap_user, imap_password_secret_id, "
+            "call_schedule, phone"
+        )
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
+
+    row = cast(dict[str, Any] | None, response.data)
+    if row is None:
+        return None
+
+    newsletter_config_raw = row.get("newsletter_config")
+    if not newsletter_config_raw or not newsletter_config_raw.get("enabled"):
+        return None
+
+    if not row.get("imap_password_secret_id") or not row.get("imap_host"):
+        return None
+
+    imap_password = retrieve_secret(supabase, row["imap_password_secret_id"])
+
+    imap_config = ImapConfig(
+        host=str(row["imap_host"]),
+        port=int(row["imap_port"]),
+        user=str(row["imap_user"]),
+        password=imap_password,
+    )
+
+    newsletter_config = NewsletterConfig(
+        enabled=True,
+        newsletters=newsletter_config_raw.get("newsletters", []),
+        summary_prompt=newsletter_config_raw.get("summary_prompt"),
+    )
+
+    # Resolve timezone: call_schedule.timezone > phone.countryCode > "UTC"
+    call_schedule = row.get("call_schedule")
+    user_timezone: str | None = call_schedule.get("timezone") if call_schedule else None
+    if user_timezone is None:
+        phone = row.get("phone")
+        if phone and phone.get("countryCode"):
+            user_timezone = _timezone_from_country_code(phone["countryCode"])
+    if user_timezone is None:
+        user_timezone = "UTC"
+
+    return OptedInUser(
+        user_id=row["user_id"],
+        imap_config=imap_config,
+        newsletter_config=newsletter_config,
+        timezone=user_timezone,
+    )
 
 
 def fetch_newsletters_for_date(
@@ -373,7 +489,7 @@ async def generate_daily_summary_for_user(
     target_date: date,
     api_key: str,
     supabase: Client,
-) -> str:
+) -> str | None:
     """Orchestrate the full newsletter summary flow for one user.
 
     Fetches newsletters for the target date, generates an LLM summary if any
@@ -387,8 +503,23 @@ async def generate_daily_summary_for_user(
         supabase: Supabase client for DB operations.
 
     Returns:
-        The summary string (either LLM-generated or the fixed "no newsletters" message).
+        The summary string, or None if a summary already existed (skipped).
     """
+    # Skip if a summary already exists for this user + date
+    existing = (
+        supabase.table("newsletter_summaries")
+        .select("id")
+        .eq("user_id", user.user_id)
+        .eq("summary_date", target_date.isoformat())
+        .execute()
+    )
+    if existing.data:
+        logger.info(
+            "[newsletter] Summary already exists for user %s, date %s, skipping",
+            user.user_id, target_date.isoformat(),
+        )
+        return None
+
     newsletters = fetch_newsletters_for_date(
         user.imap_config,
         user.newsletter_config.newsletters,
@@ -411,6 +542,10 @@ async def generate_daily_summary_for_user(
             user.user_id,
         )
         email_count = len(newsletters)
+
+        # Append source references so the LLM can find original emails
+        source_lines = [f"- {nl.subject} (from: {nl.from_addr}, id: {nl.message_id})" for nl in newsletters]
+        summary += "\n\n---\nSources:\n" + "\n".join(source_lines)
 
     # Upsert into newsletter_summaries (idempotent via unique constraint)
     supabase.table("newsletter_summaries").upsert(
@@ -517,11 +652,17 @@ def _fetch_sender_emails(
                 if envelope.date:
                     email_date = envelope.date.isoformat()
 
+            # Extract Message-ID from envelope (globally unique, survives folder moves)
+            message_id = ""
+            if envelope and envelope.message_id:
+                message_id = _decode_bytes_safe(envelope.message_id)
+
             results.append((uid, NewsletterEmail(
                 subject=subject,
                 body=body,
                 from_addr=from_addr,
                 date=email_date,
+                message_id=message_id,
             )))
 
         return results

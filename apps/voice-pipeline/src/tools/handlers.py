@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date as date_type, datetime, timedelta, timezone
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -723,7 +723,7 @@ def _dispatch_tool(
         return ({"markdown": CAPABILITIES_MARKDOWN}, None, None)
 
     if tool_name == "get_newsletter_summary":
-        result = _handle_get_newsletter_summary(supabase, user_id)
+        result = _handle_get_newsletter_summary(supabase, user_id, args)
         return result, None, None
 
     if tool_name == "set_newsletter_config":
@@ -1018,39 +1018,69 @@ def _resolve_user_timezone(supabase: Client, user_id: str) -> str:
 def _handle_get_newsletter_summary(
     supabase: Client,
     user_id: str,
+    args: dict[str, Any],
 ) -> dict[str, Any]:
     """Handle the get_newsletter_summary tool.
 
-    Queries the user's timezone, computes yesterday's date, and fetches the
-    newsletter summary for that date. If found and not yet listened, marks
-    it as listened.
+    Resolves the target date from the optional "date" arg (defaults to yesterday),
+    validates it, and fetches the newsletter summary. If no summary exists, returns
+    an on_demand_task payload so the pipeline can trigger background generation.
 
     Args:
         supabase: Supabase client for DB operations.
         user_id: The user ID.
+        args: Tool arguments. Optional key "date" (YYYY-MM-DD string).
 
     Returns:
-        Dict with summary, email_count, and listened_already -- or a message
-        if no summary is available.
+        Dict with summary, email_count, and listened_already -- or an
+        on_demand_task dict when no summary exists yet.
     """
-    # Resolve user timezone and compute yesterday's date
+    # Resolve user timezone
     user_timezone = _resolve_user_timezone(supabase, user_id)
     tz = ZoneInfo(user_timezone)
     now_local = datetime.now(tz)
+    today = now_local.date()
     yesterday = (now_local - timedelta(days=1)).date()
 
-    # Query newsletter_summaries for yesterday
+    # Parse and validate the target date
+    date_str = args.get("date")
+    if date_str:
+        try:
+            target_date = date_type.fromisoformat(date_str)
+        except ValueError:
+            return {"error": f"Invalid date format: '{date_str}'. Expected YYYY-MM-DD."}
+
+        if target_date > today:
+            return {"error": f"Cannot retrieve a summary for a future date ({date_str})."}
+
+        max_age = today - timedelta(days=7)
+        if target_date < max_age:
+            return {"error": f"Date {date_str} is older than 7 days. Only the last 7 days are available."}
+    else:
+        target_date = yesterday
+
+    # Query newsletter_summaries for the target date
     response = (
         supabase.table("newsletter_summaries")
         .select("id, summary, email_count, listened")
         .eq("user_id", user_id)
-        .eq("summary_date", yesterday.isoformat())
+        .eq("summary_date", target_date.isoformat())
         .execute()
     )
 
     rows = cast(list[dict[str, Any]], response.data or [])
     if not rows:
-        return {"message": "No newsletter summary available for yesterday."}
+        return {
+            "message": (
+                "No summary found for that date. "
+                "I'm generating one now -- ask again in about a minute."
+            ),
+            "generating": True,
+            "on_demand_task": {
+                "user_id": user_id,
+                "target_date": target_date.isoformat(),
+            },
+        }
 
     row = rows[0]
     listened_already = bool(row["listened"])
