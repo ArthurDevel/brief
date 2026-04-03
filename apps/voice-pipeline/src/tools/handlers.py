@@ -547,16 +547,37 @@ def _dispatch_tool(
     if tool_name == "list_inbox":
         limit = args.get("limit", 20)
 
+        # Parse optional since parameter (ISO 8601 datetime string)
+        since: datetime | None = None
+        since_raw = args.get("since")
+        if since_raw is not None:
+            try:
+                since = datetime.fromisoformat(since_raw)
+            except (ValueError, TypeError):
+                return {"error": "Invalid since format. Expected ISO 8601 datetime string."}, None, None
+
         # Filter out emails with pending removal actions in this session
         if session_id is not None:
             pending_ids = _fetch_pending_email_ids(session_id, supabase)
-            # Overfetch to compensate for filtered-out emails
-            overfetch_limit = limit + len(pending_ids)
-            emails = email_client.with_reconnect(
-                imap_holder, config,
-                lambda c: email_client.list_inbox(c, overfetch_limit),
-            )
-            filtered = [e for e in emails if e.id not in pending_ids][:limit]
+
+            if since is not None:
+                # When since is set, ignore limit -- email_client handles the cap
+                _since = since  # capture for lambda
+                emails = email_client.with_reconnect(
+                    imap_holder, config,
+                    lambda c: email_client.list_inbox(c, 0, since=_since),
+                )
+            else:
+                # Overfetch to compensate for filtered-out emails
+                overfetch_limit = limit + len(pending_ids)
+                emails = email_client.with_reconnect(
+                    imap_holder, config,
+                    lambda c: email_client.list_inbox(c, overfetch_limit),
+                )
+
+            filtered = [e for e in emails if e.id not in pending_ids]
+            if since is None:
+                filtered = filtered[:limit]
             markdown = format_email_summaries(filtered, "Inbox")
 
             # Append queued outgoing emails if any exist
@@ -566,10 +587,17 @@ def _dispatch_tool(
 
             return {"markdown": markdown}, None, None
 
-        emails = email_client.with_reconnect(
-            imap_holder, config,
-            lambda c: email_client.list_inbox(c, limit),
-        )
+        if since is not None:
+            _since = since  # capture for lambda
+            emails = email_client.with_reconnect(
+                imap_holder, config,
+                lambda c: email_client.list_inbox(c, 0, since=_since),
+            )
+        else:
+            emails = email_client.with_reconnect(
+                imap_holder, config,
+                lambda c: email_client.list_inbox(c, limit),
+            )
         return {"markdown": format_email_summaries(emails, "Inbox")}, None, None
 
     if tool_name == "read_email":

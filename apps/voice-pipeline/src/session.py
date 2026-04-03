@@ -98,6 +98,16 @@ class UserContext:
     tool_approval_config: dict[str, str]
     memory_entries: list[MemoryEntry]
     email_provider: EmailProvider
+    timezone: str | None = None
+
+
+@dataclass
+class SessionMetadata:
+    """Metadata about the current session, injected into the system prompt."""
+
+    current_datetime: str      # ISO 8601 formatted current date/time (with timezone)
+    user_email: str            # The user's email address
+    last_call_datetime: str | None  # ISO 8601 datetime of last call end, or None for first call
 
 
 # ============================================================================
@@ -259,6 +269,28 @@ def end_session(session: ActiveSession, cost_summary: Any, supabase: Client) -> 
 # HELPER FUNCTIONS
 # ============================================================================
 
+_COUNTRY_CODE_TO_TIMEZONE: dict[str, str] = {
+    "US": "America/New_York",
+    "BE": "Europe/Brussels",
+    "GB": "Europe/London",
+    "NL": "Europe/Amsterdam",
+    "DE": "Europe/Berlin",
+    "FR": "Europe/Paris",
+}
+
+
+def _timezone_from_country_code(country_code: str) -> str | None:
+    """Map an ISO 3166-1 alpha-2 country code to a default IANA timezone.
+
+    Args:
+        country_code: Two-letter country code (e.g. "US", "BE").
+
+    Returns:
+        IANA timezone string, or None if the country code is not mapped.
+    """
+    return _COUNTRY_CODE_TO_TIMEZONE.get(country_code)
+
+
 def _derive_email_provider(imap_host: str) -> EmailProvider:
     """Derive the email provider type from the IMAP host string.
 
@@ -365,6 +397,14 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
 
     voice_config = cast(dict[str, Any], settings.get("voice_config") or {})
 
+    # Extract timezone: prefer call_schedule.timezone, fall back to phone country code
+    call_schedule = settings.get("call_schedule")
+    user_timezone: str | None = call_schedule.get("timezone") if call_schedule else None
+    if user_timezone is None:
+        phone = settings.get("phone")
+        if phone and phone.get("countryCode"):
+            user_timezone = _timezone_from_country_code(phone["countryCode"])
+
     return UserContext(
         user_id=user_id,
         imap_config=imap_config,
@@ -374,4 +414,5 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
         tool_approval_config=cast(dict[str, str], settings.get("tool_approval_config") or {}),
         memory_entries=memory_entries,
         email_provider=_derive_email_provider(imap_config.host),
+        timezone=user_timezone,
     )

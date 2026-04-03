@@ -1,5 +1,6 @@
 """
-Integration tests for email_client.py against a Hoodiecrow IMAP server.
+Integration tests for email_client.py against a Hoodiecrow IMAP server,
+plus unit tests for since-filter and count_emails_since time-granularity.
 
 Tests the Python functions that the voice agent actually calls,
 not the TypeScript package.
@@ -8,19 +9,21 @@ not the TypeScript package.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 from imapclient import IMAPClient
 
-from unittest.mock import MagicMock
-
 from src.tools.email_client import (
     FolderInfo,
+    SINCE_FILTER_CAP,
     list_inbox,
     search_emails,
     read_email,
     read_thread,
     mark_as_read,
     archive_email,
+    count_emails_since,
     delete_email,
     list_folders,
     move_email,
@@ -416,3 +419,153 @@ class TestUndoRecipeUsesMessageId:
         assert "email_id" not in recipe["params"]
         assert recipe["params"]["message_id"] == "<delete-test@example.com>"
         assert message_id == "<delete-test@example.com>"
+
+
+# --------------------------------------------------------------------------
+# list_inbox with since filter (unit tests with mocked client)
+# --------------------------------------------------------------------------
+
+def _make_envelope(dt: datetime) -> MagicMock:
+    """Create a mock IMAP envelope object with a .date attribute."""
+    envelope = MagicMock()
+    envelope.date = dt
+    return envelope
+
+
+class TestListInboxSinceFilter:
+    """Unit tests for list_inbox when the `since` parameter is provided."""
+
+    @patch("src.tools.email_client._fetch_summaries")
+    def test_returns_only_emails_after_since_datetime(self, mock_fetch_summaries: MagicMock) -> None:
+        """When since is provided, only UIDs with envelope date after since are fetched."""
+        mock_client = MagicMock()
+        since = datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc)
+
+        # IMAP SINCE returns all UIDs from Jan 15 onward (date-only filter)
+        mock_client.search.return_value = [1, 2, 3]
+
+        # Envelope dates: uid 1 is before since time, uid 2 and 3 are after
+        mock_client.fetch.return_value = {
+            1: {b"ENVELOPE": _make_envelope(datetime(2025, 1, 15, 8, 0, tzinfo=timezone.utc))},
+            2: {b"ENVELOPE": _make_envelope(datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc))},
+            3: {b"ENVELOPE": _make_envelope(datetime(2025, 1, 16, 9, 0, tzinfo=timezone.utc))},
+        }
+
+        mock_fetch_summaries.return_value = ["summary_2", "summary_3"]
+
+        result = list_inbox(mock_client, limit=20, since=since)
+
+        # Should have called IMAP search with the date portion of since
+        mock_client.search.assert_called_with(["SINCE", since.date()])
+        # _fetch_summaries should receive only the filtered UIDs (2 and 3)
+        mock_fetch_summaries.assert_called_once_with(mock_client, [2, 3])
+        assert result == ["summary_2", "summary_3"]
+
+    @patch("src.tools.email_client._fetch_summaries")
+    def test_caps_results_at_since_filter_cap(self, mock_fetch_summaries: MagicMock) -> None:
+        """When since returns more UIDs than SINCE_FILTER_CAP, only the most recent are kept."""
+        mock_client = MagicMock()
+        since = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+        # Return more UIDs than the cap
+        uid_count = SINCE_FILTER_CAP + 50
+        uids = list(range(1, uid_count + 1))
+        mock_client.search.return_value = uids
+
+        # All envelopes are after since
+        mock_client.fetch.return_value = {
+            uid: {b"ENVELOPE": _make_envelope(datetime(2025, 2, 1, 12, 0, tzinfo=timezone.utc))}
+            for uid in uids
+        }
+
+        mock_fetch_summaries.return_value = []
+
+        list_inbox(mock_client, limit=20, since=since)
+
+        # _fetch_summaries should receive only the last SINCE_FILTER_CAP UIDs
+        called_uids = mock_fetch_summaries.call_args[0][1]
+        assert len(called_uids) == SINCE_FILTER_CAP
+        assert called_uids == uids[-SINCE_FILTER_CAP:]
+
+    @patch("src.tools.email_client._fetch_summaries")
+    def test_returns_empty_when_no_uids_match_since(self, mock_fetch_summaries: MagicMock) -> None:
+        """When IMAP SINCE returns no UIDs, an empty list is returned."""
+        mock_client = MagicMock()
+        since = datetime(2025, 6, 1, 0, 0, tzinfo=timezone.utc)
+
+        mock_client.search.return_value = []
+
+        result = list_inbox(mock_client, limit=20, since=since)
+
+        assert result == []
+        mock_fetch_summaries.assert_not_called()
+
+    @patch("src.tools.email_client._fetch_summaries")
+    def test_without_since_uses_limit(self, mock_fetch_summaries: MagicMock) -> None:
+        """When since is None, list_inbox uses the limit parameter (existing behavior)."""
+        mock_client = MagicMock()
+
+        mock_client.search.return_value = [1, 2, 3, 4, 5]
+        mock_fetch_summaries.return_value = ["s1", "s2"]
+
+        result = list_inbox(mock_client, limit=2)
+
+        # Should search ALL, not SINCE
+        mock_client.search.assert_called_with(["ALL"])
+        # _fetch_summaries gets only the last `limit` UIDs
+        mock_fetch_summaries.assert_called_once_with(mock_client, [4, 5])
+
+
+# --------------------------------------------------------------------------
+# count_emails_since time-granularity (unit tests with mocked client)
+# --------------------------------------------------------------------------
+
+class TestCountEmailsSinceTimeGranularity:
+    """Unit tests verifying count_emails_since filters by full datetime, not just date."""
+
+    def test_excludes_same_day_emails_before_since_time(self) -> None:
+        """Emails on the same day but before the since time should NOT be counted."""
+        mock_client = MagicMock()
+        since = datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc)
+
+        # IMAP SINCE (date-only) returns all three UIDs from Jan 15+
+        mock_client.search.return_value = [1, 2, 3]
+
+        # uid 1: same day, BEFORE since time -> should NOT be counted
+        # uid 2: same day, AFTER since time -> should be counted
+        # uid 3: next day -> should be counted
+        mock_client.fetch.return_value = {
+            1: {b"ENVELOPE": _make_envelope(datetime(2025, 1, 15, 8, 0, tzinfo=timezone.utc))},
+            2: {b"ENVELOPE": _make_envelope(datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc))},
+            3: {b"ENVELOPE": _make_envelope(datetime(2025, 1, 16, 9, 0, tzinfo=timezone.utc))},
+        }
+
+        count = count_emails_since(mock_client, since)
+
+        assert count == 2
+
+    def test_returns_zero_when_no_uids_from_search(self) -> None:
+        """When IMAP SINCE returns no UIDs, count should be 0."""
+        mock_client = MagicMock()
+        since = datetime(2025, 6, 1, 0, 0, tzinfo=timezone.utc)
+
+        mock_client.search.return_value = []
+
+        count = count_emails_since(mock_client, since)
+
+        assert count == 0
+
+    def test_excludes_email_at_exact_since_time(self) -> None:
+        """An email at the exact since datetime should NOT be counted (strictly after)."""
+        mock_client = MagicMock()
+        since = datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc)
+
+        mock_client.search.return_value = [1]
+
+        mock_client.fetch.return_value = {
+            1: {b"ENVELOPE": _make_envelope(datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc))},
+        }
+
+        count = count_emails_since(mock_client, since)
+
+        assert count == 0
