@@ -16,7 +16,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { CallProvider } from "@/contexts/CallContext";
+import { EmailStatusProvider } from "@/contexts/EmailStatusContext";
 import ActiveCallBar from "@/components/ActiveCallBar";
+import EmailStatusBanner from "./EmailStatusBanner";
 import { Home, Phone, Activity, Clock, Settings, Menu, X } from "lucide-react";
 
 // ============================================================================
@@ -70,6 +72,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <CallProvider>
+      <EmailStatusProvider>
       <div className="flex flex-col h-screen">
         <ActiveCallBar />
         <div className="flex flex-1 min-h-0 relative">
@@ -145,11 +148,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </button>
           </header>
 
+          <EmailStatusBanner />
           {children}
         </main>
 
         </div>
       </div>
+      </EmailStatusProvider>
     </CallProvider>
   );
 }
