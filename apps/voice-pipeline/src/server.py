@@ -19,6 +19,7 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, cast
+from urllib.parse import quote
 
 import httpx
 import uvicorn
@@ -45,6 +46,8 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
+from twilio.rest import Client as TwilioClient
+
 from src.auth.jwt_auth import verify_token
 from src.auth.twilio_auth import (
     MAX_NO_INPUT_REPEATS,
@@ -62,7 +65,7 @@ from src.langfuse_client import shutdown_langfuse_client
 from src.langfuse_observer import LangfuseObserver
 from src.tracked_services import UsageTracker
 from src.pipeline import create_pipeline, PipelineResult
-from src.scheduler import start_scheduler
+from src.scheduler import fetch_company_phones, start_scheduler
 from src.session import end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
 from src.tools.email_client import close_imap_connection, create_imap_connection
@@ -641,6 +644,86 @@ async def sync_contacts(request: Request, background_tasks: BackgroundTasks) -> 
     mode = body.get("mode", "full")
     background_tasks.add_task(_run_contact_sync, user_id, mode)
     return JSONResponse({"status": "queued"})
+
+
+@app.post("/trigger-call")
+async def trigger_call(request: Request) -> JSONResponse:
+    """Initiate an outbound Twilio call to a user on demand.
+
+    Authenticated with INTERNAL_API_KEY via Bearer header. Looks up the user's
+    phone number and country from user_settings, validates country support and
+    usage limits, then initiates the call via Twilio.
+
+    Args:
+        request: The incoming HTTP request with JSON body containing user_id.
+
+    Returns:
+        JSONResponse with {"success": True} on success, or
+        {"success": False, "error": "<reason>"} on failure.
+    """
+    settings = load_settings()
+
+    # Authenticate
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer ") or auth_header[7:] != settings.internal_api_key:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    body = await request.json()
+    user_id = body.get("user_id")
+    if not user_id:
+        return JSONResponse({"error": "Missing user_id"}, status_code=400)
+
+    supabase = create_service_client(settings)
+
+    # Look up user phone and country from user_settings
+    response = (
+        supabase.table("user_settings")
+        .select("phone")
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
+
+    if not response.data:
+        return JSONResponse({"success": False, "error": "no_phone_configured"})
+
+    row = cast(dict[str, Any], response.data)
+    phone = row.get("phone")
+    if not phone or not phone.get("number") or not phone.get("countryCode"):
+        return JSONResponse({"success": False, "error": "no_phone_configured"})
+
+    phone_number = phone["number"]
+    country_code = phone["countryCode"]
+
+    # Check country support
+    company_phones = fetch_company_phones(supabase, settings.app_environment)
+    from_number = company_phones.get(country_code)
+    if not from_number:
+        return JSONResponse({"success": False, "error": "country_not_supported"})
+
+    # Check usage limit
+    if not check_usage_limit(user_id, supabase):
+        return JSONResponse({"success": False, "error": "usage_limit_exceeded"})
+
+    # Initiate Twilio call
+    try:
+        twilio_client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
+        callback_url = (
+            f"{settings.public_url}/twilio/scheduled-call"
+            f"?token={quote(settings.internal_api_key)}"
+            f"&userId={quote(user_id)}"
+        )
+        call = twilio_client.calls.create(
+            to=phone_number,
+            from_=from_number,
+            url=callback_url,
+        )
+        logger.info("[trigger-call] Initiated call for user %s, Twilio SID: %s", user_id, call.sid)
+        return JSONResponse({"success": True})
+
+    except Exception as exc:
+        logger.error("[trigger-call] Twilio call failed for user %s: %s", user_id, exc)
+        return JSONResponse({"success": False, "error": "call_failed"})
 
 
 # ============================================================================

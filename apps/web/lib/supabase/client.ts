@@ -16,6 +16,20 @@ import { createClient } from "@supabase/supabase-js";
 import type { ReadonlyRequestCookies } from "next/dist/server/web/spec-extension/adapters/request-cookies";
 
 // ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Returns cookie domain options for cross-subdomain auth, or undefined if not configured.
+ * When undefined, the cookieOptions key must be omitted entirely (not set to { domain: undefined }).
+ * @returns Cookie options with domain, or undefined for default behavior
+ */
+export function getCookieOptions(): { domain: string } | undefined {
+  const cookieDomain = process.env.NEXT_PUBLIC_COOKIE_DOMAIN;
+  return cookieDomain ? { domain: cookieDomain } : undefined;
+}
+
+// ============================================================================
 // MAIN ENTRYPOINT
 // ============================================================================
 
@@ -34,7 +48,10 @@ export function createBrowserClient() {
     throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY is not set");
   }
 
-  return createBrowser(url, key);
+  const cookieOptions = getCookieOptions();
+  return createBrowser(url, key, {
+    ...(cookieOptions ? { cookieOptions } : {}),
+  });
 }
 
 /**
@@ -73,7 +90,9 @@ export function createServerSupabaseClient(cookies: ReadonlyRequestCookies) {
     throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY is not set");
   }
 
+  const cookieOptions = getCookieOptions();
   return createServer(url, key, {
+    ...(cookieOptions ? { cookieOptions } : {}),
     cookies: {
       getAll() {
         return cookies.getAll();

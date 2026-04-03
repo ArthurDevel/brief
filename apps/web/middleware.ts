@@ -10,13 +10,14 @@
 import { createServerClient } from "@supabase/ssr";
 import { postHogMiddleware } from "@posthog/next";
 import { NextResponse, type NextRequest } from "next/server";
+import { getCookieOptions } from "./lib/supabase/client";
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
 /** Routes that do not require authentication. */
-const PUBLIC_ROUTES = ["/login", "/api/auth", "/ingest"];
+const PUBLIC_ROUTES = ["/login", "/api/auth", "/ingest", "/api/trigger-call"];
 
 /** PostHog middleware handler (proxy + identity cookie). */
 const posthogHandler = postHogMiddleware({
@@ -37,6 +38,20 @@ const posthogHandler = postHogMiddleware({
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // CORS preflight for /api/trigger-call (cross-subdomain fetch from lander)
+  if (pathname === "/api/trigger-call" && request.method === "OPTIONS") {
+    const landerUrl = process.env.LANDER_URL || "";
+    return new NextResponse(null, {
+      status: 200,
+      headers: {
+        "Access-Control-Allow-Origin": landerUrl,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "content-type",
+      },
+    });
+  }
+
   // PostHog proxy: delegate /ingest requests to @posthog/next
   if (pathname.startsWith("/ingest")) {
     return posthogHandler(request);
@@ -49,10 +64,13 @@ export async function middleware(request: NextRequest) {
   // Create a response to pass through (we may modify cookies on it)
   let response = NextResponse.next({ request: { headers: request.headers } });
 
+  const cookieOptions = getCookieOptions();
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      ...(cookieOptions ? { cookieOptions } : {}),
       cookies: {
         getAll() {
           return request.cookies.getAll();
