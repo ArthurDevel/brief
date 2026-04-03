@@ -17,6 +17,7 @@
 
 import { useState, useEffect } from "react";
 import type { UserSettings } from "@/lib/types";
+import { useEmailStatus } from "@/contexts/EmailStatusContext";
 
 // ============================================================================
 // CONSTANTS
@@ -108,6 +109,8 @@ function detectProvider(imapHost: string): Provider {
 // ============================================================================
 
 export default function EmailTab() {
+  const { refresh: refreshEmailStatus } = useEmailStatus();
+
   // Provider
   const [provider, setProvider] = useState<Provider>("gmail");
 
@@ -284,6 +287,7 @@ export default function EmailTab() {
       }
 
       setSaved(true);
+      refreshEmailStatus();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
