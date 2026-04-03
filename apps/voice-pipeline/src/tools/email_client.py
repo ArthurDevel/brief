@@ -902,6 +902,12 @@ def _filter_uids_by_datetime(
     if not uids:
         return []
 
+    # Precompute both forms of `since` for comparison:
+    # - Aware: for comparing against timezone-aware envelope dates (e.g. Outlook)
+    # - Naive: for comparing against naive envelope dates (e.g. Gmail)
+    since_aware = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+    since_naive = since.replace(tzinfo=None)
+
     fetch_data = client.fetch(uids, ["ENVELOPE"])
     filtered: list[int] = []
 
@@ -912,12 +918,14 @@ def _filter_uids_by_datetime(
         envelope: Any = data.get(b"ENVELOPE")
         if not envelope or not envelope.date:
             continue
-        # envelope.date is a datetime; make it offset-aware if naive
         env_date: datetime = envelope.date
-        if env_date.tzinfo is None:
-            env_date = env_date.replace(tzinfo=timezone.utc)
-        since_aware = since if since.tzinfo is not None else since.replace(tzinfo=timezone.utc)
-        if env_date > since_aware:
+        if env_date.tzinfo is not None:
+            # Timezone-aware: compare in UTC (handles cross-timezone correctly)
+            passes = env_date > since_aware
+        else:
+            # Naive (Gmail): compare as naive local times
+            passes = env_date > since_naive
+        if passes:
             filtered.append(uid)
 
     return filtered
