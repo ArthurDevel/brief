@@ -434,12 +434,21 @@ def get_tool_definitions() -> list[dict]:
             "function": {
                 "name": "get_newsletter_summary",
                 "description": (
-                    "Retrieve yesterday's newsletter summary. Returns the summary text "
-                    "and whether it was already listened to."
+                    "Retrieve a newsletter summary for a given date (defaults to yesterday). "
+                    "Returns the summary text and whether it was already listened to."
                 ),
                 "parameters": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "date": {
+                            "type": "string",
+                            "description": (
+                                "Date to retrieve the summary for (YYYY-MM-DD). Use the session's "
+                                "current date/time to resolve relative references like 'yesterday' "
+                                "or 'two days ago'. Defaults to yesterday if omitted."
+                            ),
+                        },
+                    },
                 },
             },
         },

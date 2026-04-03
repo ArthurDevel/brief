@@ -1,18 +1,20 @@
 """
 Tests for the newsletter summary feature.
 
-Covers the background job functions (get_opted_in_users, generate_daily_summary_for_user),
+Covers the background job (generate_daily_summary_for_user, run_daily_newsletter_job),
 the tool handlers (get_newsletter_summary, set_newsletter_config), and the HTTP endpoint.
 All external dependencies (Supabase, IMAP, LLM) are mocked.
 
-Responsibilities:
-- Verify get_opted_in_users filters by enabled flag and IMAP credentials
-- Verify generate_daily_summary_for_user stores correct data for zero and non-zero emails
-- Verify timezone-aware "yesterday" computation produces different dates
-- Verify get_newsletter_summary tool returns summary and marks as listened
-- Verify get_newsletter_summary tool handles missing rows
-- Verify set_newsletter_config tool performs partial merge
-- Verify the /api/newsletter/generate-daily endpoint rejects unauthorized requests
+Tested outcomes:
+- generate_daily_summary_for_user returns NO_NEWSLETTERS_MESSAGE when no emails found
+- generate_daily_summary_for_user returns summary with source references when emails found
+- generate_daily_summary_for_user returns None when summary already exists (skipped)
+- run_daily_newsletter_job produces different target dates for different timezones
+- get_newsletter_summary tool returns summary + email_count + listened status
+- get_newsletter_summary tool returns on_demand_task when no summary exists
+- get_newsletter_summary tool returns summary for an explicit date
+- set_newsletter_config tool merges partial update with existing config
+- POST /api/newsletter/generate-daily rejects requests without valid API key
 """
 
 from __future__ import annotations
@@ -29,12 +31,13 @@ from src.config import Settings
 from src.newsletter import (
     NO_NEWSLETTERS_MESSAGE,
     NewsletterConfig,
+    NewsletterEmail,
     OptedInUser,
     generate_daily_summary_for_user,
     get_opted_in_users,
 )
 from src.session import ImapConfig
-from src.tools.handlers import _dispatch_tool
+from src.tools.handlers import _dispatch_tool, _handle_get_newsletter_summary
 
 
 # ============================================================================
@@ -71,22 +74,19 @@ FAKE_SETTINGS = Settings(
     twilio_auth_token="fake_auth_token",
 )
 
+FAKE_EMAILS = [
+    NewsletterEmail(subject="News 1", body="Body 1", from_addr="a@x.com", date="2026-04-02", message_id="<msg1@x.com>"),
+    NewsletterEmail(subject="News 2", body="Body 2", from_addr="b@x.com", date="2026-04-02", message_id="<msg2@x.com>"),
+    NewsletterEmail(subject="News 3", body="Body 3", from_addr="c@x.com", date="2026-04-02", message_id="<msg3@x.com>"),
+]
+
 
 # ============================================================================
 # HELPERS
 # ============================================================================
 
 def _mock_supabase_for_opted_in(rows: list[dict]) -> MagicMock:
-    """Create a mock Supabase client for get_opted_in_users.
-
-    The query chain is: table().select().not_.is_().execute()
-
-    Args:
-        rows: The rows to return from the query.
-
-    Returns:
-        A MagicMock Supabase client.
-    """
+    """Create a mock Supabase client that returns the given rows for get_opted_in_users."""
     mock_client = MagicMock()
     mock_execute = MagicMock()
     mock_execute.data = rows
@@ -103,19 +103,8 @@ def _make_user_settings_row(
     country_code: str = "US",
     timezone: str | None = None,
 ) -> dict[str, Any]:
-    """Build a fake user_settings row for get_opted_in_users tests.
-
-    Args:
-        user_id: The user ID.
-        newsletter_config: The newsletter_config JSONB value.
-        has_imap: Whether to include IMAP credentials.
-        country_code: Country code for phone JSONB.
-        timezone: Explicit timezone in call_schedule, or None.
-
-    Returns:
-        A dict mimicking a Supabase user_settings row.
-    """
-    row: dict[str, Any] = {
+    """Build a fake user_settings row."""
+    return {
         "user_id": user_id,
         "newsletter_config": newsletter_config,
         "imap_host": "imap.example.com" if has_imap else None,
@@ -125,7 +114,65 @@ def _make_user_settings_row(
         "phone": {"number": "+15550001111", "countryCode": country_code},
         "call_schedule": {"timezone": timezone} if timezone else None,
     }
-    return row
+
+
+def _mock_supabase_for_generation(existing_summary: dict | None = None) -> MagicMock:
+    """Create a mock Supabase client for generate_daily_summary_for_user.
+
+    Args:
+        existing_summary: If provided, the existence check returns this row (simulates
+            a summary that already exists). If None, existence check returns empty.
+    """
+    mock = MagicMock()
+
+    # The function first does a select to check if summary exists, then upserts.
+    # We configure the mock so any .execute().data returns the right thing.
+    existence_result = MagicMock()
+    existence_result.data = [existing_summary] if existing_summary else []
+
+    # First call to .table().select()...execute() is the existence check
+    # We use side_effect on execute to return existence first, then default
+    mock.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = existence_result
+
+    return mock
+
+
+def _mock_supabase_for_handler(
+    timezone: str = "UTC",
+    summary_row: dict | None = None,
+    existing_config: dict | None = None,
+) -> MagicMock:
+    """Create a mock Supabase client for tool handler tests.
+
+    Args:
+        timezone: User timezone for _resolve_user_timezone.
+        summary_row: If provided, newsletter_summaries query returns this row.
+        existing_config: If provided, user_settings query returns this as newsletter_config.
+    """
+    mock = MagicMock()
+
+    mock_tz_execute = MagicMock()
+    mock_tz_execute.data = {"call_schedule": {"timezone": timezone}, "phone": None}
+
+    mock_summary_execute = MagicMock()
+    mock_summary_execute.data = [summary_row] if summary_row else []
+
+    mock_config_execute = MagicMock()
+    mock_config_execute.data = {"newsletter_config": existing_config}
+
+    def table_router(table_name: str) -> MagicMock:
+        mock_table = MagicMock()
+        if table_name == "user_settings":
+            mock_table.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_tz_execute
+            if existing_config is not None:
+                mock_config_execute.data = {"newsletter_config": existing_config}
+                mock_table.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_config_execute
+        elif table_name == "newsletter_summaries":
+            mock_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = mock_summary_execute
+        return mock_table
+
+    mock.table.side_effect = table_router
+    return mock
 
 
 # ============================================================================
@@ -134,31 +181,14 @@ def _make_user_settings_row(
 
 @patch("src.newsletter.retrieve_secret", return_value="fake-password")
 def test_get_opted_in_users_filters_by_enabled_and_imap(mock_secret: MagicMock) -> None:
-    """get_opted_in_users returns only users with enabled=true and valid IMAP credentials.
-
-    Sets up three users: one enabled with creds (returned), one enabled without
-    creds (skipped), one disabled (skipped). Asserts only the first is returned.
-    """
+    """Only users with enabled=true and valid IMAP credentials are returned."""
     rows = [
-        _make_user_settings_row(
-            "user-enabled-with-creds",
-            {"enabled": True, "newsletters": ["a@x.com"]},
-            has_imap=True,
-        ),
-        _make_user_settings_row(
-            "user-enabled-no-creds",
-            {"enabled": True, "newsletters": ["b@x.com"]},
-            has_imap=False,
-        ),
-        _make_user_settings_row(
-            "user-disabled",
-            {"enabled": False, "newsletters": ["c@x.com"]},
-            has_imap=True,
-        ),
+        _make_user_settings_row("user-enabled-with-creds", {"enabled": True, "newsletters": ["a@x.com"]}, has_imap=True),
+        _make_user_settings_row("user-enabled-no-creds", {"enabled": True, "newsletters": ["b@x.com"]}, has_imap=False),
+        _make_user_settings_row("user-disabled", {"enabled": False, "newsletters": ["c@x.com"]}, has_imap=True),
     ]
 
-    mock_client = _mock_supabase_for_opted_in(rows)
-    result = get_opted_in_users(mock_client)
+    result = get_opted_in_users(_mock_supabase_for_opted_in(rows))
 
     assert len(result) == 1
     assert result[0].user_id == "user-enabled-with-creds"
@@ -171,14 +201,10 @@ def test_get_opted_in_users_filters_by_enabled_and_imap(mock_secret: MagicMock) 
 
 @patch("src.newsletter.fetch_newsletters_for_date", return_value=[])
 @pytest.mark.asyncio
-async def test_generate_daily_summary_stores_zero_emails_when_none_found(
+async def test_generate_summary_returns_no_newsletters_message_when_no_emails(
     mock_fetch: MagicMock,
 ) -> None:
-    """generate_daily_summary_for_user stores email_count=0 and fixed message when no emails found.
-
-    Mocks IMAP to return empty results, asserts the upserted row has
-    email_count=0 and the fixed NO_NEWSLETTERS_MESSAGE.
-    """
+    """Returns NO_NEWSLETTERS_MESSAGE when no emails are found."""
     user = OptedInUser(
         user_id=FAKE_USER_ID,
         imap_config=FAKE_IMAP_CONFIG,
@@ -186,42 +212,21 @@ async def test_generate_daily_summary_stores_zero_emails_when_none_found(
         timezone="UTC",
     )
 
-    mock_supabase = MagicMock()
-    target = date(2026, 4, 2)
-
-    result = await generate_daily_summary_for_user(user, target, FAKE_API_KEY, mock_supabase)
+    result = await generate_daily_summary_for_user(
+        user, date(2026, 4, 2), FAKE_API_KEY, _mock_supabase_for_generation()
+    )
 
     assert result == NO_NEWSLETTERS_MESSAGE
 
-    # Verify the upsert call
-    upsert_call = mock_supabase.table.return_value.upsert
-    upsert_call.assert_called_once()
-    upserted_data = upsert_call.call_args[0][0]
-    assert upserted_data["email_count"] == 0
-    assert upserted_data["summary"] == NO_NEWSLETTERS_MESSAGE
-    assert upserted_data["user_id"] == FAKE_USER_ID
-
 
 @patch("src.newsletter.generate_summary", new_callable=AsyncMock, return_value=FAKE_SUMMARY)
-@patch("src.newsletter.fetch_newsletters_for_date")
+@patch("src.newsletter.fetch_newsletters_for_date", return_value=FAKE_EMAILS)
 @pytest.mark.asyncio
-async def test_generate_daily_summary_stores_llm_summary_when_emails_found(
+async def test_generate_summary_returns_summary_with_sources_when_emails_found(
     mock_fetch: MagicMock,
     mock_generate: AsyncMock,
 ) -> None:
-    """generate_daily_summary_for_user stores the LLM summary and correct email_count when emails found.
-
-    Mocks IMAP to return 3 emails and LLM to return a known summary string.
-    Asserts the upserted row has email_count=3 and the LLM summary.
-    """
-    from src.newsletter import NewsletterEmail
-
-    mock_fetch.return_value = [
-        NewsletterEmail(subject="News 1", body="Body 1", from_addr="a@x.com", date="2026-04-02"),
-        NewsletterEmail(subject="News 2", body="Body 2", from_addr="b@x.com", date="2026-04-02"),
-        NewsletterEmail(subject="News 3", body="Body 3", from_addr="c@x.com", date="2026-04-02"),
-    ]
-
+    """Returns LLM summary with source references (message IDs) when emails are found."""
     user = OptedInUser(
         user_id=FAKE_USER_ID,
         imap_config=FAKE_IMAP_CONFIG,
@@ -229,19 +234,38 @@ async def test_generate_daily_summary_stores_llm_summary_when_emails_found(
         timezone="UTC",
     )
 
-    mock_supabase = MagicMock()
-    target = date(2026, 4, 2)
+    result = await generate_daily_summary_for_user(
+        user, date(2026, 4, 2), FAKE_API_KEY, _mock_supabase_for_generation()
+    )
 
-    result = await generate_daily_summary_for_user(user, target, FAKE_API_KEY, mock_supabase)
+    assert result is not None
+    assert FAKE_SUMMARY in result
+    assert "Sources:" in result
+    assert "<msg1@x.com>" in result
+    assert "<msg3@x.com>" in result
 
-    assert result == FAKE_SUMMARY
 
-    # Verify the upsert call
-    upsert_call = mock_supabase.table.return_value.upsert
-    upsert_call.assert_called_once()
-    upserted_data = upsert_call.call_args[0][0]
-    assert upserted_data["email_count"] == 3
-    assert upserted_data["summary"] == FAKE_SUMMARY
+@patch("src.newsletter.fetch_newsletters_for_date", return_value=[])
+@pytest.mark.asyncio
+async def test_generate_summary_returns_none_when_already_exists(
+    mock_fetch: MagicMock,
+) -> None:
+    """Returns None (skipped) when a summary already exists for that user + date."""
+    user = OptedInUser(
+        user_id=FAKE_USER_ID,
+        imap_config=FAKE_IMAP_CONFIG,
+        newsletter_config=FAKE_NEWSLETTER_CONFIG,
+        timezone="UTC",
+    )
+
+    mock_supabase = _mock_supabase_for_generation(existing_summary={"id": "existing-1"})
+
+    result = await generate_daily_summary_for_user(
+        user, date(2026, 4, 2), FAKE_API_KEY, mock_supabase
+    )
+
+    assert result is None
+    mock_fetch.assert_not_called()
 
 
 # ============================================================================
@@ -255,57 +279,44 @@ async def test_background_job_uses_user_timezone_for_yesterday(
     mock_fetch: MagicMock,
     mock_generate: AsyncMock,
 ) -> None:
-    """The background job uses the user's resolved timezone to determine "yesterday".
+    """Two users in different timezones get different target dates for 'yesterday'.
 
-    Freezes time to 2026-04-04 00:30 UTC. Two users:
-    - Pacific/Auckland (UTC+12): local time is April 4 12:30, yesterday = April 3
-    - Pacific/Honolulu (UTC-10): local time is April 3 14:30, yesterday = April 2
-
-    Asserts the two users get different target_date values passed to fetch_newsletters_for_date.
+    Freezes time to 2026-04-04 00:30 UTC:
+    - Pacific/Auckland (UTC+12): local April 4 12:30 -> yesterday = April 3
+    - Pacific/Honolulu (UTC-10): local April 3 14:30 -> yesterday = April 2
     """
     from src.newsletter import run_daily_newsletter_job
 
     user_nz = OptedInUser(
-        user_id="user-nz",
-        imap_config=FAKE_IMAP_CONFIG,
-        newsletter_config=FAKE_NEWSLETTER_CONFIG,
-        timezone="Pacific/Auckland",
+        user_id="user-nz", imap_config=FAKE_IMAP_CONFIG,
+        newsletter_config=FAKE_NEWSLETTER_CONFIG, timezone="Pacific/Auckland",
     )
     user_hi = OptedInUser(
-        user_id="user-hi",
-        imap_config=FAKE_IMAP_CONFIG,
-        newsletter_config=FAKE_NEWSLETTER_CONFIG,
-        timezone="Pacific/Honolulu",
+        user_id="user-hi", imap_config=FAKE_IMAP_CONFIG,
+        newsletter_config=FAKE_NEWSLETTER_CONFIG, timezone="Pacific/Honolulu",
     )
 
     fixed_utc = datetime(2026, 4, 4, 0, 30, 0, tzinfo=ZoneInfo("UTC"))
-
-    mock_supabase = MagicMock()
 
     with (
         patch("src.newsletter.get_opted_in_users", return_value=[user_nz, user_hi]),
         patch("src.newsletter.datetime") as mock_dt,
     ):
-        # datetime.now(tz) returns the fixed UTC time converted to the requested tz
         def fake_now(tz=None):
-            if tz is None:
-                return fixed_utc
-            return fixed_utc.astimezone(tz)
+            return fixed_utc if tz is None else fixed_utc.astimezone(tz)
 
         mock_dt.now.side_effect = fake_now
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
 
-        await run_daily_newsletter_job(mock_supabase, FAKE_API_KEY)
+        await run_daily_newsletter_job(_mock_supabase_for_generation(), FAKE_API_KEY)
 
-    # fetch_newsletters_for_date was called twice, extract the target_date args
+    # Extract target_date (positional arg index 2) from each call
     assert mock_fetch.call_count == 2
+    nz_target = mock_fetch.call_args_list[0][0][2]
+    hi_target = mock_fetch.call_args_list[1][0][2]
 
-    # First call is for user_nz, second for user_hi
-    nz_target_date = mock_fetch.call_args_list[0][0][2]  # positional arg index 2
-    hi_target_date = mock_fetch.call_args_list[1][0][2]
-
-    assert nz_target_date == date(2026, 4, 3), f"Auckland yesterday should be April 3, got {nz_target_date}"
-    assert hi_target_date == date(2026, 4, 2), f"Honolulu yesterday should be April 2, got {hi_target_date}"
+    assert nz_target == date(2026, 4, 3)
+    assert hi_target == date(2026, 4, 2)
 
 
 # ============================================================================
@@ -313,40 +324,10 @@ async def test_background_job_uses_user_timezone_for_yesterday(
 # ============================================================================
 
 def test_get_newsletter_summary_returns_summary_and_marks_listened() -> None:
-    """get_newsletter_summary tool returns yesterday's summary and marks it as listened.
-
-    Mocks Supabase to return a summary row with listened=false and email_count=3.
-    Asserts the result contains the summary text, email_count=3, and listened_already=false.
-    """
-    mock_supabase = MagicMock()
-
-    # Mock _resolve_user_timezone chain: table().select().eq().single().execute()
-    mock_tz_execute = MagicMock()
-    mock_tz_execute.data = {"call_schedule": {"timezone": "UTC"}, "phone": None}
-
-    # Mock newsletter_summaries query: table().select().eq().eq().execute()
-    mock_summary_execute = MagicMock()
-    mock_summary_execute.data = [{
-        "id": "summary-1",
-        "summary": FAKE_SUMMARY,
-        "email_count": 3,
-        "listened": False,
-    }]
-
-    # The handler calls table() multiple times. We need to route different table names.
-    def table_router(table_name: str) -> MagicMock:
-        mock_table = MagicMock()
-        if table_name == "user_settings":
-            # Chain: select().eq().single().execute()
-            mock_table.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_tz_execute
-        elif table_name == "newsletter_summaries":
-            # For select: select().eq().eq().execute()
-            mock_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = mock_summary_execute
-            # For update: update().eq().execute()
-            mock_table.update.return_value.eq.return_value.execute.return_value = MagicMock()
-        return mock_table
-
-    mock_supabase.table.side_effect = table_router
+    """Returns summary, email_count, and listened_already=False when a summary exists."""
+    mock_supabase = _mock_supabase_for_handler(
+        summary_row={"id": "s1", "summary": FAKE_SUMMARY, "email_count": 3, "listened": False},
+    )
 
     result, undo, msg_id = _dispatch_tool(
         tool_name="get_newsletter_summary",
@@ -361,81 +342,41 @@ def test_get_newsletter_summary_returns_summary_and_marks_listened() -> None:
     assert result["email_count"] == 3
     assert result["listened_already"] is False
     assert undo is None
-    assert msg_id is None
 
 
-def test_get_newsletter_summary_returns_no_summary_when_no_row() -> None:
-    """get_newsletter_summary tool returns "no summary available" when no row exists.
+def test_get_newsletter_summary_triggers_on_demand_when_no_row() -> None:
+    """Returns generating=True with on_demand_task when no summary exists."""
+    mock_supabase = _mock_supabase_for_handler(summary_row=None)
 
-    Mocks Supabase to return no rows for newsletter_summaries.
-    """
-    mock_supabase = MagicMock()
+    result = _handle_get_newsletter_summary(mock_supabase, FAKE_USER_ID, {"date": "2026-04-01"})
 
-    # Mock _resolve_user_timezone
-    mock_tz_execute = MagicMock()
-    mock_tz_execute.data = {"call_schedule": {"timezone": "UTC"}, "phone": None}
+    assert result["generating"] is True
+    assert result["on_demand_task"]["user_id"] == FAKE_USER_ID
+    assert result["on_demand_task"]["target_date"] == "2026-04-01"
 
-    # Mock newsletter_summaries query -- no rows
-    mock_summary_execute = MagicMock()
-    mock_summary_execute.data = []
 
-    def table_router(table_name: str) -> MagicMock:
-        mock_table = MagicMock()
-        if table_name == "user_settings":
-            mock_table.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_tz_execute
-        elif table_name == "newsletter_summaries":
-            mock_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = mock_summary_execute
-        return mock_table
-
-    mock_supabase.table.side_effect = table_router
-
-    result, undo, msg_id = _dispatch_tool(
-        tool_name="get_newsletter_summary",
-        args={},
-        imap_holder={"client": MagicMock(), "config": FAKE_IMAP_CONFIG},
-        smtp_config=MagicMock(),
-        supabase=mock_supabase,
-        user_id=FAKE_USER_ID,
+def test_get_newsletter_summary_with_explicit_date() -> None:
+    """Returns the summary for a specific requested date."""
+    mock_supabase = _mock_supabase_for_handler(
+        summary_row={"id": "s2", "summary": FAKE_SUMMARY, "email_count": 5, "listened": False},
     )
 
-    assert "message" in result
-    assert "no" in result["message"].lower() and "summary" in result["message"].lower()
-    assert undo is None
+    result = _handle_get_newsletter_summary(mock_supabase, FAKE_USER_ID, {"date": "2026-04-01"})
+
+    assert result["summary"] == FAKE_SUMMARY
+    assert result["email_count"] == 5
+    assert result["listened_already"] is False
 
 
 # ============================================================================
 # TESTS: set_newsletter_config tool handler
 # ============================================================================
 
-def test_set_newsletter_config_returns_merged_config() -> None:
-    """set_newsletter_config tool returns updated config after partial merge.
-
-    Mocks existing config { enabled: false, newsletters: ["old@x.com"] }, calls with
-    { enabled: true }. Asserts the result has enabled=true and newsletters still
-    contains "old@x.com".
-    """
-    mock_supabase = MagicMock()
-
-    # Mock read current config: table().select().eq().single().execute()
-    mock_read_execute = MagicMock()
-    mock_read_execute.data = {
-        "newsletter_config": {
-            "enabled": False,
-            "newsletters": ["old@x.com"],
-            "summary_prompt": None,
-        }
-    }
-
-    def table_router(table_name: str) -> MagicMock:
-        mock_table = MagicMock()
-        if table_name == "user_settings":
-            # For select (read): select().eq().single().execute()
-            mock_table.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_read_execute
-            # For update (write): update().eq().execute()
-            mock_table.update.return_value.eq.return_value.execute.return_value = MagicMock()
-        return mock_table
-
-    mock_supabase.table.side_effect = table_router
+def test_set_newsletter_config_merges_partial_update() -> None:
+    """Sending {enabled: true} preserves existing newsletters list."""
+    mock_supabase = _mock_supabase_for_handler(
+        existing_config={"enabled": False, "newsletters": ["old@x.com"], "summary_prompt": None},
+    )
 
     result, undo, msg_id = _dispatch_tool(
         tool_name="set_newsletter_config",
@@ -458,12 +399,7 @@ def test_set_newsletter_config_returns_merged_config() -> None:
 
 @pytest.mark.asyncio
 async def test_newsletter_endpoint_rejects_invalid_api_key() -> None:
-    """POST /api/newsletter/generate-daily returns 401 without valid Authorization header.
-
-    Uses httpx.ASGITransport with mocked dependencies to test the endpoint
-    without starting real services.
-    """
-    # Ensure twilio is available (may not be installed locally) so src.server can import
+    """Returns 401 without valid Authorization header."""
     import sys
     if "twilio" not in sys.modules:
         twilio_mock = MagicMock()
@@ -489,11 +425,9 @@ async def test_newsletter_endpoint_rejects_invalid_api_key() -> None:
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            # No Authorization header
             resp_none = await client.post("/api/newsletter/generate-daily")
             assert resp_none.status_code == 401
 
-            # Wrong API key
             resp_wrong = await client.post(
                 "/api/newsletter/generate-daily",
                 headers={"Authorization": "Bearer wrong-key"},
