@@ -5,13 +5,13 @@
  * then forwards the request to the voice pipeline's /trigger-call endpoint.
  *
  * Responsibilities:
- * - Verify auth: Supabase session first, onboarding_token JWT as fallback
+ * - Verify auth: Supabase session first, brewdock_onboarding HMAC token as fallback
  * - Forward POST to voice pipeline with INTERNAL_API_KEY
  * - Add CORS headers for cross-subdomain requests from the lander
  */
 
+import { createHmac, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
-import { jwtVerify } from "jose";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
 
@@ -39,26 +39,42 @@ function getCorsHeaders(): Record<string, string> {
   };
 }
 
+const ONBOARDING_TOKEN_MAX_AGE_S = 86400;
+
 /**
- * Verify the onboarding_token JWT cookie and extract the userId.
- * Used as a fallback when the user has no Supabase session (e.g. during
- * onboarding before email confirmation).
- * @param token - The raw JWT string from the onboarding_token cookie
- * @returns The userId from the token payload, or null if invalid/missing
+ * Verify the brewdock_onboarding HMAC token and extract the userId.
+ * Token format: userId:timestamp:hmacSignature
+ * HMAC is computed as: HMAC-SHA256(key=ONBOARDING_TOKEN_SECRET, data="onboarding:{userId}:{timestamp}")
+ * @param token - The raw token string from the brewdock_onboarding cookie
+ * @returns The userId if valid and not expired, or null otherwise
  */
-async function getUserIdFromOnboardingToken(token: string): Promise<string | null> {
+function getUserIdFromOnboardingToken(token: string): string | null {
   if (!ONBOARDING_TOKEN_SECRET) {
     throw new Error("ONBOARDING_TOKEN_SECRET is not set");
   }
 
-  try {
-    const secret = new TextEncoder().encode(ONBOARDING_TOKEN_SECRET);
-    const { payload } = await jwtVerify(token, secret);
-    const userId = payload.userId as string | undefined;
-    return userId ?? null;
-  } catch {
-    return null;
-  }
+  const parts = token.split(":");
+  if (parts.length !== 3) return null;
+
+  const [userId, timestamp, providedHmac] = parts;
+  if (!userId || !timestamp || !providedHmac) return null;
+
+  // Check token isn't expired
+  const tokenAge = Math.floor(Date.now() / 1000) - Number(timestamp);
+  if (isNaN(tokenAge) || tokenAge > ONBOARDING_TOKEN_MAX_AGE_S) return null;
+
+  // Compute expected HMAC and timing-safe compare
+  const expectedHmac = createHmac("sha256", ONBOARDING_TOKEN_SECRET)
+    .update(`onboarding:${userId}:${timestamp}`)
+    .digest("hex");
+
+  const expected = Buffer.from(expectedHmac, "utf-8");
+  const provided = Buffer.from(providedHmac, "utf-8");
+
+  if (expected.length !== provided.length) return null;
+  if (!timingSafeEqual(expected, provided)) return null;
+
+  return userId;
 }
 
 // ============================================================================
@@ -98,9 +114,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<TriggerCa
 
   // Fall back to onboarding_token cookie (pre-email-confirmation flow)
   if (!userId) {
-    const onboardingToken = cookieStore.get("onboarding_token")?.value;
+    const onboardingToken = cookieStore.get("brewdock_onboarding")?.value;
     if (onboardingToken) {
-      userId = await getUserIdFromOnboardingToken(onboardingToken);
+      userId = getUserIdFromOnboardingToken(onboardingToken);
     }
   }
 
