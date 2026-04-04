@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice Review - LiveKit Deepgram</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e0e0e0;
+      padding: 2rem;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    .subtitle {
+      color: #888;
+      font-size: 0.875rem;
+      margin-bottom: 2rem;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 2rem;
+      border-bottom: 1px solid #2a2a2a;
+    }
+
+    .tab {
+      padding: 0.625rem 1.25rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #888;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .tab:hover { color: #ccc; }
+    .tab.active { color: #e0e0e0; border-bottom-color: #4f8ff7; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .section {
+      margin-bottom: 1.5rem;
+    }
+
+    .section label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #999;
+      margin-bottom: 0.5rem;
+    }
+
+    .voice-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.5rem;
+    }
+
+    .voice-option {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.625rem 0.75rem;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .voice-option:hover { border-color: #555; }
+
+    .voice-option.selected {
+      border-color: #4f8ff7;
+      background: rgba(79, 143, 247, 0.08);
+    }
+
+    .voice-option input[type="radio"] { display: none; }
+
+    .voice-name {
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+
+    .voice-meta {
+      font-size: 0.75rem;
+      color: #777;
+    }
+
+    .speed-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .speed-row input[type="range"] {
+      flex: 1;
+      accent-color: #4f8ff7;
+    }
+
+    .speed-value {
+      font-size: 1rem;
+      font-weight: 600;
+      min-width: 3.5rem;
+      text-align: right;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 0.75rem;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      background: #1a1a22;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 0.9rem;
+      resize: vertical;
+    }
+
+    textarea:focus {
+      outline: none;
+      border-color: #4f8ff7;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.5rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+
+    .btn-primary { background: #4f8ff7; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #3d7be0; }
+
+    .btn-danger { background: #e53e3e; color: #fff; }
+    .btn-danger:hover:not(:disabled) { background: #c53030; }
+
+    .player-section {
+      margin-top: 1.5rem;
+      display: none;
+    }
+
+    .player-section.visible { display: block; }
+
+    audio {
+      width: 100%;
+      margin-top: 0.5rem;
+    }
+
+    .status {
+      font-size: 0.85rem;
+      color: #999;
+      margin-top: 0.5rem;
+    }
+
+    .status.error { color: #f44; }
+
+    .call-controls {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .call-status {
+      font-size: 0.85rem;
+      color: #999;
+    }
+
+    .call-status.active { color: #48bb78; }
+    .call-status.error { color: #f44; }
+
+    .call-timer {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #e0e0e0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .call-info {
+      margin-top: 1rem;
+      padding: 0.75rem;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      background: #1a1a22;
+      font-size: 0.8rem;
+      color: #777;
+    }
+
+    #remoteAudioContainer {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <h1>Voice Review</h1>
+  <p class="subtitle">LiveKit + Deepgram Aura 2 -- WSOLA speed processing + RMS normalization</p>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="tts">TTS Preview</div>
+    <div class="tab" data-tab="call">Live Call</div>
+  </div>
+
+  <div class="section">
+    <label>Voice</label>
+    <div class="voice-grid" id="voiceGrid"></div>
+  </div>
+
+  <div class="section">
+    <label>Speed</label>
+    <div class="speed-row">
+      <span>1.0x</span>
+      <input type="range" id="speedSlider" min="1.0" max="1.5" step="0.05" value="1.2" />
+      <span>1.5x</span>
+      <span class="speed-value" id="speedValue">1.20x</span>
+    </div>
+  </div>
+
+  <div class="tab-content active" id="tab-tts">
+    <div class="section">
+      <label>Sample Text</label>
+      <textarea id="sampleText">Good morning. You have three new emails today. The first is from Sarah Chen regarding the Q3 budget review. She's asking for your approval on the revised numbers before Thursday. The second is a newsletter from TechCrunch. And the third is from your dentist confirming your appointment next Tuesday at 2 PM. Would you like me to read any of these in full?</textarea>
+    </div>
+
+    <div class="section">
+      <button class="btn btn-primary" id="generateBtn">Generate</button>
+      <span class="status" id="generateStatus"></span>
+    </div>
+
+    <div class="player-section" id="playerSection">
+      <label>Result</label>
+      <audio controls id="audioPlayer"></audio>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-call">
+    <div class="section">
+      <div class="call-controls">
+        <button class="btn btn-primary" id="startCallBtn">Start Call</button>
+        <button class="btn btn-danger" id="endCallBtn" style="display:none">End Call</button>
+        <span class="call-status" id="callStatus">Ready</span>
+        <span class="call-timer" id="callTimer" style="display:none">00:00</span>
+      </div>
+      <div class="call-info">
+        Starts a LiveKit room with an LLM using the selected voice and speed.
+        The pipeline runs: your mic -> Deepgram STT -> OpenRouter LLM -> Deepgram TTS -> WSOLA speed -> normalizer -> your speakers.
+      </div>
+    </div>
+  </div>
+
+  <div id="remoteAudioContainer"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

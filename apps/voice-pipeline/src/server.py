@@ -81,7 +81,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 TWILIO_PIPELINE_SAMPLE_RATE = 8000
-WEBRTC_PIPELINE_SAMPLE_RATE = 16000
+WEBRTC_PIPELINE_SAMPLE_RATE = 24000
 METERED_CREDENTIALS_URL = "https://0x41.metered.live/api/v1/turn/credentials"
 
 
@@ -279,7 +279,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
 
     try:
         # Sample rate depends on transport: 8kHz for Twilio (mulaw native),
-        # 16kHz for WebRTC (Flux STT native rate)
+        # 24kHz for WebRTC so browser playback keeps the higher-fidelity TTS path
         sample_rate = TWILIO_PIPELINE_SAMPLE_RATE if transport_type == "twilio" else WEBRTC_PIPELINE_SAMPLE_RATE
         audio_config = {
             "sample_rate": sample_rate,

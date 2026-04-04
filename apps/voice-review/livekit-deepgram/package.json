@@ -1,0 +1,35 @@
+{
+  "name": "livekit-deepgram",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n client,server,worker -c cyan,green,magenta \"npm:client:watch\" \"npm:server:dev\" \"npm:worker:dev\"",
+    "build": "npm run client:build && tsc -p tsconfig.json",
+    "start": "concurrently -k -n server,worker -c green,magenta \"npm:server:start\" \"npm:worker:start\"",
+    "client:build": "esbuild src/client.ts --bundle --platform=browser --format=esm --outfile=static/app.js",
+    "client:watch": "esbuild src/client.ts --bundle --platform=browser --format=esm --outfile=static/app.js --watch",
+    "server:dev": "tsx watch src/server.ts",
+    "worker:dev": "tsx watch src/worker.ts dev",
+    "server:start": "node dist/server.js",
+    "worker:start": "node dist/worker.js start"
+  },
+  "dependencies": {
+    "@livekit/agents": "1.2.3",
+    "@livekit/agents-plugin-deepgram": "1.2.3",
+    "@livekit/agents-plugin-openai": "1.2.3",
+    "@livekit/agents-plugin-silero": "1.2.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "livekit-client": "2.18.1",
+    "livekit-server-sdk": "2.15.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.1.2",
+    "esbuild": "^0.25.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

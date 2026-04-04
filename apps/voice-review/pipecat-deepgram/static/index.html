@@ -384,7 +384,7 @@
         audioPlayer.play();
 
         const voiceName = voices.find((v) => v.id === selectedVoice)?.name || selectedVoice;
-        status.textContent = voiceName + " at " + speed.toFixed(2) + "x";
+        status.textContent = voiceName + " at " + speed.toFixed(2) + "x" + " · 24 kHz";
         status.className = "status";
       } catch (err) {
         status.textContent = "Error: " + err.message;
