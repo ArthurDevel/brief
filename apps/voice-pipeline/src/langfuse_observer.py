@@ -57,6 +57,7 @@ class LangfuseObserver(BaseObserver):
 
         # Langfuse root span (created in start_trace)
         self._root_span: Any = None
+        self._system_prompt: str | None = None
 
         # Accumulator for the current LLM response
         self._response_buffer: list[str] = []
@@ -68,6 +69,18 @@ class LangfuseObserver(BaseObserver):
 
         # propagate_attributes context manager (kept alive for the call)
         self._propagation_ctx: Any = None
+
+    def set_system_prompt(self, prompt: str) -> None:
+        """Store the system prompt and update the root span input to include it."""
+        self._system_prompt = prompt
+        if self._root_span is not None:
+            self._root_span.update(
+                input={
+                    "transport": self._transport_type,
+                    "model": LLM_MODEL,
+                    "system_prompt": prompt,
+                },
+            )
 
     def start_trace(self) -> None:
         """Create a Langfuse trace for this call. Call after session is created."""
