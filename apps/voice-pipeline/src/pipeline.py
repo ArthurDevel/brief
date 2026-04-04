@@ -264,6 +264,7 @@ def create_pipeline(
         email_provider=user_context.email_provider,
         session_metadata=session_metadata,
     )
+    langfuse_observer.set_system_prompt(system_prompt)
 
     tools = get_tool_definitions()
 
