@@ -106,7 +106,7 @@ class RMSNormalizer:
         peak_limit_dbfs: float = PEAK_LIMIT_DBFS,
         attack_ms: float = ATTACK_MS,
         release_ms: float = RELEASE_MS,
-        sample_rate: int = 16000,
+        sample_rate: int = 24000,
     ) -> None:
         self._target_rms_linear = _dbfs_to_linear(target_rms_dbfs)
         self._peak_limit_linear = _dbfs_to_linear(peak_limit_dbfs)
@@ -184,7 +184,7 @@ class AudioNormalizerProcessor(FrameProcessor):
     through all other frame types unchanged.
     """
 
-    def __init__(self, sample_rate: int = 16000) -> None:
+    def __init__(self, sample_rate: int = 24000) -> None:
         """Initialize the normalizer processor.
 
         Args:

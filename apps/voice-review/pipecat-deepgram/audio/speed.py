@@ -75,7 +75,7 @@ class WSOLAStreamer:
         """Initialize the WSOLA streamer.
 
         Args:
-            sample_rate: Audio sample rate in Hz (e.g., 16000).
+            sample_rate: Audio sample rate in Hz (e.g., 24000).
             num_channels: Number of audio channels (1 for mono).
             tempo: Playback speed multiplier (0.5 to 2.0). 1.0 = normal speed.
         """
@@ -283,7 +283,7 @@ class AudioSpeedProcessor(FrameProcessor):
     through all other frame types unchanged.
     """
 
-    def __init__(self, speed: float, sample_rate: int = 16000, num_channels: int = 1) -> None:
+    def __init__(self, speed: float, sample_rate: int = 24000, num_channels: int = 1) -> None:
         """Initialize the speed processor.
 
         Args:

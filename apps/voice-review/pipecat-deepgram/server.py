@@ -80,7 +80,7 @@ OPENROUTER_API_KEY: str = _openrouter_key
 
 DEEPGRAM_TTS_URL = "https://api.deepgram.com/v1/speak"
 LLM_MODEL = "google/gemini-3-flash-preview"
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
 SYSTEM_PROMPT = (
