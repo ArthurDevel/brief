@@ -21,7 +21,7 @@ from src.tools.contact_sync import (
     full_sync,
     _parse_envelope_address,
 )
-from src.session import ImapConfig
+from src.session import EmailAccount, ImapConfig
 
 
 # --------------------------------------------------------------------------
@@ -165,8 +165,11 @@ class TestFullSyncCooldown:
             data=[]
         )
 
-        config = ImapConfig(host="localhost", port=993, user="test", password="test")
-        result = full_sync(config, "user-123", supabase)
+        account = EmailAccount(
+            provider="custom", connection_type="imap_smtp", email_address="test@localhost",
+            unipile_account_id=None, status="connected", imap_config=None, smtp_config=None,
+        )
+        result = full_sync(account, "user-123", supabase)
 
         assert result == 0
         mock_create.assert_not_called()
@@ -192,11 +195,15 @@ class TestFullSyncCooldown:
         mock_client = MagicMock()
         mock_create.return_value = mock_client
 
-        config = ImapConfig(host="localhost", port=993, user="test", password="test")
-        result = full_sync(config, "user-123", supabase)
+        imap_cfg = ImapConfig(host="localhost", port=993, user="test", password="test")
+        account = EmailAccount(
+            provider="custom", connection_type="imap_smtp", email_address="test@localhost",
+            unipile_account_id=None, status="connected", imap_config=imap_cfg, smtp_config=None,
+        )
+        result = full_sync(account, "user-123", supabase)
 
         # Should have created an IMAP connection
-        mock_create.assert_called_once_with(config)
+        mock_create.assert_called_once_with(imap_cfg)
         mock_close.assert_called_once_with(mock_client)
 
     @patch("src.tools.contact_sync.create_imap_connection")
@@ -217,7 +224,11 @@ class TestFullSyncCooldown:
         mock_client = MagicMock()
         mock_create.return_value = mock_client
 
-        config = ImapConfig(host="localhost", port=993, user="test", password="test")
-        result = full_sync(config, "user-123", supabase)
+        imap_cfg = ImapConfig(host="localhost", port=993, user="test", password="test")
+        account = EmailAccount(
+            provider="custom", connection_type="imap_smtp", email_address="test@localhost",
+            unipile_account_id=None, status="connected", imap_config=imap_cfg, smtp_config=None,
+        )
+        result = full_sync(account, "user-123", supabase)
 
-        mock_create.assert_called_once_with(config)
+        mock_create.assert_called_once_with(imap_cfg)

@@ -1,14 +1,16 @@
 /**
- * Tests IMAP and SMTP connections using stored credentials.
+ * Tests email connection status based on the active email account type.
  *
- * Fetches the user's saved settings and passwords from Vault,
- * then attempts to connect to both servers.
+ * For custom IMAP/SMTP accounts: fetches credentials from Vault and tests
+ * actual socket connections to both servers.
+ * For Unipile-backed accounts: calls Unipile getAccount to check status.
  *
  * Responsibilities:
  * - Authenticate the request via Supabase session
- * - Load IMAP/SMTP config + passwords from DB and Vault
- * - Test IMAP connection via createImapConnection
- * - Test SMTP connection via testSmtpConnection
+ * - Load the active email account from user_email_accounts
+ * - Branch by connection type (imap_smtp vs unipile)
+ * - Custom: test IMAP + SMTP connections using stored Vault credentials
+ * - Unipile: check account status via Unipile API
  * - Return per-protocol success/error results
  */
 
@@ -17,6 +19,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
 import { createImapConnection, closeImapConnection, testSmtpConnection } from "@dublin/email";
 import { retrieveSecret } from "@dublin/tools";
+import { getActiveEmailAccount } from "@/lib/email-accounts";
+import { getAccount } from "@/lib/unipile/client";
 
 // ============================================================================
 // TYPES
@@ -32,7 +36,7 @@ interface TestResult {
 // ============================================================================
 
 /**
- * Tests IMAP and SMTP connections using the user's stored credentials.
+ * Tests the email connection for the user's active account.
  * @param _request - The incoming request (no body needed)
  * @returns TestResult with per-protocol success/error
  */
@@ -45,45 +49,131 @@ export async function POST(_request: NextRequest): Promise<NextResponse<TestResu
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Fetch stored settings
-  const { data: settings, error: fetchError } = await supabase
-    .from("user_settings")
-    .select("imap_host, imap_port, imap_user, imap_password_secret_id, smtp_host, smtp_port, smtp_user, smtp_password_secret_id")
-    .eq("user_id", user.id)
-    .single();
+  // Load active email account
+  const account = await getActiveEmailAccount(supabase, user.id);
 
-  if (fetchError || !settings) {
-    return NextResponse.json({ error: "No email settings found. Please save your settings first." }, { status: 400 });
+  if (!account) {
+    return NextResponse.json(
+      { error: "No email account configured. Please set up your email first." },
+      { status: 400 }
+    );
   }
 
-  if (!settings.imap_password_secret_id || !settings.smtp_password_secret_id) {
-    return NextResponse.json({ error: "Missing stored passwords. Please re-enter your credentials." }, { status: 400 });
+  // Branch by connection type
+  if (account.connectionType === "unipile") {
+    return testUnipileConnection(account.id, supabase, user.id);
+  }
+
+  return testCustomConnection(supabase, user.id);
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Tests a Unipile-backed account by checking its status via the Unipile API.
+ * @param accountId - The email account row ID
+ * @param supabase - Supabase client for loading the Unipile account ID
+ * @param userId - The user's ID
+ * @returns TestResult derived from Unipile account status
+ */
+async function testUnipileConnection(
+  accountId: string,
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+  userId: string
+): Promise<NextResponse<TestResult | { error: string }>> {
+  // Load the unipile_account_id from the database
+  const { data: row, error: fetchError } = await supabase
+    .from("user_email_accounts")
+    .select("unipile_account_id")
+    .eq("id", accountId)
+    .eq("user_id", userId)
+    .single();
+
+  if (fetchError || !row?.unipile_account_id) {
+    return NextResponse.json(
+      { error: "Unipile account ID not found." },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const unipileAccount = await getAccount(row.unipile_account_id);
+    const isOk = unipileAccount.status === "connected";
+
+    return NextResponse.json({
+      imap: isOk
+        ? { ok: true }
+        : { ok: false, error: `Unipile account status: ${unipileAccount.status}` },
+      smtp: isOk
+        ? { ok: true }
+        : { ok: false, error: `Unipile account status: ${unipileAccount.status}` },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unipile status check failed";
+    return NextResponse.json({
+      imap: { ok: false, error: message },
+      smtp: { ok: false, error: message },
+    });
+  }
+}
+
+/**
+ * Tests a custom IMAP/SMTP account by connecting to both servers.
+ * @param supabase - Supabase client for loading account config
+ * @param userId - The user's ID
+ * @returns TestResult with per-protocol results
+ */
+async function testCustomConnection(
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+  userId: string
+): Promise<NextResponse<TestResult | { error: string }>> {
+  // Load custom account details
+  const { data: account, error: fetchError } = await supabase
+    .from("user_email_accounts")
+    .select(
+      "imap_host, imap_port, imap_user, imap_password_secret_id, smtp_host, smtp_port, smtp_user, smtp_password_secret_id"
+    )
+    .eq("user_id", userId)
+    .eq("is_active", true)
+    .eq("connection_type", "imap_smtp")
+    .single();
+
+  if (fetchError || !account) {
+    return NextResponse.json(
+      { error: "No custom email settings found. Please save your settings first." },
+      { status: 400 }
+    );
+  }
+
+  if (!account.imap_password_secret_id || !account.smtp_password_secret_id) {
+    return NextResponse.json(
+      { error: "Missing stored passwords. Please re-enter your credentials." },
+      { status: 400 }
+    );
   }
 
   // Retrieve passwords from Vault
   const serviceClient = createServiceRoleClient();
   const [imapPassword, smtpPassword] = await Promise.all([
-    retrieveSecret(serviceClient, settings.imap_password_secret_id),
-    retrieveSecret(serviceClient, settings.smtp_password_secret_id),
+    retrieveSecret(serviceClient, account.imap_password_secret_id),
+    retrieveSecret(serviceClient, account.smtp_password_secret_id),
   ]);
 
   // Test both connections in parallel
   const [imapResult, smtpResult] = await Promise.all([
-    testImap(settings.imap_host, settings.imap_port, settings.imap_user, imapPassword),
+    testImap(account.imap_host, account.imap_port, account.imap_user, imapPassword),
     testSmtpConnection({
-      host: settings.smtp_host,
-      port: settings.smtp_port,
-      user: settings.smtp_user,
+      host: account.smtp_host,
+      port: account.smtp_port,
+      user: account.smtp_user,
       password: smtpPassword,
     }),
   ]);
 
   return NextResponse.json({ imap: imapResult, smtp: smtpResult });
 }
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
 
 /**
  * Tests an IMAP connection by connecting and immediately logging out.
@@ -93,7 +183,12 @@ export async function POST(_request: NextRequest): Promise<NextResponse<TestResu
  * @param password - IMAP password (decrypted)
  * @returns Object with ok flag and optional error message
  */
-async function testImap(host: string, port: number, user: string, password: string): Promise<{ ok: boolean; error?: string }> {
+async function testImap(
+  host: string,
+  port: number,
+  user: string,
+  password: string
+): Promise<{ ok: boolean; error?: string }> {
   try {
     const client = await createImapConnection({ host, port, user, password });
     await closeImapConnection(client);

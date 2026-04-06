@@ -17,7 +17,7 @@ import { getCookieOptions } from "./lib/supabase/client";
 // ============================================================================
 
 /** Routes that do not require authentication. */
-const PUBLIC_ROUTES = ["/login", "/api/auth", "/ingest", "/api/trigger-call"];
+const PUBLIC_ROUTES = ["/login", "/api/auth", "/ingest", "/api/trigger-call", "/api/user/email-accounts/notify"];
 
 /** PostHog middleware handler (proxy + identity cookie). */
 const posthogHandler = postHogMiddleware({

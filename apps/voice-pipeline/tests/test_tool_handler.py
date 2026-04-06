@@ -17,19 +17,41 @@ import pytest
 from pipecat.services.llm_service import FunctionCallParams
 
 from src.pipeline import _register_tool_handler
-from src.session import ActiveSession, SmtpConfig, UserContext, MemoryEntry
+from src.session import ActiveSession, EmailAccount, SmtpConfig, UserContext, MemoryEntry
+from src.tools.email_client import EmailClientContext
 
 
 # ============================================================================
 # HELPERS
 # ============================================================================
 
+def _make_email_account() -> EmailAccount:
+    """Create a minimal EmailAccount for testing."""
+    return EmailAccount(
+        provider="custom",
+        connection_type="imap_smtp",
+        email_address="test@localhost",
+        unipile_account_id=None,
+        status="connected",
+        imap_config=None,
+        smtp_config=None,
+    )
+
+
+def _make_email_ctx() -> EmailClientContext:
+    """Create a minimal EmailClientContext for testing (custom/imap_smtp)."""
+    return EmailClientContext(
+        connection_type="imap_smtp",
+        imap_holder={"client": MagicMock(), "config": MagicMock()},
+        smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+    )
+
+
 def _make_user_context() -> UserContext:
     """Create a minimal UserContext for testing."""
     return UserContext(
         user_id="test-user",
-        imap_config=MagicMock(),
-        smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+        email_account=_make_email_account(),
         voice_preference="aura-2-andromeda-en",
         voice_speed=1.2,
         tool_approval_config={},
@@ -62,14 +84,15 @@ def _capture_handler(tool_name: str, **kwargs):
         tool_name=tool_name,
         session=kwargs.get("session", _make_session()),
         user_context=kwargs.get("user_context", _make_user_context()),
-        imap_holder=kwargs.get("imap_holder", {"client": MagicMock(), "config": MagicMock()}),
-        imap_lock=kwargs.get("imap_lock", asyncio.Lock()),
+        email_ctx=kwargs.get("email_ctx", _make_email_ctx()),
+        email_lock=kwargs.get("email_lock", asyncio.Lock()),
         supabase=kwargs.get("supabase", MagicMock()),
         langfuse_observer=kwargs.get("langfuse_observer", MagicMock()),
         deepgram_api_key=kwargs.get("deepgram_api_key", "test-key"),
         tts_sample_rate=kwargs.get("tts_sample_rate", 16000),
         tts_voice=kwargs.get("tts_voice", "aura-asteria-en"),
         narration_http_session=kwargs.get("narration_http_session", {"session": None}),
+        openrouter_api_key=kwargs.get("openrouter_api_key", "test-openrouter-key"),
     )
 
     return captured[tool_name]
@@ -240,8 +263,7 @@ class TestMessageIdInArguments:
         result = handle_tool_call(
             input=ActionInput(user_id="test-user", session_id="test-session", tool_name="archive_email", arguments={"email_id": "42"}),
             user_config={},
-            imap_holder={"client": MagicMock(), "config": MagicMock()},
-            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            email_ctx=_make_email_ctx(),
             supabase=mock_supabase,
         )
 
@@ -269,8 +291,7 @@ class TestMessageIdInArguments:
         result = handle_tool_call(
             input=ActionInput(user_id="test-user", session_id="test-session", tool_name="delete_email", arguments={"email_id": "99"}),
             user_config={"delete_email": "mutating_auto"},
-            imap_holder={"client": MagicMock(), "config": MagicMock()},
-            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            email_ctx=_make_email_ctx(),
             supabase=mock_supabase,
         )
 
@@ -292,8 +313,7 @@ class TestMessageIdInArguments:
         result = handle_tool_call(
             input=ActionInput(user_id="test-user", session_id="test-session", tool_name="mark_as_read", arguments={"email_id": "10"}),
             user_config={},
-            imap_holder={"client": MagicMock(), "config": MagicMock()},
-            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            email_ctx=_make_email_ctx(),
             supabase=mock_supabase,
         )
 
@@ -323,8 +343,7 @@ class TestWhatCanYouDo:
                 arguments={},
             ),
             user_config={},
-            imap_holder={"client": MagicMock(), "config": MagicMock()},
-            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            email_ctx=_make_email_ctx(),
             supabase=mock_supabase,
         )
 

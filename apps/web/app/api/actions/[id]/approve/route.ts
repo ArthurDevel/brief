@@ -1,31 +1,30 @@
 /**
  * API route to approve a pending action.
  *
- * Loads the action, verifies ownership, retrieves IMAP/SMTP credentials
- * from Vault, opens an IMAP connection, executes the action via
- * @dublin/tools, then closes the connection.
+ * Loads the action, verifies ownership, retrieves the active email account
+ * from user_email_accounts, and executes the action via the provider-agnostic
+ * email client in @dublin/tools.
  *
  * Responsibilities:
  * - Authenticate the request and verify action ownership
- * - Load IMAP/SMTP credentials from user_settings + Vault
- * - Open IMAP connection and execute the action
- * - Close IMAP connection and return ActionResult
+ * - Load active email account (with Vault-resolved passwords for custom accounts)
+ * - Execute the action through the provider-agnostic facade
+ * - Return ActionResult
  */
 
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase/client";
-import { executeAction, retrieveSecret } from "@dublin/tools";
-import { createImapConnection, closeImapConnection } from "@dublin/email";
+import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
+import { getActiveEmailAccountRecord } from "@/lib/email-accounts";
+import { executeAction } from "@dublin/tools";
 import type { ActionResult } from "@dublin/tools";
-import type { SmtpConfig } from "@dublin/email";
 
 // ============================================================================
 // MAIN HANDLERS
 // ============================================================================
 
 /**
- * Approves a pending action and triggers execution via IMAP.
+ * Approves a pending action and triggers execution via the active email account.
  * @param request - The incoming request
  * @param context - Route params containing the action ID
  * @returns JSON response with ActionResult
@@ -62,43 +61,13 @@ export async function POST(
     return NextResponse.json({ error: `Action is not pending (status: ${action.status})` }, { status: 400 });
   }
 
-  // Load user settings to get credential secret IDs
-  const { data: settings, error: settingsError } = await supabase
-    .from("user_settings")
-    .select("imap_host, imap_port, imap_user, imap_password_secret_id, smtp_host, smtp_port, smtp_user, smtp_password_secret_id")
-    .eq("user_id", user.id)
-    .single();
+  // Load active email account with resolved credentials
+  const serviceClient = createServiceRoleClient();
+  const emailAccount = await getActiveEmailAccountRecord(supabase, serviceClient, user.id);
 
-  if (settingsError || !settings) {
-    return NextResponse.json({ error: "Email settings not configured" }, { status: 400 });
+  if (!emailAccount) {
+    return NextResponse.json({ error: "No active email account configured" }, { status: 400 });
   }
-
-  if (!settings.imap_password_secret_id) {
-    return NextResponse.json({ error: "IMAP password not configured" }, { status: 400 });
-  }
-
-  // Retrieve secrets from Vault
-  const imapPassword = await retrieveSecret(supabase, settings.imap_password_secret_id);
-
-  let smtpPassword: string | null = null;
-  if (settings.smtp_password_secret_id) {
-    smtpPassword = await retrieveSecret(supabase, settings.smtp_password_secret_id);
-  }
-
-  const smtpConfig: SmtpConfig = {
-    host: settings.smtp_host,
-    port: settings.smtp_port,
-    user: settings.smtp_user,
-    password: smtpPassword ?? "",
-  };
-
-  // Open IMAP connection, execute, close
-  const imapClient = await createImapConnection({
-    host: settings.imap_host,
-    port: settings.imap_port,
-    user: settings.imap_user,
-    password: imapPassword,
-  });
 
   try {
     // Mark as approved first, then execute
@@ -107,12 +76,10 @@ export async function POST(
       .update({ status: "approved" })
       .eq("id", actionId);
 
-    const result = await executeAction(actionId, supabase, imapClient, smtpConfig);
+    const result = await executeAction(actionId, supabase, emailAccount);
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to execute action";
     return NextResponse.json({ error: message }, { status: 500 });
-  } finally {
-    await closeImapConnection(imapClient);
   }
 }

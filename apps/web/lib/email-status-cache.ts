@@ -23,7 +23,7 @@ const CACHE_KEY_PREFIX = "email_status_cache_";
 // TYPES
 // ============================================================================
 
-export type EmailStatus = "not_configured" | "connected" | "error";
+export type EmailStatus = "not_configured" | "connected" | "error" | "reconnect_required";
 
 export interface EmailStatusResult {
   status: EmailStatus;

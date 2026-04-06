@@ -1,14 +1,14 @@
 /**
  * Context provider that fetches and caches the user's email configuration status.
  *
- * On mount, checks whether email is configured via GET /api/user/settings.
- * If configured, uses a 12-hour localStorage cache to avoid re-testing the
- * IMAP connection on every page load. Exposes the status and a refresh
- * function to all dashboard children.
+ * On mount, derives email status from the emailAccount summary on UserSettings.
+ * If an account is configured and status is "connected", uses a 12-hour
+ * localStorage cache (keyed by email address) to avoid re-testing on every
+ * page load. Exposes the status and a refresh function to all dashboard children.
  *
  * Responsibilities:
- * - Fetch user settings and determine email configuration state
- * - Cache IMAP connection test results in localStorage (12h TTL)
+ * - Fetch user settings and derive email status from emailAccount summary
+ * - Cache connection test results in localStorage (12h TTL, keyed by email address)
  * - Expose status + refresh to consuming components via context
  */
 
@@ -73,11 +73,11 @@ async function fetchUserSettings(): Promise<UserSettings> {
 }
 
 /**
- * Tests the IMAP connection via the server-side endpoint.
+ * Tests the email connection via the server-side endpoint.
  *
  * @returns The test connection response with imap and smtp results
  */
-async function testImapConnection(): Promise<TestConnectionResponse> {
+async function testConnection(): Promise<TestConnectionResponse> {
   const res = await fetch("/api/user/settings/test-connection", {
     method: "POST",
   });
@@ -88,8 +88,8 @@ async function testImapConnection(): Promise<TestConnectionResponse> {
 }
 
 /**
- * Determines the email status result by checking settings and optionally
- * testing the IMAP connection (with localStorage caching).
+ * Determines the email status result from the settings emailAccount summary,
+ * optionally running a connection test with localStorage caching.
  *
  * @param settings - The user's current settings
  * @returns The resolved email status result
@@ -98,27 +98,37 @@ async function resolveEmailStatus(
   settings: UserSettings
 ): Promise<EmailStatusResult> {
   // Step 1: Check if email is configured at all
-  if (!settings.imapHost || !settings.hasImapPassword) {
+  if (!settings.emailAccount) {
     return { status: "not_configured" };
   }
 
-  // Use imapUser as a stable identifier for caching
-  const userId = settings.imapUser;
+  const account = settings.emailAccount;
 
-  // Step 2: Check localStorage cache
-  const cached = getCachedEmailStatus(userId);
+  // Step 2: If the account has a non-connected status, return it directly
+  if (account.status === "reconnect_required" || account.status === "error") {
+    return { status: "error", message: account.lastError ?? undefined };
+  }
+
+  if (account.status === "pending") {
+    return { status: "not_configured" };
+  }
+
+  // Step 3: Account reports "connected" -- verify with a cached connection test
+  const cacheKey = account.emailAddress ?? account.id;
+
+  const cached = getCachedEmailStatus(cacheKey);
   if (cached) {
     return cached;
   }
 
-  // Step 3: Test connection and cache the result
-  const testResult = await testImapConnection();
+  // Step 4: Run the connection test and cache the result
+  const testResult = await testConnection();
 
   const result: EmailStatusResult = testResult.imap.ok
     ? { status: "connected" }
     : { status: "error", message: testResult.imap.error };
 
-  setCachedEmailStatus(userId, result);
+  setCachedEmailStatus(cacheKey, result);
   return result;
 }
 
@@ -141,11 +151,11 @@ export function EmailStatusProvider({
   children: ReactNode;
 }): React.ReactElement {
   const [status, setStatus] = useState<EmailStatus | null>(null);
-  const [imapUser, setImapUser] = useState<string | null>(null);
+  const [cacheKey, setCacheKey] = useState<string | null>(null);
 
   /**
    * Runs the full email status check flow:
-   * fetch settings -> check config -> check cache -> test connection.
+   * fetch settings -> derive from emailAccount -> check cache -> test connection.
    * On any network/server error, defaults to "connected" to avoid
    * showing a misleading banner.
    */
@@ -154,7 +164,8 @@ export function EmailStatusProvider({
 
     try {
       const settings = await fetchUserSettings();
-      setImapUser(settings.imapUser || null);
+      const key = settings.emailAccount?.emailAddress ?? settings.emailAccount?.id ?? null;
+      setCacheKey(key);
 
       const result = await resolveEmailStatus(settings);
       setStatus(result.status);
@@ -169,11 +180,11 @@ export function EmailStatusProvider({
    * the full status check. Intended for use after saving settings.
    */
   const refresh = useCallback(() => {
-    if (imapUser) {
-      clearEmailStatusCache(imapUser);
+    if (cacheKey) {
+      clearEmailStatusCache(cacheKey);
     }
     checkStatus();
-  }, [imapUser, checkStatus]);
+  }, [cacheKey, checkStatus]);
 
   // Run the check on mount
   useEffect(() => {
