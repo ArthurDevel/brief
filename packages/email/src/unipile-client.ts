@@ -246,7 +246,8 @@ export async function resolveSpecialUseFolder(
 
 /**
  * Saves a draft email via Unipile.
- * Drafts go through POST /api/v1/emails with { draft: true }.
+ * Drafts go through POST /api/v1/drafts (NOT /api/v1/emails with draft: true,
+ * which silently sends the email instead).
  * @param accountId - Unipile account ID
  * @param params - Draft parameters
  * @returns UndoRecipe to delete the created draft
@@ -260,7 +261,6 @@ export async function saveDraft(
     to: [{ display_name: "", identifier: params.to }],
     subject: params.subject,
     body: params.body,
-    draft: true,
   };
 
   if (params.cc) {
@@ -271,8 +271,9 @@ export async function saveDraft(
     payload.reply_to = params.inReplyTo;
   }
 
-  const data = await unipilePost("/api/v1/emails", payload);
-  const draftId = data.id ?? data.email_id ?? "unknown";
+  const data = await unipilePost("/api/v1/drafts", payload);
+  // POST /api/v1/drafts returns { object: "DraftCreated", draft_id: "..." }
+  const draftId = data.draft_id ?? data.id ?? data.email_id ?? "unknown";
 
   return {
     operation: "delete_draft",

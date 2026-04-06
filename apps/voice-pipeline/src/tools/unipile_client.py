@@ -212,11 +212,11 @@ async def save_draft(
         "to": [{"identifier": to}],
         "subject": subject,
         "body": body,
-        "draft": True,
     }
-    data = await _request("POST", "/api/v1/emails", json_body=payload)
+    data = await _request("POST", "/api/v1/drafts", json_body=payload)
 
-    draft_id = data.get("id")
+    # POST /api/v1/drafts returns { "object": "DraftCreated", "draft_id": "..." }
+    draft_id = data.get("draft_id") or data.get("id")
     if draft_id:
         return {
             "operation": "unipile_delete_draft",
