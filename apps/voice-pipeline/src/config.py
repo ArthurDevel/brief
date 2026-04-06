@@ -49,7 +49,7 @@ OPENROUTER_COST_MAX_RETRIES = 3
 # SETTINGS
 # ============================================================================
 
-LLM_MODEL = "x-ai/grok-4.1-fast"
+LLM_MODEL = "google/gemini-3-flash-preview"
 NEWSLETTER_LLM_MODEL = LLM_MODEL
 
 

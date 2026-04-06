@@ -34,7 +34,7 @@ VOICE_PIPELINE_PATH = ROOT / "apps" / "voice-pipeline"
 ENV_PATH = VOICE_PIPELINE_PATH / ".env"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_DATASET_NAME = "voice-behavior"
-LLM_MODEL = "x-ai/grok-4.1-fast"
+LLM_MODEL = "google/gemini-3-flash-preview"
 MAX_TOOL_ROUNDS = 10
 
 
