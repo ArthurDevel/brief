@@ -87,12 +87,34 @@ class ActiveSession:
 
 
 @dataclass
+class EmailAccount:
+    """Active email account resolved from user_email_accounts.
+
+    Attributes:
+        provider: The email provider type ("gmail", "outlook", "custom").
+        connection_type: How the account connects ("unipile" or "imap_smtp").
+        email_address: The user's email address (if known).
+        unipile_account_id: Unipile account ID (only for unipile accounts).
+        status: Account connection status.
+        imap_config: IMAP config (only for custom/imap_smtp accounts).
+        smtp_config: SMTP config (only for custom/imap_smtp accounts).
+    """
+
+    provider: str  # "gmail" | "outlook" | "custom"
+    connection_type: str  # "unipile" | "imap_smtp"
+    email_address: str | None
+    unipile_account_id: str | None
+    status: str
+    imap_config: ImapConfig | None
+    smtp_config: SmtpConfig | None
+
+
+@dataclass
 class UserContext:
     """Full user context loaded from DB + Vault, needed to set up the pipeline."""
 
     user_id: str
-    imap_config: ImapConfig
-    smtp_config: SmtpConfig
+    email_account: EmailAccount
     voice_preference: str
     voice_speed: float
     tool_approval_config: dict[str, str]
@@ -291,22 +313,6 @@ def _timezone_from_country_code(country_code: str) -> str | None:
     return _COUNTRY_CODE_TO_TIMEZONE.get(country_code)
 
 
-def _derive_email_provider(imap_host: str) -> EmailProvider:
-    """Derive the email provider type from the IMAP host string.
-
-    Args:
-        imap_host: The IMAP server hostname (e.g. "imap.gmail.com").
-
-    Returns:
-        "gmail", "outlook", or "custom" based on the host.
-    """
-    if imap_host == "imap.gmail.com":
-        return "gmail"
-    if imap_host == "outlook.office365.com":
-        return "outlook"
-    return "custom"
-
-
 def _flush_transcript(session: ActiveSession) -> None:
     """Write the current in-memory transcript to the database.
 
@@ -327,19 +333,23 @@ def _flush_transcript(session: ActiveSession) -> None:
 
 
 def load_user_context(user_id: str, supabase: Client) -> UserContext:
-    """Load full user context from DB and Vault (settings, memory, credentials).
+    """Load full user context from DB and Vault (settings, memory, email account).
+
+    Reads the active email account from user_email_accounts, resolves custom
+    Vault secrets when needed, and loads voice/tool/memory/timezone from
+    user_settings.
 
     Args:
         user_id: The user ID to load context for.
         supabase: Supabase client for DB + Vault operations.
 
     Returns:
-        UserContext with IMAP/SMTP configs, preferences, and memory.
+        UserContext with email account, preferences, and memory.
 
     Raises:
-        RuntimeError: If user settings are missing or credentials are not configured.
+        RuntimeError: If user settings are missing or no active email account is found.
     """
-    # Load user settings
+    # Step 1: Load user settings (voice, tool approval, timezone -- no email fields)
     settings_response = (
         supabase.table("user_settings")
         .select("*")
@@ -353,18 +363,24 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
 
     settings = cast(dict[str, Any], settings_response.data)
 
-    # Validate credential references exist
-    if not settings.get("imap_password_secret_id"):
-        raise RuntimeError(f"IMAP credentials not configured for user {user_id}")
+    # Step 2: Load active email account from user_email_accounts
+    account_response = (
+        supabase.table("user_email_accounts")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
 
-    if not settings.get("smtp_password_secret_id"):
-        raise RuntimeError(f"SMTP credentials not configured for user {user_id}")
+    account_rows = cast(list[dict[str, Any]], account_response.data or [])
+    if not account_rows:
+        raise RuntimeError(f"No active email account found for user {user_id}")
 
-    # Retrieve IMAP and SMTP passwords from Vault
-    imap_password = retrieve_secret(supabase, settings["imap_password_secret_id"])
-    smtp_password = retrieve_secret(supabase, settings["smtp_password_secret_id"])
+    account_row = account_rows[0]
+    email_account = build_email_account(account_row, supabase)
 
-    # Load user memory entries
+    # Step 3: Load user memory entries
     memory_response = (
         supabase.table("user_memory")
         .select("id, content")
@@ -381,20 +397,6 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
         for row in memory_rows
     ]
 
-    imap_config = ImapConfig(
-        host=str(settings["imap_host"]),
-        port=int(settings["imap_port"]),
-        user=str(settings["imap_user"]),
-        password=imap_password,
-    )
-
-    smtp_config = SmtpConfig(
-        host=str(settings["smtp_host"]),
-        port=int(settings["smtp_port"]),
-        user=str(settings["smtp_user"]),
-        password=smtp_password,
-    )
-
     voice_config = cast(dict[str, Any], settings.get("voice_config") or {})
 
     # Extract timezone: prefer call_schedule.timezone, fall back to phone country code
@@ -405,14 +407,74 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
         if phone and phone.get("countryCode"):
             user_timezone = _timezone_from_country_code(phone["countryCode"])
 
+    # Derive email_provider directly from the account row's provider field
+    email_provider = cast(EmailProvider, email_account.provider)
+
     return UserContext(
         user_id=user_id,
-        imap_config=imap_config,
-        smtp_config=smtp_config,
+        email_account=email_account,
         voice_preference=str(voice_config.get("voice", "aura-2-andromeda-en")),
         voice_speed=float(voice_config.get("speed", 1.2)),
         tool_approval_config=cast(dict[str, str], settings.get("tool_approval_config") or {}),
         memory_entries=memory_entries,
-        email_provider=_derive_email_provider(imap_config.host),
+        email_provider=email_provider,
         timezone=user_timezone,
+    )
+
+
+def build_email_account(account_row: dict[str, Any], supabase: Client) -> EmailAccount:
+    """Build an EmailAccount from a user_email_accounts DB row.
+
+    For custom (imap_smtp) accounts, retrieves IMAP/SMTP passwords from Vault.
+    For Unipile accounts, imap_config and smtp_config are left as None.
+
+    Args:
+        account_row: A row from user_email_accounts.
+        supabase: Supabase client for Vault secret retrieval.
+
+    Returns:
+        Fully populated EmailAccount dataclass.
+
+    Raises:
+        RuntimeError: If a custom account is missing required credential references.
+    """
+    connection_type = str(account_row["connection_type"])
+    imap_config: ImapConfig | None = None
+    smtp_config: SmtpConfig | None = None
+
+    if connection_type == "imap_smtp":
+        # Custom account: resolve IMAP/SMTP credentials from Vault
+        if not account_row.get("imap_password_secret_id"):
+            raise RuntimeError(
+                f"IMAP credentials not configured for email account {account_row['id']}"
+            )
+        if not account_row.get("smtp_password_secret_id"):
+            raise RuntimeError(
+                f"SMTP credentials not configured for email account {account_row['id']}"
+            )
+
+        imap_password = retrieve_secret(supabase, str(account_row["imap_password_secret_id"]))
+        smtp_password = retrieve_secret(supabase, str(account_row["smtp_password_secret_id"]))
+
+        imap_config = ImapConfig(
+            host=str(account_row["imap_host"]),
+            port=int(account_row["imap_port"]),
+            user=str(account_row["imap_user"]),
+            password=imap_password,
+        )
+        smtp_config = SmtpConfig(
+            host=str(account_row["smtp_host"]),
+            port=int(account_row["smtp_port"]),
+            user=str(account_row["smtp_user"]),
+            password=smtp_password,
+        )
+
+    return EmailAccount(
+        provider=str(account_row["provider"]),
+        connection_type=connection_type,
+        email_address=account_row.get("email_address"),
+        unipile_account_id=account_row.get("unipile_account_id"),
+        status=str(account_row["status"]),
+        imap_config=imap_config,
+        smtp_config=smtp_config,
     )

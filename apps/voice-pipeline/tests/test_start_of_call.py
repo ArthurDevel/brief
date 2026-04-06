@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 from imapclient import IMAPClient
 
 from src.prompt import build_system_prompt
-from src.session import get_last_session_end_time, _derive_email_provider
+from src.session import get_last_session_end_time
 from src.tools.email_client import count_emails_since, count_unread_emails
 
 
@@ -32,26 +32,6 @@ class FakeResponse:
 
     def __init__(self, data: list[dict[str, Any]]):
         self.data = data
-
-
-# ============================================================================
-# UNIT TESTS -- _derive_email_provider
-# ============================================================================
-
-class TestDeriveEmailProvider:
-    """Tests that _derive_email_provider maps IMAP hosts to provider types."""
-
-    def test_gmail_host(self) -> None:
-        """Returns 'gmail' for imap.gmail.com."""
-        assert _derive_email_provider("imap.gmail.com") == "gmail"
-
-    def test_outlook_host(self) -> None:
-        """Returns 'outlook' for outlook.office365.com."""
-        assert _derive_email_provider("outlook.office365.com") == "outlook"
-
-    def test_custom_host(self) -> None:
-        """Returns 'custom' for any other IMAP host."""
-        assert _derive_email_provider("mail.example.com") == "custom"
 
 
 # ============================================================================

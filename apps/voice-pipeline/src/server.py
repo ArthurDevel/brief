@@ -68,7 +68,7 @@ from src.pipeline import create_pipeline, PipelineResult
 from src.scheduler import fetch_company_phones, start_scheduler
 from src.session import end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
-from src.tools.email_client import close_imap_connection, create_imap_connection
+from src.tools.email_client import close_imap_connection, create_imap_connection, create_email_client_context, EmailClientContext
 from src.tools import contact_sync
 from src import session_logger
 
@@ -252,17 +252,17 @@ async def cancel_stt_tasks(stt: DeepgramFluxSTTService) -> None:
 # ============================================================================
 
 async def _setup_pipeline_session(transport, user_context, settings, supabase, transport_type):
-    """Set up a pipeline session: create session, IMAP connection, cost tracker, and pipeline.
+    """Set up a pipeline session: create email client context, cost tracker, and pipeline.
 
     Args:
         transport: Pipecat transport (SmallWebRTC or FastAPIWebsocketTransport).
-        user_context: Loaded user context with IMAP/SMTP config.
+        user_context: Loaded user context with email_account.
         settings: App settings.
         supabase: Supabase client.
         transport_type: "webrtc" or "twilio".
 
     Returns:
-        Tuple of (pipeline_result, session, cost_tracker, langfuse_observer, imap_holder).
+        Tuple of (pipeline_result, session, cost_tracker, langfuse_observer, email_ctx).
     """
     session = start_session(user_context.user_id, supabase)
     session_logger.start(session.session_id)
@@ -271,11 +271,15 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
     langfuse_observer = LangfuseObserver(session, transport_type, voice=user_context.voice_preference)
     langfuse_observer.start_trace()
 
-    imap_client = create_imap_connection(user_context.imap_config)
-    imap_holder = {
-        "client": imap_client,
-        "config": user_context.imap_config,
-    }
+    # Build provider-aware email client context
+    # For custom accounts: opens IMAP connection. For Unipile: just stores account_id.
+    account = user_context.email_account
+    imap_holder: dict[str, Any] | None = None
+    if account.connection_type == "imap_smtp" and account.imap_config:
+        imap_client = create_imap_connection(account.imap_config)
+        imap_holder = {"client": imap_client, "config": account.imap_config}
+
+    email_ctx = create_email_client_context(account, imap_holder=imap_holder)
 
     try:
         # Sample rate depends on transport: 8kHz for Twilio (mulaw native),
@@ -296,7 +300,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             audio_config=audio_config,
             supabase=supabase,
             settings=settings,
-            imap_holder=imap_holder,
+            email_ctx=email_ctx,
             recording_enabled=settings.recording_enabled,
         )
 
@@ -305,25 +309,26 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             "session": session,
             "cost_tracker": cost_tracker,
             "langfuse_observer": langfuse_observer,
-            "imap_holder": imap_holder,
+            "email_ctx": email_ctx,
             "supabase": supabase,
             "settings": settings,
             "narration_http_session": pipeline_result.narration_http_session,
         }
 
-        return pipeline_result, session, cost_tracker, langfuse_observer, imap_holder
+        return pipeline_result, session, cost_tracker, langfuse_observer, email_ctx
 
     except Exception:
         session_logger.stop(session.session_id)
-        try:
-            close_imap_connection(imap_client)
-        except Exception as exc:
-            logger.warning("[server] Error closing IMAP on setup failure: %s", exc)
+        if imap_holder and imap_holder.get("client"):
+            try:
+                close_imap_connection(imap_holder["client"])
+            except Exception as exc:
+                logger.warning("[server] Error closing IMAP on setup failure: %s", exc)
         raise
 
 
 async def _cleanup_session(
-    imap_holder,
+    email_ctx: EmailClientContext,
     cost_tracker,
     langfuse_observer,
     session,
@@ -337,7 +342,7 @@ async def _cleanup_session(
     Closes the narration HTTP session if one was created.
 
     Args:
-        imap_holder: Mutable IMAP client holder.
+        email_ctx: Provider-aware email client context (holds IMAP holder for custom accounts).
         cost_tracker: Cost tracker for the session.
         langfuse_observer: Langfuse observer for the session.
         session: Active session to finalize.
@@ -345,10 +350,12 @@ async def _cleanup_session(
         settings: App settings (for OpenRouter API key).
         narration_http_session: Mutable dict holding the shared aiohttp session, or None.
     """
-    try:
-        close_imap_connection(imap_holder["client"])
-    except BaseException as exc:
-        logger.warning("[server] Error closing IMAP connection: %s", exc)
+    # Close IMAP connection if this was a custom account
+    if email_ctx.connection_type == "imap_smtp" and email_ctx.imap_holder:
+        try:
+            close_imap_connection(email_ctx.imap_holder["client"])
+        except BaseException as exc:
+            logger.warning("[server] Error closing IMAP connection: %s", exc)
 
     try:
         await cost_tracker.fetch_llm_costs(settings.openrouter_api_key)
@@ -387,12 +394,25 @@ async def _cleanup_session(
         await session_logger.upload_session_logs(session.session_id, log_text, supabase)
 
     # Incremental contact sync (fire-and-forget, never blocks cleanup)
-    if imap_holder.get("config"):
-        try:
-            contact_sync.incremental_sync(imap_holder["config"], session.user_id, supabase)
+    # Loads the active email account from user_email_accounts to support both
+    # custom (IMAP) and Unipile accounts.
+    try:
+        from src.session import build_email_account
+        account_response = (
+            supabase.table("user_email_accounts")
+            .select("*")
+            .eq("user_id", session.user_id)
+            .eq("is_active", True)
+            .limit(1)
+            .execute()
+        )
+        account_rows = cast(list[dict[str, Any]], account_response.data or [])
+        if account_rows:
+            email_account = build_email_account(account_rows[0], supabase)
+            contact_sync.incremental_sync(email_account, session.user_id, supabase)
             logger.info("[server] Incremental contact sync completed for user %s", session.user_id)
-        except Exception as exc:
-            logger.warning("[server] Incremental contact sync failed for user %s: %s", session.user_id, exc)
+    except Exception as exc:
+        logger.warning("[server] Incremental contact sync failed for user %s: %s", session.user_id, exc)
 
     _live_pipeline_sessions.pop(session.session_id, None)
 
@@ -435,7 +455,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         ),
     )
 
-    pipeline_result, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
+    pipeline_result, session, cost_tracker, langfuse_observer, email_ctx = await _setup_pipeline_session(
         transport, user_context, settings, supabase, transport_type="webrtc"
     )
     task = pipeline_result.task
@@ -458,7 +478,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
     finally:
         await cancel_stt_tasks(pipeline_result.stt)
         await _cleanup_session(
-            imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
+            email_ctx, cost_tracker, langfuse_observer, session, supabase, settings,
             narration_http_session=pipeline_result.narration_http_session,
         )
 
@@ -532,7 +552,7 @@ async def lifespan(app: FastAPI):
         logger.info("[server] Finalizing orphaned session %s on shutdown", sid)
         try:
             await _cleanup_session(
-                info["imap_holder"],
+                info["email_ctx"],
                 info["cost_tracker"],
                 info["langfuse_observer"],
                 info["session"],
@@ -572,7 +592,10 @@ async def health() -> JSONResponse:
 # ============================================================================
 
 def _run_contact_sync(user_id: str, mode: str = "full") -> None:
-    """Background task: load IMAP config from DB/Vault and run contact sync.
+    """Background task: load email account from user_email_accounts and run contact sync.
+
+    Resolves the active email account (custom or Unipile) and passes it to
+    the provider-aware contact sync functions.
 
     Args:
         user_id: The user to sync contacts for.
@@ -583,40 +606,29 @@ def _run_contact_sync(user_id: str, mode: str = "full") -> None:
         settings = load_settings()
         supabase = create_service_client(settings)
 
-        # Load IMAP config from DB + Vault (same pattern as load_user_context)
-        settings_response = (
-            supabase.table("user_settings")
-            .select("imap_host, imap_port, imap_user, imap_password_secret_id")
+        # Load active email account from user_email_accounts
+        from src.session import build_email_account
+        account_response = (
+            supabase.table("user_email_accounts")
+            .select("*")
             .eq("user_id", user_id)
-            .single()
+            .eq("is_active", True)
+            .limit(1)
             .execute()
         )
 
-        if not settings_response.data:
-            logger.error("[server] sync-contacts: no settings found for user %s", user_id)
+        account_rows = cast(list[dict[str, Any]], account_response.data or [])
+        if not account_rows:
+            logger.error("[server] sync-contacts: no active email account for user %s", user_id)
             return
 
-        row = cast(dict[str, Any], settings_response.data)
-        if not row.get("imap_password_secret_id"):
-            logger.error("[server] sync-contacts: no IMAP credentials for user %s", user_id)
-            return
-
-        from src.tools.vault import retrieve_secret
-        imap_password = retrieve_secret(supabase, str(row["imap_password_secret_id"]))
-
-        from src.session import ImapConfig
-        imap_config = ImapConfig(
-            host=str(row["imap_host"]),
-            port=int(row["imap_port"]),
-            user=str(row["imap_user"]),
-            password=imap_password,
-        )
+        email_account = build_email_account(account_rows[0], supabase)
 
         if mode == "incremental":
-            count = contact_sync.incremental_sync(imap_config, user_id, supabase)
+            count = contact_sync.incremental_sync(email_account, user_id, supabase)
             logger.info("[server] Incremental contact sync completed for user %s: %d contacts", user_id, count)
         else:
-            count = contact_sync.full_sync(imap_config, user_id, supabase)
+            count = contact_sync.full_sync(email_account, user_id, supabase)
             logger.info("[server] Full contact sync completed for user %s: %d contacts", user_id, count)
 
     except Exception as exc:
@@ -1068,7 +1080,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         ),
     )
 
-    pipeline_result, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
+    pipeline_result, session, cost_tracker, langfuse_observer, email_ctx = await _setup_pipeline_session(
         transport, user_context, settings, supabase, transport_type="twilio"
     )
     task = pipeline_result.task
@@ -1091,7 +1103,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
     finally:
         await cancel_stt_tasks(pipeline_result.stt)
         await _cleanup_session(
-            imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
+            email_ctx, cost_tracker, langfuse_observer, session, supabase, settings,
             narration_http_session=pipeline_result.narration_http_session,
         )
 

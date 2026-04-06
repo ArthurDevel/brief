@@ -3,13 +3,14 @@
  *
  * Handles post-session tasks triggered by the voice pipeline after a call
  * ends. Enriches email-related actions with metadata (subject, from) via
- * IMAP, then sends a summary email.
+ * the active email account (custom IMAP or Unipile), then sends a summary email.
  *
  * Responsibilities:
  * - Authenticate via INTERNAL_API_KEY (service-to-service)
  * - Load session and verify it exists with ended_at set
  * - Load actions for the session
- * - Enrich email-referencing actions with subject/from metadata
+ * - Load the active email account from user_email_accounts
+ * - Enrich email-referencing actions with subject/from metadata via provider-agnostic client
  * - Load user email via Supabase admin API
  * - Send summary email via Resend (if there are actions)
  */
@@ -17,18 +18,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/client";
 import { sendSessionSummary } from "@/lib/resend/client";
-import { retrieveSecret } from "@dublin/tools";
-import {
-  createImapConnection,
-  closeImapConnection,
-  fetchEmailMetaBatch,
-} from "@dublin/email";
-import type { EmailMetaRequest } from "@dublin/email";
+import { getActiveEmailAccountRecord } from "@/lib/email-accounts";
+import { createEmailAccountClient } from "@dublin/email";
+import type { EmailMetaRequest, EmailAccountClient } from "@dublin/email";
 import type { ActionRow } from "@dublin/tools";
 import { getDefaultClassification } from "@dublin/tools/src/classification";
-
-/** IMAP client type derived from createImapConnection return value. */
-type ImapClient = Awaited<ReturnType<typeof createImapConnection>>;
 
 // ============================================================================
 // TYPES
@@ -129,45 +123,31 @@ export async function POST(
   }
 
   // Enrich email-referencing actions with subject/from metadata.
-  // Wrapped in try/catch so IMAP failures do not block email sending.
+  // Wrapped in try/catch so email client failures do not block email sending.
   try {
-    // Load IMAP credentials (same pattern as approve route)
-    const { data: settings, error: settingsError } = await supabase
-      .from("user_settings")
-      .select("imap_host, imap_port, imap_user, imap_password_secret_id")
-      .eq("user_id", session.user_id)
-      .single();
+    // Load active email account from user_email_accounts
+    const emailAccount = await getActiveEmailAccountRecord(supabase, supabase, session.user_id);
 
-    if (settingsError || !settings || !settings.imap_password_secret_id) {
-      log("Skipping enrichment: IMAP settings not configured");
+    if (!emailAccount) {
+      log("Skipping enrichment: no active email account configured");
     } else {
-      const imapStart = Date.now();
-      const imapPassword = await retrieveSecret(supabase, settings.imap_password_secret_id);
-      const imapClient = await createImapConnection({
-        host: settings.imap_host,
-        port: settings.imap_port,
-        user: settings.imap_user,
-        password: imapPassword,
-      });
-      log(`IMAP connected in ${Date.now() - imapStart}ms`);
+      const clientStart = Date.now();
+      const emailClient = await createEmailAccountClient(emailAccount);
+      log(`Email client created in ${Date.now() - clientStart}ms (${emailAccount.connectionType})`);
 
-      try {
-        const enrichStart = Date.now();
-        const enrichedActions = await enrichActionsWithEmailMeta(actions, imapClient, log);
-        log(`Enrichment done in ${Date.now() - enrichStart}ms: ${enrichedActions.length} action(s) enriched`);
+      const enrichStart = Date.now();
+      const enrichedActions = await enrichActionsWithEmailMeta(actions, emailClient, log);
+      log(`Enrichment done in ${Date.now() - enrichStart}ms: ${enrichedActions.length} action(s) enriched`);
 
-        // Update enriched actions in the DB concurrently
-        const dbStart = Date.now();
-        await Promise.all(enrichedActions.map((action) =>
-          supabase
-            .from("actions")
-            .update({ arguments: action.arguments })
-            .eq("id", action.id)
-        ));
-        log(`DB updates done in ${Date.now() - dbStart}ms`);
-      } finally {
-        await closeImapConnection(imapClient);
-      }
+      // Update enriched actions in the DB concurrently
+      const dbStart = Date.now();
+      await Promise.all(enrichedActions.map((action) =>
+        supabase
+          .from("actions")
+          .update({ arguments: action.arguments })
+          .eq("id", action.id)
+      ));
+      log(`DB updates done in ${Date.now() - dbStart}ms`);
     }
   } catch (error) {
     console.error(`[end-of-session] [${sessionId}] Enrichment failed, continuing:`, error);
@@ -214,13 +194,13 @@ export async function POST(
  * Builds a batch of requests and calls fetchEmailMetaBatch once, then merges
  * the results back into the action arguments.
  * @param actions - Array of action rows to enrich
- * @param imapClient - Connected ImapFlow client
+ * @param emailClient - Provider-agnostic email account client
  * @param log - Logging function for diagnostic output
  * @returns Array of actions whose arguments were updated (subset of input)
  */
 async function enrichActionsWithEmailMeta(
   actions: ActionRow[],
-  imapClient: ImapClient,
+  emailClient: EmailAccountClient,
   log: (msg: string) => void
 ): Promise<ActionRow[]> {
   // Filter to candidate actions that need enrichment
@@ -247,7 +227,7 @@ async function enrichActionsWithEmailMeta(
   });
 
   // Single batch call for all lookups
-  const results = await fetchEmailMetaBatch(imapClient, requests);
+  const results = await emailClient.fetchEmailMetaBatch(requests);
   log(`Batch returned ${results.size} result(s) for ${requests.length} request(s)`);
 
   // Merge results back into action arguments

@@ -70,26 +70,48 @@ export interface CallSchedule {
   sunday: string | null;
 }
 
-/** User configuration as returned by the settings API. Passwords are never exposed. */
-export interface UserSettings {
-  imapHost: string;
-  imapPort: number;
-  imapUser: string;
+// ============================================================================
+// EMAIL ACCOUNTS
+// ============================================================================
+
+/**
+ * Summary of a user's active email account connection.
+ * Returned by the settings API alongside general settings.
+ * @param id - Email account row ID
+ * @param provider - Mail provider ("gmail", "outlook", or "custom")
+ * @param connectionType - How the account connects ("unipile" or "imap_smtp")
+ * @param emailAddress - The email address for this account, if known
+ * @param status - Current connection status
+ * @param lastError - Most recent error message, if any
+ * @param hasImapPassword - Whether an IMAP password is stored (custom only)
+ * @param hasSmtpPassword - Whether an SMTP password is stored (custom only)
+ */
+export interface EmailAccountSummary {
+  id: string;
+  provider: "gmail" | "outlook" | "custom";
+  connectionType: "unipile" | "imap_smtp";
+  emailAddress: string | null;
+  status: "connected" | "reconnect_required" | "pending" | "error" | "not_configured";
+  lastError: string | null;
   hasImapPassword: boolean;
-  smtpHost: string;
-  smtpPort: number;
-  smtpUser: string;
   hasSmtpPassword: boolean;
-  voicePreference: string;
-  voiceSpeed: number;
-  toolApprovalConfig: ToolApprovalConfig;
-  phone: UserPhone | null;
-  hasPin: boolean;
-  callSchedule: CallSchedule | null;
 }
 
-/** Payload for updating user settings via PUT. Passwords are optional (only sent when changed). */
-export interface UserSettingsUpdate {
+/**
+ * Input for creating or updating a custom IMAP/SMTP email account.
+ * Passwords are optional (only sent when changed).
+ * @param provider - Always "custom" for direct IMAP/SMTP
+ * @param imapHost - IMAP server hostname
+ * @param imapPort - IMAP server port
+ * @param imapUser - IMAP username (usually the email address)
+ * @param imapPassword - IMAP password (optional, only when setting/changing)
+ * @param smtpHost - SMTP server hostname
+ * @param smtpPort - SMTP server port
+ * @param smtpUser - SMTP username (usually the email address)
+ * @param smtpPassword - SMTP password (optional, only when setting/changing)
+ */
+export interface CustomEmailAccountInput {
+  provider: "custom";
   imapHost: string;
   imapPort: number;
   imapUser: string;
@@ -98,9 +120,24 @@ export interface UserSettingsUpdate {
   smtpPort: number;
   smtpUser: string;
   smtpPassword?: string;
+}
+
+/** User configuration as returned by the settings API. Passwords are never exposed. */
+export interface UserSettings {
+  emailAccount: EmailAccountSummary | null;
   voicePreference: string;
   voiceSpeed: number;
   toolApprovalConfig: ToolApprovalConfig;
+  phone: UserPhone | null;
+  hasPin: boolean;
+  callSchedule: CallSchedule | null;
+}
+
+/** Payload for updating user settings via PUT (non-email fields only). */
+export interface UserSettingsUpdate {
+  voicePreference?: string;
+  voiceSpeed?: number;
+  toolApprovalConfig?: ToolApprovalConfig;
   pin?: string;
   callSchedule?: CallSchedule | null;
 }
