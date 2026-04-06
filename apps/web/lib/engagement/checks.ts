@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
+  EmailAccountData,
   EmailCandidate,
   UserData,
   UserSettingsData,
@@ -83,7 +84,7 @@ async function fetchUserSettings(
 ): Promise<UserSettingsData[]> {
   const { data, error } = await supabase
     .from("user_settings")
-    .select("user_id, phone, imap_host, pin_hash, call_schedule, updated_at");
+    .select("user_id, phone, pin_hash, call_schedule, updated_at");
 
   if (error) {
     throw new Error(`Failed to fetch user_settings: ${error.message}`);
@@ -92,10 +93,32 @@ async function fetchUserSettings(
   return (data ?? []).map((row) => ({
     userId: row.user_id,
     phone: row.phone,
-    imapHost: row.imap_host,
     pinHash: row.pin_hash,
     callSchedule: row.call_schedule,
     updatedAt: row.updated_at,
+  }));
+}
+
+/**
+ * Fetches users who have an active, connected email account.
+ * @param supabase - service role Supabase client
+ * @returns array of EmailAccountData (one per user with an active connected account)
+ */
+async function fetchEmailAccounts(
+  supabase: SupabaseClient
+): Promise<EmailAccountData[]> {
+  const { data, error } = await supabase
+    .from("user_email_accounts")
+    .select("user_id")
+    .eq("is_active", true)
+    .eq("status", "connected");
+
+  if (error) {
+    throw new Error(`Failed to fetch user_email_accounts: ${error.message}`);
+  }
+
+  return (data ?? []).map((row) => ({
+    userId: row.user_id,
   }));
 }
 
@@ -187,9 +210,10 @@ export async function findAllCandidates(
   supabase: SupabaseClient
 ): Promise<EmailCandidate[]> {
   // Step 1: Fetch all data in parallel
-  const [users, settings, sessions, subscriptions, sent] = await Promise.all([
+  const [users, settings, emailAccounts, sessions, subscriptions, sent] = await Promise.all([
     fetchConfirmedUsers(supabase),
     fetchUserSettings(supabase),
+    fetchEmailAccounts(supabase),
     fetchSessions(supabase),
     fetchSubscriptions(supabase),
     fetchSentEmails(supabase),
@@ -199,23 +223,27 @@ export async function findAllCandidates(
   const incompleteCandidates = filterIncompleteOnboarding(
     users,
     settings,
+    emailAccounts,
     sent
   );
   const getStartedCandidates = filterGetStarted(
     users,
     settings,
+    emailAccounts,
     sessions,
     sent
   );
   const reactivationCandidates = filterReactivation(
     users,
     settings,
+    emailAccounts,
     sessions,
     sent
   );
   const upgradeCandidates = filterUpgrade(
     users,
     settings,
+    emailAccounts,
     sessions,
     subscriptions,
     sent

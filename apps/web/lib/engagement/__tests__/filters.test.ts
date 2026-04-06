@@ -17,8 +17,8 @@ import {
 import type {
   UserData,
   UserSettingsData,
+  EmailAccountData,
   SessionData,
-  SubscriptionData,
   SentEmailData,
   EmailCandidate,
 } from "../types";
@@ -62,12 +62,16 @@ function makeSettings(
   return {
     userId,
     phone: { number: "+1234567890" },
-    imapHost: "imap.gmail.com",
     pinHash: "abc123",
     callSchedule: null,
     updatedAt: hoursAgo(2),
     ...overrides,
   };
+}
+
+/** Creates an email account entry (user has active connected email). */
+function makeEmailAccount(userId: string): EmailAccountData {
+  return { userId };
 }
 
 function makeSession(
@@ -109,9 +113,9 @@ describe("filterIncompleteOnboarding", () => {
     const userA = makeUser({ createdAt: hoursAgo(73) });
     const settingsA = makeSettings(userA.userId, { phone: null });
 
-    // User signed up 30min ago, missing imap -- too early for any email
+    // User signed up 30min ago, no email account -- too early for any email
     const userB = makeUser({ createdAt: hoursAgo(0.5) });
-    const settingsB = makeSettings(userB.userId, { imapHost: null });
+    const settingsB = makeSettings(userB.userId);
 
     // User with complete onboarding -- should not appear
     const userC = makeUser({ createdAt: hoursAgo(73) });
@@ -124,9 +128,18 @@ describe("filterIncompleteOnboarding", () => {
     // userA already received the 1h email
     const sent = [makeSent(userA.userId, "onboarding_incomplete_1h")];
 
+    // userA has an email account but missing phone -- still incomplete
+    // userB has no email account -- incomplete but too early
+    // userC has everything -- complete
+    const emailAccounts = [
+      makeEmailAccount(userA.userId),
+      makeEmailAccount(userC.userId),
+    ];
+
     const result = filterIncompleteOnboarding(
       [userA, userB, userC, userD],
       [settingsA, settingsB, settingsC, settingsD],
+      emailAccounts,
       sent
     );
 
@@ -153,13 +166,21 @@ describe("filterGetStarted", () => {
     const settingsB = makeSettings(userB.userId, { updatedAt: hoursAgo(48) });
     const sessionB = makeSession(userB.userId, hoursAgo(25));
 
-    // Incomplete onboarding -- should not appear
+    // Incomplete onboarding (missing phone) -- should not appear
     const userC = makeUser();
     const settingsC = makeSettings(userC.userId, { phone: null, updatedAt: daysAgo(4) });
+
+    // All users have email accounts, but userC is still incomplete (no phone)
+    const emailAccounts = [
+      makeEmailAccount(userA.userId),
+      makeEmailAccount(userB.userId),
+      makeEmailAccount(userC.userId),
+    ];
 
     const result = filterGetStarted(
       [userA, userB, userC],
       [settingsA, settingsB, settingsC],
+      emailAccounts,
       [sessionB],
       []
     );
@@ -185,7 +206,13 @@ describe("filterGetStarted", () => {
       callSchedule: { days: ["mon"] },
     });
 
-    const result = filterGetStarted([user], [settings], [], []);
+    const result = filterGetStarted(
+      [user],
+      [settings],
+      [makeEmailAccount(user.userId)],
+      [],
+      []
+    );
     const types = result.map((c) => c.emailType);
     expect(types).not.toContain("schedule_nudge");
   });
@@ -201,9 +228,15 @@ describe("filterReactivation", () => {
     const userB = makeUser();
     const settingsB = makeSettings(userB.userId);
 
+    const emailAccounts = [
+      makeEmailAccount(userA.userId),
+      makeEmailAccount(userB.userId),
+    ];
+
     const result = filterReactivation(
       [userA, userB],
       [settingsA, settingsB],
+      emailAccounts,
       [
         makeSession(userA.userId, daysAgo(4)),
         makeSession(userB.userId, daysAgo(10)),
@@ -232,9 +265,16 @@ describe("filterUpgrade", () => {
     const userC = makeUser({ createdAt: daysAgo(15) });
     const settingsC = makeSettings(userC.userId);
 
+    const emailAccounts = [
+      makeEmailAccount(userA.userId),
+      makeEmailAccount(userB.userId),
+      makeEmailAccount(userC.userId),
+    ];
+
     const result = filterUpgrade(
       [userA, userB, userC],
       [settingsA, settingsB, settingsC],
+      emailAccounts,
       [
         makeSession(userA.userId, daysAgo(10)),
         makeSession(userA.userId, daysAgo(7)),

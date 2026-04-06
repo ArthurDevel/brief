@@ -104,14 +104,21 @@ export interface UserSettingsData {
   userId: string;
   /** Phone config (JSONB), null if not set */
   phone: object | null;
-  /** IMAP host, null if not set */
-  imapHost: string | null;
   /** PIN hash, null if not set */
   pinHash: string | null;
   /** Call schedule config (JSONB), null if not set */
   callSchedule: object | null;
   /** When the settings were last updated */
   updatedAt: string;
+}
+
+/**
+ * An active email account from user_email_accounts.
+ * Replaces the old imap_host check on user_settings for onboarding completeness.
+ */
+export interface EmailAccountData {
+  /** The user's auth ID */
+  userId: string;
 }
 
 /**

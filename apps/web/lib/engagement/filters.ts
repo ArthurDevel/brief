@@ -16,6 +16,7 @@
 
 import type {
   EmailCandidate,
+  EmailAccountData,
   EmailType,
   UserData,
   UserSettingsData,
@@ -62,15 +63,21 @@ function isEmailConfirmed(user: UserData): boolean {
 }
 
 /**
- * Checks whether a user has completed onboarding (all three fields set).
+ * Checks whether a user has completed onboarding.
+ * Requires phone and pinHash set in user_settings, plus an active
+ * connected email account in user_email_accounts.
  * @param settings - the user's settings row
- * @returns true if phone, imapHost, and pinHash are all non-null
+ * @param hasEmailAccount - whether the user has an active connected email account
+ * @returns true if all onboarding steps are complete
  */
-function isOnboardingComplete(settings: UserSettingsData): boolean {
+function isOnboardingComplete(
+  settings: UserSettingsData,
+  hasEmailAccount: boolean
+): boolean {
   return (
     settings.phone !== null &&
-    settings.imapHost !== null &&
-    settings.pinHash !== null
+    settings.pinHash !== null &&
+    hasEmailAccount
   );
 }
 
@@ -111,15 +118,18 @@ function msSince(isoDate: string): number {
  *
  * @param users - all users from auth
  * @param settings - all user_settings rows
+ * @param emailAccounts - users with active connected email accounts
  * @param sent - all previously sent email events
  * @returns candidates for incomplete onboarding emails
  */
 export function filterIncompleteOnboarding(
   users: UserData[],
   settings: UserSettingsData[],
+  emailAccounts: EmailAccountData[],
   sent: SentEmailData[]
 ): EmailCandidate[] {
   const settingsMap = new Map(settings.map((s) => [s.userId, s]));
+  const emailAccountSet = new Set(emailAccounts.map((a) => a.userId));
   const candidates: EmailCandidate[] = [];
 
   for (const user of users) {
@@ -128,8 +138,8 @@ export function filterIncompleteOnboarding(
     const userSettings = settingsMap.get(user.userId);
 
     // If no settings row exists, user is incomplete (nothing set up yet)
-    // If settings exist but any field is null, user is incomplete
-    if (userSettings && isOnboardingComplete(userSettings)) continue;
+    // If settings exist but onboarding is complete, skip
+    if (userSettings && isOnboardingComplete(userSettings, emailAccountSet.has(user.userId))) continue;
 
     const timeSinceSignup = msSince(user.createdAt);
 
@@ -166,6 +176,7 @@ export function filterIncompleteOnboarding(
  *
  * @param users - all users from auth
  * @param settings - all user_settings rows
+ * @param emailAccounts - users with active connected email accounts
  * @param sessions - all session rows
  * @param sent - all previously sent email events
  * @returns candidates for get-started emails
@@ -173,10 +184,12 @@ export function filterIncompleteOnboarding(
 export function filterGetStarted(
   users: UserData[],
   settings: UserSettingsData[],
+  emailAccounts: EmailAccountData[],
   sessions: SessionData[],
   sent: SentEmailData[]
 ): EmailCandidate[] {
   const settingsMap = new Map(settings.map((s) => [s.userId, s]));
+  const emailAccountSet = new Set(emailAccounts.map((a) => a.userId));
   const candidates: EmailCandidate[] = [];
 
   // Group sessions by userId
@@ -191,7 +204,7 @@ export function filterGetStarted(
     if (!isEmailConfirmed(user)) continue;
 
     const userSettings = settingsMap.get(user.userId);
-    if (!userSettings || !isOnboardingComplete(userSettings)) continue;
+    if (!userSettings || !isOnboardingComplete(userSettings, emailAccountSet.has(user.userId))) continue;
 
     const timeSinceOnboarding = msSince(userSettings.updatedAt);
     const userSessions = sessionsMap.get(user.userId) ?? [];
@@ -282,6 +295,7 @@ export function filterGetStarted(
  *
  * @param users - all users from auth
  * @param settings - all user_settings rows
+ * @param emailAccounts - users with active connected email accounts
  * @param sessions - all session rows
  * @param sent - all previously sent email events
  * @returns candidates for reactivation email
@@ -289,10 +303,12 @@ export function filterGetStarted(
 export function filterReactivation(
   users: UserData[],
   settings: UserSettingsData[],
+  emailAccounts: EmailAccountData[],
   sessions: SessionData[],
   sent: SentEmailData[]
 ): EmailCandidate[] {
   const settingsMap = new Map(settings.map((s) => [s.userId, s]));
+  const emailAccountSet = new Set(emailAccounts.map((a) => a.userId));
   const candidates: EmailCandidate[] = [];
 
   // Group sessions by userId
@@ -307,7 +323,7 @@ export function filterReactivation(
     if (!isEmailConfirmed(user)) continue;
 
     const userSettings = settingsMap.get(user.userId);
-    if (!userSettings || !isOnboardingComplete(userSettings)) continue;
+    if (!userSettings || !isOnboardingComplete(userSettings, emailAccountSet.has(user.userId))) continue;
 
     const userSessions = sessionsMap.get(user.userId) ?? [];
     if (userSessions.length === 0) continue;
@@ -344,6 +360,7 @@ export function filterReactivation(
  *
  * @param users - all users from auth
  * @param settings - all user_settings rows
+ * @param emailAccounts - users with active connected email accounts
  * @param sessions - all session rows
  * @param subscriptions - all subscription rows
  * @param sent - all previously sent email events
@@ -352,11 +369,13 @@ export function filterReactivation(
 export function filterUpgrade(
   users: UserData[],
   settings: UserSettingsData[],
+  emailAccounts: EmailAccountData[],
   sessions: SessionData[],
   subscriptions: SubscriptionData[],
   sent: SentEmailData[]
 ): EmailCandidate[] {
   const settingsMap = new Map(settings.map((s) => [s.userId, s]));
+  const emailAccountSet = new Set(emailAccounts.map((a) => a.userId));
   const subscriptionMap = new Map(subscriptions.map((s) => [s.userId, s]));
   const candidates: EmailCandidate[] = [];
 
@@ -373,7 +392,7 @@ export function filterUpgrade(
     if (!isEmailConfirmed(user)) continue;
 
     const userSettings = settingsMap.get(user.userId);
-    if (!userSettings || !isOnboardingComplete(userSettings)) continue;
+    if (!userSettings || !isOnboardingComplete(userSettings, emailAccountSet.has(user.userId))) continue;
 
     const subscription = subscriptionMap.get(user.userId);
     if (!subscription || subscription.plan !== "free") continue;
