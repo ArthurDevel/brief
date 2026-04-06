@@ -12,6 +12,8 @@ used by email_client.py so tool handlers are provider-agnostic.
 - delete_email: delete an email
 - send_email: send a new email
 - save_draft: create a draft email
+- list_folders: list account folders
+- move_to_folder: move an email to a folder
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from typing import Any
 
 import httpx
 
-from src.tools.email_client import Email, EmailSummary
+from src.tools.email_client import Email, EmailSummary, FolderInfo
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +228,66 @@ async def save_draft(
             },
         }
     return None
+
+
+async def list_folders(account_id: str) -> list[FolderInfo]:
+    """List all folders for a Unipile account (excluding INBOX).
+
+    Args:
+        account_id: The Unipile account ID.
+
+    Returns:
+        List of FolderInfo for each folder.
+    """
+    data = await _request("GET", "/api/v1/folders", params={"account_id": account_id})
+    items = data.get("items", data if isinstance(data, list) else [])
+
+    results: list[FolderInfo] = []
+    for f in items:
+        name = f.get("name", "")
+        if name == "INBOX":
+            continue
+        # Unipile returns role for special-use (e.g. "TRASH", "DRAFTS", "SENT")
+        role = f.get("role")
+        special_use = f"\\{role.capitalize()}" if role else None
+        results.append(FolderInfo(
+            path=f.get("id", name),
+            name=name,
+            special_use=special_use,
+        ))
+
+    return results
+
+
+async def move_to_folder(
+    account_id: str,
+    email_id: str,
+    target_folder: str,
+    source_folder: str = "INBOX",
+) -> tuple[UndoRecipe | None, str | None]:
+    """Move an email to a target folder through Unipile.
+
+    Args:
+        account_id: The Unipile account ID.
+        email_id: The Unipile email ID.
+        target_folder: Destination folder name.
+        source_folder: The folder the email is currently in (for undo).
+
+    Returns:
+        Tuple of (undo recipe dict, message_id or None).
+    """
+    body: dict[str, Any] = {"folders": [target_folder]}
+    await _request("PUT", f"/api/v1/emails/{email_id}", params={"account_id": account_id}, json_body=body)
+
+    undo_recipe: UndoRecipe = {
+        "operation": "unipile_move_email",
+        "params": {
+            "account_id": account_id,
+            "email_id": email_id,
+            "to_folders": [source_folder],
+        },
+    }
+    return undo_recipe, None
 
 
 # ============================================================================

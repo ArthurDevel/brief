@@ -680,6 +680,21 @@ def _dispatch_tool(
         )
         return {"sent": True}, None, None
 
+    if tool_name == "list_folders":
+        folders = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.list_folders(c),
+        )
+        return {"folders": [{"path": f.path, "name": f.name, "special_use": f.special_use} for f in folders]}, None, None
+
+    if tool_name == "move_to_folder":
+        source_folder = args.get("source_folder", "INBOX")
+        recipe_data, message_id = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.move_email_to_folder(c, args["email_id"], args["folder"], source_folder),
+        )
+        return {"moved": True}, UndoRecipe(**recipe_data), message_id
+
     # Non-email tools: same for both providers
     return _dispatch_non_email_tool(tool_name, args, supabase, user_id, session_id)
 
@@ -795,12 +810,16 @@ def _dispatch_tool_unipile(
             raise NotImplementedError("reply_email is not yet implemented for Unipile accounts")
 
         if tool_name == "list_folders":
-            # TODO: Implement Unipile folder listing
-            raise NotImplementedError("list_folders is not yet implemented for Unipile accounts")
+            folders = loop.run_until_complete(unipile_client.list_folders(account_id))
+            return {"folders": [{"path": f.path, "name": f.name, "special_use": f.special_use} for f in folders]}, None, None
 
         if tool_name == "move_to_folder":
-            # TODO: Implement Unipile move-to-folder
-            raise NotImplementedError("move_to_folder is not yet implemented for Unipile accounts")
+            source_folder = args.get("source_folder", "INBOX")
+            undo_recipe_data, message_id = loop.run_until_complete(
+                unipile_client.move_to_folder(account_id, args["email_id"], args["folder"], source_folder)
+            )
+            recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
+            return {"moved": True}, recipe, message_id
 
         # Non-email tools: same for both providers
         return _dispatch_non_email_tool(tool_name, args, supabase, user_id, session_id)

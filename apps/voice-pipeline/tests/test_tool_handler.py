@@ -321,6 +321,106 @@ class TestMessageIdInArguments:
         assert "message_id" not in inserted_row["arguments"]
 
 
+class TestListFolders:
+    """list_folders should dispatch through handle_tool_call and return folder data."""
+
+    def test_returns_folder_list(self, monkeypatch):
+        """list_folders via handle_tool_call should return folders from _dispatch_tool."""
+        from src.tools.handlers import handle_tool_call, ActionInput
+
+        monkeypatch.setattr(
+            "src.tools.handlers._dispatch_tool",
+            lambda **kwargs: (
+                {"folders": [
+                    {"path": "[Gmail]/Trash", "name": "Trash", "special_use": "\\Trash"},
+                    {"path": "Work", "name": "Work", "special_use": None},
+                ]},
+                None,
+                None,
+            ),
+        )
+
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.insert.return_value.execute.return_value.data = [
+            {"id": "fake-action-id"}
+        ]
+
+        result = handle_tool_call(
+            input=ActionInput(
+                user_id="test-user",
+                session_id="test-session",
+                tool_name="list_folders",
+                arguments={},
+            ),
+            user_config={},
+            email_ctx=_make_email_ctx(),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert result.result is not None
+        assert len(result.result["folders"]) == 2
+        assert result.result["folders"][0]["path"] == "[Gmail]/Trash"
+        assert result.result["folders"][1]["name"] == "Work"
+
+
+class TestMoveToFolder:
+    """move_to_folder should dispatch through handle_tool_call, return undo recipe,
+    and store message_id in the action arguments."""
+
+    def _make_mock_supabase(self, inserted_row: dict) -> MagicMock:
+        """Create a mock Supabase client that captures the inserted row."""
+        mock_supabase = MagicMock()
+
+        def capture_insert(row):
+            inserted_row.update(row)
+            mock_response = MagicMock()
+            mock_response.data = [{"id": "action-1"}]
+            mock_chain = MagicMock()
+            mock_chain.execute = MagicMock(return_value=mock_response)
+            return mock_chain
+
+        mock_supabase.table.return_value.insert = capture_insert
+        return mock_supabase
+
+    def test_move_to_folder_returns_undo_recipe_and_stores_message_id(self, monkeypatch):
+        """move_to_folder should return moved:True, undo recipe, and merge message_id."""
+        from src.tools.handlers import handle_tool_call, ActionInput, UndoRecipe
+
+        monkeypatch.setattr(
+            "src.tools.handlers._dispatch_tool",
+            lambda **kwargs: (
+                {"moved": True},
+                UndoRecipe(operation="move_email", params={"message_id": "<move-test@example.com>", "from": "Dev/Github", "to": "INBOX"}),
+                "<move-test@example.com>",
+            ),
+        )
+
+        inserted_row: dict = {}
+        mock_supabase = self._make_mock_supabase(inserted_row)
+
+        result = handle_tool_call(
+            input=ActionInput(
+                user_id="test-user",
+                session_id="test-session",
+                tool_name="move_to_folder",
+                arguments={"email_id": "55", "folder": "Dev/Github"},
+            ),
+            user_config={},
+            email_ctx=_make_email_ctx(),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert result.result is not None
+        assert result.result["moved"] is True
+        assert inserted_row["arguments"]["message_id"] == "<move-test@example.com>"
+        assert inserted_row["arguments"]["email_id"] == "55"
+        assert inserted_row["undo_recipe"]["operation"] == "move_email"
+        assert inserted_row["undo_recipe"]["params"]["from"] == "Dev/Github"
+        assert inserted_row["undo_recipe"]["params"]["to"] == "INBOX"
+
+
 class TestWhatCanYouDo:
     """what_can_you_do should return capabilities markdown."""
 
