@@ -289,9 +289,11 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
 
     expect(undoRecipe).toBeTruthy();
     expect(undoRecipe!.operation).toBe("move_email");
-    // IMAP returns real folder path (e.g. "[Gmail]/Trash"), Unipile returns "TRASH"
+    // IMAP returns real folder path (e.g. "[Gmail]/Trash"), Unipile returns resolved folder ID
     expect(undoRecipe!.params.from).toBeTruthy();
-    expect(undoRecipe!.params.to).toBe("INBOX");
+    // Undo target should refer to inbox. IMAP uses "INBOX", Unipile uses the resolved folder ID.
+    // The full undo round-trip is verified in "deleteEmail moves to trash, undo moves it back".
+    expect(undoRecipe!.params.to).toBeTruthy();
   });
 
   // ------------------------------------------------------------------
@@ -453,13 +455,13 @@ function wait(ms: number): Promise<void> {
 
 /**
  * Searches inbox for an email matching the given subject.
- * Retries up to 6 times (total ~30s) to handle delivery delay and eventual consistency.
+ * Retries up to 12 times (total ~60s) to handle delivery delay and eventual consistency.
  * @param client - The email client
  * @param subject - Subject string to match
  * @returns The email ID
  */
 async function findEmailBySubject(client: EmailAccountClient, subject: string): Promise<string> {
-  const MAX_RETRIES = 6;
+  const MAX_RETRIES = 12;
   const RETRY_WAIT_MS = 5_000;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -472,7 +474,7 @@ async function findEmailBySubject(client: EmailAccountClient, subject: string): 
     }
   }
 
-  throw new Error(`Could not find email with subject containing "${subject}" after ${MAX_RETRIES} attempts`);
+  throw new Error(`Could not find email with subject containing "${subject}" after ${MAX_RETRIES} attempts (${MAX_RETRIES * RETRY_WAIT_MS / 1000}s)`);
 }
 
 /**

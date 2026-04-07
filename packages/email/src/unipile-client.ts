@@ -124,17 +124,18 @@ export async function archiveEmail(
   emailId: string,
   sourceFolder: string
 ): Promise<UndoRecipe> {
-  // Unipile: setting folders to empty array or a non-INBOX label removes from INBOX
-  await unipilePut(`/api/v1/emails/${emailId}?account_id=${accountId}`, {
-    folders: [],
-  });
+  // Outlook has role "archive"; Gmail does not -- use folders: [] to remove from inbox
+  const archiveFolderId = await resolveFolderByRole(accountId, "archive").catch(() => null);
+  const folders = archiveFolderId ? [archiveFolderId] : [];
+  await unipilePut(`/api/v1/emails/${emailId}?account_id=${accountId}`, { folders });
 
+  const inboxFolderId = await resolveFolderByRole(accountId, "inbox");
   return {
     operation: "move_email",
     params: {
       emailId,
-      from: "ARCHIVE",
-      to: sourceFolder,
+      from: archiveFolderId ?? "archive",
+      to: inboxFolderId,
     },
   };
 }
@@ -151,16 +152,18 @@ export async function deleteEmail(
   emailId: string,
   sourceFolder: string
 ): Promise<UndoRecipe> {
+  const trashFolderId = await resolveFolderByRole(accountId, "trash");
+  const inboxFolderId = await resolveFolderByRole(accountId, "inbox");
   await unipilePut(`/api/v1/emails/${emailId}?account_id=${accountId}`, {
-    folders: ["TRASH"],
+    folders: [trashFolderId],
   });
 
   return {
     operation: "move_email",
     params: {
       emailId,
-      from: "TRASH",
-      to: sourceFolder,
+      from: trashFolderId,
+      to: inboxFolderId,
     },
   };
 }
@@ -184,12 +187,17 @@ export async function moveToFolder(
     folders: [targetFolder],
   });
 
+  // Resolve source folder for undo -- "INBOX" needs to be resolved to the actual folder ID
+  const resolvedSource = sourceFolder === "INBOX"
+    ? await resolveFolderByRole(accountId, "inbox")
+    : sourceFolder;
+
   return {
     operation: "move_email",
     params: {
       emailId,
       from: targetFolder,
-      to: sourceFolder,
+      to: resolvedSource,
     },
   };
 }
@@ -664,13 +672,37 @@ function extractReferencesFromData(data: Record<string, unknown>): string[] {
  * @returns RFC 6154 flag or null
  */
 /**
- * Resolves the inbox folder ID for a Unipile account by looking up the folder with role "inbox".
+ * Fetches all raw Unipile folder objects for an account.
  * @param accountId - Unipile account ID
- * @returns The folder ID for the inbox
+ * @returns Array of raw Unipile folder objects
+ */
+async function fetchRawFolders(accountId: string): Promise<any[]> {
+  const data = await unipileGet(`/api/v1/folders?account_id=${accountId}`);
+  return data.items ?? data ?? [];
+}
+
+/**
+ * Resolves a folder by its Unipile role (e.g. "inbox", "trash", "archive").
+ * @param accountId - Unipile account ID
+ * @param role - Unipile folder role
+ * @returns The folder's Unipile ID
+ */
+async function resolveFolderByRole(accountId: string, role: string): Promise<string> {
+  const items = await fetchRawFolders(accountId);
+  const folder = items.find((f: any) => (f.role as string)?.toLowerCase() === role.toLowerCase());
+  if (!folder) {
+    throw new Error(`No folder with role "${role}" found for Unipile account ${accountId}`);
+  }
+  return folder.id as string;
+}
+
+/**
+ * Resolves the inbox folder's provider_id (used by the emails list endpoint).
+ * @param accountId - Unipile account ID
+ * @returns The inbox folder's provider_id
  */
 async function resolveInboxFolderProviderId(accountId: string): Promise<string> {
-  const data = await unipileGet(`/api/v1/folders?account_id=${accountId}`);
-  const items = data.items ?? data ?? [];
+  const items = await fetchRawFolders(accountId);
   const inbox = items.find((f: any) => (f.role as string)?.toLowerCase() === "inbox");
   if (!inbox) {
     throw new Error(`No inbox folder found for Unipile account ${accountId}`);
