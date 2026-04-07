@@ -1421,6 +1421,63 @@
         "should_wait_for_user": true,
         "notes": "From production trace. The agent listed 3 emails at once instead of presenting one at a time. One by one means exactly that."
       }
+    },
+    {
+      "id": "greeting_first_call_no_user_request_to_list",
+      "category": "greeting",
+      "goal": "After greeting on a first call, do not start listing or reading emails unless the user explicitly asks.",
+      "tags": [
+        "brief",
+        "phone_friendly",
+        "first_call",
+        "no_unprompted_action"
+      ],
+      "input": {
+        "session_context": {
+          "current_datetime": "2026-04-06T23:48:48Z",
+          "user_email": "arthurstockmanme@gmail.com",
+          "last_call_datetime": null,
+          "email_provider": "gmail",
+          "email_context": "This is the user's first call. They have 20 emails in their inbox.",
+          "tool_classifications": {
+            "send_email": "mutating_queued",
+            "reply_email": "mutating_queued",
+            "delete_email": "mutating_queued",
+            "archive_email": "mutating_auto"
+          }
+        },
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "Hello. This is your first call. You have 20 emails in your inbox. Should I go through them one by one, or do you need something else?"
+          },
+          {
+            "role": "user",
+            "content": "(unintelligible)"
+          }
+        ]
+      },
+      "expected_output": {
+        "required_tools": [],
+        "forbidden_tools": [
+          "list_inbox",
+          "read_email",
+          "read_thread"
+        ],
+        "response_rules": [
+          "Do not start listing or reading emails.",
+          "Do not assume the user asked to go through the inbox.",
+          "Ask the user to repeat or clarify what they said."
+        ],
+        "style_tags": [
+          "brief",
+          "phone_friendly",
+          "natural"
+        ],
+        "should_ask_follow_up": true,
+        "should_wait_for_user": true,
+        "notes": "From production trace 216863a7. The assistant greeted correctly, but then treated noise/silence as a request to list the inbox and started reading emails unprompted."
+      }
     }
   ]
 }
