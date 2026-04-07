@@ -135,8 +135,11 @@ export default function EmailTab() {
   const [saved, setSaved] = useState(false);
   const [connecting, setConnecting] = useState(false);
 
-  // Load settings on mount
+  // Load settings on mount and refresh email status cache
+  // (clears stale cache from e.g. returning after Unipile hosted auth redirect)
   useEffect(() => {
+    refreshEmailStatus();
+
     async function load() {
       try {
         const settings = await fetchSettings();
@@ -161,6 +164,7 @@ export default function EmailTab() {
       }
     }
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ============================================================================
