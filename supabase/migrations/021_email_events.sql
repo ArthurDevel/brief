@@ -3,7 +3,7 @@
 -- No RLS needed -- only accessed via service role client.
 
 create table email_events (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   email_type text not null,
   resend_email_id text,
