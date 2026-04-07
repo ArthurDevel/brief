@@ -140,7 +140,7 @@ export async function sendEngagementEmail(
  * @param content - The engagement email content
  * @returns HTML string ready to send
  */
-function buildEngagementEmailHtml(content: EngagementEmailContent): string {
+export function buildEngagementEmailHtml(content: EngagementEmailContent): string {
   const buttonStyle = `display:inline-block; padding:12px 28px; background-color:#000000; color:#ffffff; text-decoration:none; font-family:${FONT_FAMILY}; font-size:15px; font-weight:600;`;
 
   return `<!DOCTYPE html>
