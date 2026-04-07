@@ -122,12 +122,12 @@ export async function POST(
     return NextResponse.json({ emailSent: false });
   }
 
+  // Load active email account from user_email_accounts
+  const emailAccount = await getActiveEmailAccountRecord(supabase, supabase, session.user_id);
+
   // Enrich email-referencing actions with subject/from metadata.
   // Wrapped in try/catch so email client failures do not block email sending.
   try {
-    // Load active email account from user_email_accounts
-    const emailAccount = await getActiveEmailAccountRecord(supabase, supabase, session.user_id);
-
     if (!emailAccount) {
       log("Skipping enrichment: no active email account configured");
     } else {
@@ -153,15 +153,20 @@ export async function POST(
     console.error(`[end-of-session] [${sessionId}] Enrichment failed, continuing:`, error);
   }
 
-  // Get user email from Supabase auth
-  const { data: userData, error: userError } =
-    await supabase.auth.admin.getUserById(session.user_id);
+  // Use the connected email address when available, fall back to auth email
+  let recipientEmail: string = emailAccount?.emailAddress ?? "";
 
-  if (userError || !userData?.user?.email) {
-    return NextResponse.json(
-      { error: "Could not retrieve user email" },
-      { status: 500 }
-    );
+  if (!recipientEmail) {
+    const { data: userData, error: userError } =
+      await supabase.auth.admin.getUserById(session.user_id);
+
+    if (userError || !userData?.user?.email) {
+      return NextResponse.json(
+        { error: "Could not retrieve user email" },
+        { status: 500 }
+      );
+    }
+    recipientEmail = userData.user.email;
   }
 
   // Filter out read-only actions (same as the dashboard)
@@ -178,8 +183,8 @@ export async function POST(
 
   // Send the summary email
   const sendStart = Date.now();
-  await sendSessionSummary(userData.user.email, sessionId, visibleActions);
-  log(`Summary email sent to ${userData.user.email} in ${Date.now() - sendStart}ms`);
+  await sendSessionSummary(recipientEmail, sessionId, visibleActions);
+  log(`Summary email sent to ${recipientEmail} in ${Date.now() - sendStart}ms`);
 
   log(`Total processing time: ${Date.now() - totalStart}ms`);
   return NextResponse.json({ emailSent: true });
