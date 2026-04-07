@@ -33,7 +33,7 @@ interface EndOfSessionResult {
 }
 
 /** Tool names that reference an email and should be enriched with metadata. */
-const EMAIL_TOOL_NAMES = ["archive_email", "delete_email", "reply_email"];
+const EMAIL_TOOL_NAMES = ["archive_email", "delete_email", "reply_email", "move_to_folder"];
 
 // ============================================================================
 // ENDPOINT
