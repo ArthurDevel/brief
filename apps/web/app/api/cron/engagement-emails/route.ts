@@ -94,9 +94,9 @@ export async function GET(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const landerUrl = process.env.NEXT_PUBLIC_LANDER_URL;
+  const landerUrl = process.env.LANDER_URL;
   if (!landerUrl) {
-    throw new Error("NEXT_PUBLIC_LANDER_URL is not set");
+    throw new Error("LANDER_URL is not set");
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;

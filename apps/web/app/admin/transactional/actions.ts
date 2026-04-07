@@ -293,8 +293,11 @@ const TEMPLATE_MAP: Record<
 export async function previewEmailHtml(emailType: EmailType): Promise<string> {
   await verifyAdmin();
 
-  const landerUrl = process.env.NEXT_PUBLIC_LANDER_URL || "https://example.com";
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://example.com";
+  const landerUrl = process.env.LANDER_URL;
+  if (!landerUrl) throw new Error("LANDER_URL is not set");
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!appUrl) throw new Error("NEXT_PUBLIC_APP_URL is not set");
 
   const getContent = TEMPLATE_MAP[emailType];
   if (!getContent) {
