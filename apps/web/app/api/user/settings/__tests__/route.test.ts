@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { UserSettings } from "@/lib/types";
+import type { ToolApprovalConfig } from "@dublin/tools/src/types";
 
 // ============================================================================
 // mapRowToSettings -- replicated here since it's not exported from route.ts
@@ -30,7 +31,7 @@ function mapRowToSettings(
     voiceSpeed:
       ((row.voice_config as Record<string, unknown>)?.speed as number) ?? 1.0,
     toolApprovalConfig:
-      (row.tool_approval_config as Record<string, string>) ?? {},
+      (row.tool_approval_config as ToolApprovalConfig) ?? {},
     phone: (row.phone as UserSettings["phone"]) ?? null,
     hasPin: !!row.pin_hash,
     callSchedule: (row.call_schedule as UserSettings["callSchedule"]) ?? null,

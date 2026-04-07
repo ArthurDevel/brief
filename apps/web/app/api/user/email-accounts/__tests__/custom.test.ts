@@ -48,7 +48,7 @@ describe("custom email account input validation", () => {
   };
 
   it("accepts valid input with all fields", () => {
-    expect(validateCustomAccountInput(validInput)).toBeNull();
+    expect(validateCustomAccountInput(validInput as unknown as Record<string, unknown>)).toBeNull();
   });
 
   it("rejects missing imapHost", () => {

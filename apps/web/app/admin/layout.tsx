@@ -1,13 +1,14 @@
 /**
- * Dashboard layout with sidebar navigation.
+ * Admin layout with sidebar navigation.
  *
- * Wraps all /dashboard/* pages with a persistent sidebar containing
- * navigation links. Uses server-side auth check to redirect
- * unauthenticated users (also enforced by middleware).
+ * Wraps all /admin/* pages with a persistent sidebar. Access is
+ * restricted to ADMIN_USER_IDS via middleware -- this layout assumes
+ * the user is already authorized.
  *
  * Responsibilities:
- * - Render the sidebar navigation
+ * - Render the admin sidebar with navigation links
  * - Display the current page content in the main area
+ * - Provide a link back to the user dashboard
  */
 
 "use client";
@@ -15,24 +16,15 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { CallProvider } from "@/contexts/CallContext";
-import { EmailStatusProvider } from "@/contexts/EmailStatusContext";
-import ActiveCallBar from "@/components/ActiveCallBar";
 import { createBrowserClient } from "@/lib/supabase/client";
-import EmailStatusBanner from "./EmailStatusBanner";
-import { Home, Phone, Activity, Clock, Settings, Menu, X, User, LogOut, Shield } from "lucide-react";
-import { checkIsAdmin } from "@/app/admin/actions";
+import { Mail, Menu, User, LogOut, ArrowLeft } from "lucide-react";
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Overview", icon: Home },
-  { href: "/dashboard/sessions", label: "Sessions", icon: Clock },
-  { href: "/dashboard/call", label: "Call", icon: Phone },
-  { href: "/dashboard/actions", label: "Actions", icon: Activity },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings },
+  { href: "/admin/transactional", label: "Transactional Emails", icon: Mail },
 ] as const;
 
 // ============================================================================
@@ -41,13 +33,11 @@ const NAV_ITEMS = [
 
 /**
  * Checks if a nav item is active based on the current pathname.
- * "/dashboard" only matches exactly; other items match as prefixes.
  * @param href - the nav item's href
  * @param pathname - the current pathname
  * @returns whether the nav item is active
  */
 function isActive(href: string, pathname: string): boolean {
-  if (href === "/dashboard") return pathname === "/dashboard";
   return pathname.startsWith(href);
 }
 
@@ -55,27 +45,18 @@ function isActive(href: string, pathname: string): boolean {
 // RENDER
 // ============================================================================
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [isFreePlan, setIsFreePlan] = useState<boolean>(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState<boolean>(false);
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
-  // Close Mobile Menu automatically upon navigation
+  // Close mobile menu on navigation
   useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [pathname]);
-
-  useEffect(() => {
-    fetch("/api/billing/usage")
-      .then((res) => res.json())
-      .then((data) => setIsFreePlan(data.plan === "free"))
-      .catch(() => {});
-  }, []);
 
   // Fetch the authenticated user's email
   useEffect(() => {
@@ -83,11 +64,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     supabase.auth.getUser().then(({ data }) => {
       setUserEmail(data.user?.email ?? null);
     });
-  }, []);
-
-  // Check if current user is an admin
-  useEffect(() => {
-    checkIsAdmin().then(setIsAdmin).catch(() => {});
   }, []);
 
   // Close user menu when clicking outside
@@ -113,15 +89,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <CallProvider>
-      <EmailStatusProvider>
-      <div className="flex flex-col h-screen">
-        <ActiveCallBar />
-        <div className="flex flex-1 min-h-0 relative">
+    <div className="flex flex-col h-screen">
+      <div className="flex flex-1 min-h-0 relative">
 
         {/* Mobile Sidebar Overlay */}
         {isMobileMenuOpen && (
-          <div 
+          <div
             className="fixed inset-0 z-40 bg-black/20 md:hidden transition-opacity"
             onClick={() => setIsMobileMenuOpen(false)}
           />
@@ -134,7 +107,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               B
             </div>
             <span style={{ fontSize: "28px", fontWeight: "400", fontFamily: "var(--font-ibm-plex-serif), serif", letterSpacing: "-0.5px", color: "var(--text-primary)" }}>
-              BrewDock
+              Admin
             </span>
           </div>
 
@@ -153,37 +126,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </Link>
               );
             })}
-          </div>
 
-          {isFreePlan && (
-            <div className="sidebar-footer">
-              <div style={{ margin: "0 12px 8px", padding: "8px 10px", fontSize: 12, background: "var(--btn-primary-bg)", textAlign: "center" }}>
-                <Link
-                  href="/dashboard/settings?tab=billing"
-                  style={{ color: "var(--btn-primary-text)", textDecoration: "none", display: "block", fontWeight: 500 }}
-                >
-                  Upgrade to Pro
-                </Link>
-              </div>
+            <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border-color)" }}>
+              <Link href="/dashboard" className="sidebar-item">
+                <ArrowLeft size={16} strokeWidth={1.75} />
+                Back to Dashboard
+              </Link>
             </div>
-          )}
+          </div>
 
           {/* User menu */}
           {userEmail && (
             <div className="sidebar-user-menu" ref={userMenuRef}>
               {isUserMenuOpen && (
-                <>
-                  {isAdmin && (
-                    <Link href="/admin/transactional" className="sidebar-user-logout" style={{ textDecoration: "none" }}>
-                      <Shield size={14} strokeWidth={1.75} />
-                      Admin
-                    </Link>
-                  )}
-                  <button className="sidebar-user-logout" onClick={handleLogout}>
-                    <LogOut size={14} strokeWidth={1.75} />
-                    Log out
-                  </button>
-                </>
+                <button className="sidebar-user-logout" onClick={handleLogout}>
+                  <LogOut size={14} strokeWidth={1.75} />
+                  Log out
+                </button>
               )}
               <button
                 className="sidebar-user-button"
@@ -205,11 +164,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 B
               </div>
               <span style={{ fontSize: "20px", fontWeight: "400", fontFamily: "var(--font-ibm-plex-serif), serif", letterSpacing: "-0.5px", color: "var(--text-primary)" }}>
-                BrewDock
+                Admin
               </span>
             </div>
-            <button 
-              onClick={() => setIsMobileMenuOpen(true)} 
+            <button
+              onClick={() => setIsMobileMenuOpen(true)}
               className="p-1 -mr-1 text-[var(--text-primary)]"
               aria-label="Open menu"
             >
@@ -217,13 +176,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </button>
           </header>
 
-          <EmailStatusBanner />
           {children}
         </main>
 
-        </div>
       </div>
-      </EmailStatusProvider>
-    </CallProvider>
+    </div>
   );
 }

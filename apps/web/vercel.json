@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/engagement-emails",
+      "schedule": "*/15 * * * *"
+    }
+  ]
+}
