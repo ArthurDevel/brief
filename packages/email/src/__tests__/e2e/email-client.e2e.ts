@@ -292,17 +292,17 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     // IMAP returns real folder path (e.g. "[Gmail]/Trash"), Unipile returns resolved folder ID
     expect(undoRecipe!.params.from).toBeTruthy();
     // Undo target should refer to inbox. IMAP uses "INBOX", Unipile uses the resolved folder ID.
-    // The full undo round-trip is verified in "deleteEmail moves to trash, undo moves it back".
+    // The full undo round-trip is verified in "deleteEmail undo restores to inbox".
     expect(undoRecipe!.params.to).toBeTruthy();
   });
 
   // ------------------------------------------------------------------
-  // ARCHIVE + UNDO
+  // ARCHIVE
   // ------------------------------------------------------------------
 
-  it("archiveEmail removes from inbox, undo moves it back", async () => {
-    const subject = `${TAG} Archive undo test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Archive undo test body" });
+  it("archiveEmail removes from inbox", async () => {
+    const subject = `${TAG} Archive test ${Date.now()}`;
+    await client.sendEmail({ to: emailAddress, subject, body: "Archive test body" });
     await wait(DELIVERY_WAIT_MS);
 
     const emailId = await findEmailBySubject(client, subject);
@@ -312,7 +312,22 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     expect(undoRecipe).toBeTruthy();
     expect(undoRecipe!.operation).toBe("move_email");
 
-    // Verify it left the inbox (retry-based to handle eventual consistency)
+    // Verify it left the inbox
+    await waitUntilGoneFromInbox(client, subject);
+  });
+
+  it("archiveEmail undo restores to inbox", async () => {
+    const subject = `${TAG} Archive undo test ${Date.now()}`;
+    await client.sendEmail({ to: emailAddress, subject, body: "Archive undo test body" });
+    await wait(DELIVERY_WAIT_MS);
+
+    const emailId = await findEmailBySubject(client, subject);
+
+    // Archive it
+    const undoRecipe = await client.archiveEmail(emailId, "INBOX");
+    expect(undoRecipe).toBeTruthy();
+
+    // Wait until gone from inbox
     await waitUntilGoneFromInbox(client, subject);
 
     // Undo: move it back to INBOX (IMAP uses messageId, Unipile uses emailId)
@@ -326,10 +341,25 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   });
 
   // ------------------------------------------------------------------
-  // DELETE + UNDO
+  // DELETE
   // ------------------------------------------------------------------
 
-  it("deleteEmail moves to trash, undo moves it back to inbox", async () => {
+  it("deleteEmail removes from inbox", async () => {
+    const subject = `${TAG} Delete gone test ${Date.now()}`;
+    await client.sendEmail({ to: emailAddress, subject, body: "Delete gone test body" });
+    await wait(DELIVERY_WAIT_MS);
+
+    const emailId = await findEmailBySubject(client, subject);
+
+    // Delete it
+    const undoRecipe = await client.deleteEmail(emailId, "INBOX");
+    expect(undoRecipe).toBeTruthy();
+
+    // Verify it left the inbox
+    await waitUntilGoneFromInbox(client, subject);
+  });
+
+  it("deleteEmail undo restores to inbox", async () => {
     const subject = `${TAG} Delete undo test ${Date.now()}`;
     await client.sendEmail({ to: emailAddress, subject, body: "Delete undo test body" });
     await wait(DELIVERY_WAIT_MS);
@@ -340,7 +370,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     const undoRecipe = await client.deleteEmail(emailId, "INBOX");
     expect(undoRecipe).toBeTruthy();
 
-    // Verify it left the inbox
+    // Wait until gone from inbox
     await waitUntilGoneFromInbox(client, subject);
 
     // Undo: move it back (IMAP uses messageId, Unipile uses emailId)
@@ -354,12 +384,12 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   });
 
   // ------------------------------------------------------------------
-  // MOVE TO FOLDER + UNDO
+  // MOVE TO FOLDER
   // ------------------------------------------------------------------
 
-  it("moveToFolder moves email, undo moves it back", async () => {
-    const subject = `${TAG} Move undo test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Move undo test body" });
+  it("moveToFolder removes from inbox", async () => {
+    const subject = `${TAG} Move test ${Date.now()}`;
+    await client.sendEmail({ to: emailAddress, subject, body: "Move test body" });
     await wait(DELIVERY_WAIT_MS);
 
     const emailId = await findEmailBySubject(client, subject);
@@ -372,6 +402,23 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     expect(undoRecipe!.operation).toBe("move_email");
 
     // Verify it left inbox
+    await waitUntilGoneFromInbox(client, subject);
+  });
+
+  it("moveToFolder undo restores to inbox", async () => {
+    const subject = `${TAG} Move undo test ${Date.now()}`;
+    await client.sendEmail({ to: emailAddress, subject, body: "Move undo test body" });
+    await wait(DELIVERY_WAIT_MS);
+
+    const emailId = await findEmailBySubject(client, subject);
+    const trash = await client.resolveSpecialUseFolder("\\Trash");
+    expect(trash).toBeTruthy();
+
+    // Move to trash
+    const undoRecipe = await client.moveToFolder(emailId, trash!, "INBOX");
+    expect(undoRecipe).toBeTruthy();
+
+    // Wait until gone from inbox
     await waitUntilGoneFromInbox(client, subject);
 
     // Undo: move it back (IMAP uses messageId, Unipile uses emailId)
@@ -404,7 +451,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     expect(stillInInbox).toBeTruthy();
   });
 
-  it("moveToFolder works with a user-created label from listFolders", async () => {
+  it("moveToFolder works with user-created label", async () => {
     // Skip if the account has no user-created folders (only special-use folders)
     const folders = await client.listFolders();
     const userFolder = folders.find(
@@ -428,6 +475,32 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     expect(undoRecipe!.operation).toBe("move_email");
 
     // Verify it left inbox
+    await waitUntilGoneFromInbox(client, subject);
+  });
+
+  it("moveToFolder with user-created label undo restores to inbox", async () => {
+    // Skip if the account has no user-created folders (only special-use folders)
+    const folders = await client.listFolders();
+    const userFolder = folders.find(
+      (f) => !f.specialUse && !f.path.startsWith("[") && f.path !== "INBOX"
+    );
+
+    if (!userFolder) {
+      console.warn(`[e2e] Skipping user-folder undo test -- no user-created folders found`);
+      return;
+    }
+
+    const subject = `${TAG} Move user-folder undo test ${Date.now()}`;
+    await client.sendEmail({ to: emailAddress, subject, body: "Move to user folder undo" });
+    await wait(DELIVERY_WAIT_MS);
+
+    const emailId = await findEmailBySubject(client, subject);
+
+    // Move to the user-created folder
+    const undoRecipe = await client.moveToFolder(emailId, userFolder.path, "INBOX");
+    expect(undoRecipe).toBeTruthy();
+
+    // Wait until gone from inbox
     await waitUntilGoneFromInbox(client, subject);
 
     // Undo: move it back
