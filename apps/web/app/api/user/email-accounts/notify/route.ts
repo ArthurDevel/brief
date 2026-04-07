@@ -124,11 +124,9 @@ export async function POST(
       .eq("id", existingAccount.id);
   }
 
-  // Determine if we should update existing row or insert new
-  const canReuseRow =
-    existingAccount &&
-    !identityChanged &&
-    existingAccount.unipile_account_id === account_id;
+  // Reuse existing row if same user still has an active account
+  // (covers both reconnect and connection-type switch, e.g. IMAP -> Unipile)
+  const canReuseRow = existingAccount && !identityChanged;
 
   const accountRow = {
     user_id: userId,
