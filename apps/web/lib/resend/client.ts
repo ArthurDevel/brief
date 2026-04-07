@@ -23,6 +23,23 @@ import { buildSessionSummaryHtml } from "./templates/sessionSummary";
 const FONT_FAMILY =
   "Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif";
 
+/**
+ * Builds the full "From" field for Resend emails.
+ * If RESEND_FROM_NAME is set, returns "Name <address>", otherwise just the address.
+ * @returns Formatted from string (e.g. "BrewDock <noreply@brewdock.com>")
+ */
+function getFromField(): string {
+  const address = process.env.RESEND_FROM_ADDRESS;
+  if (!address) {
+    throw new Error("RESEND_FROM_ADDRESS is not set");
+  }
+
+  const name = process.env.RESEND_FROM_NAME;
+  if (!name) return address;
+
+  return `${name} <${address}>`;
+}
+
 // ============================================================================
 // SINGLETON CLIENT
 // ============================================================================
@@ -61,11 +78,6 @@ export async function sendSessionSummary(
   sessionId: string,
   actions: ActionRow[]
 ): Promise<void> {
-  const fromAddress = process.env.RESEND_FROM_ADDRESS;
-  if (!fromAddress) {
-    throw new Error("RESEND_FROM_ADDRESS is not set");
-  }
-
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrl) {
     throw new Error("NEXT_PUBLIC_APP_URL is not set");
@@ -75,7 +87,7 @@ export async function sendSessionSummary(
   const html = buildSessionSummaryHtml(actions, sessionId, appUrl);
 
   const { data, error } = await client.emails.send({
-    from: fromAddress,
+    from: getFromField(),
     to,
     subject: `Session Summary - ${actions.length} action${actions.length === 1 ? "" : "s"} taken`,
     html,
@@ -101,16 +113,11 @@ export async function sendEngagementEmail(
   to: string,
   content: EngagementEmailContent
 ): Promise<string | null> {
-  const fromAddress = process.env.RESEND_FROM_ADDRESS;
-  if (!fromAddress) {
-    throw new Error("RESEND_FROM_ADDRESS is not set");
-  }
-
   const client = getResendClient();
   const html = buildEngagementEmailHtml(content);
 
   const { data, error } = await client.emails.send({
-    from: fromAddress,
+    from: getFromField(),
     to,
     subject: content.subject,
     html,
