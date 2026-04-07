@@ -689,9 +689,22 @@ def _dispatch_tool(
 
     if tool_name == "move_to_folder":
         source_folder = args.get("source_folder", "INBOX")
+        target_folder = args["folder"]
+
+        # Validate folder exists before attempting move (both Gmail and IMAP silently accept invalid folders)
+        folders = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.list_folders(c),
+        )
+        folder_paths = [f.path for f in folders]
+        if not any(p.lower() == target_folder.lower() for p in folder_paths):
+            raise ValueError(
+                f'Folder "{target_folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+            )
+
         recipe_data, message_id = email_client.with_reconnect(
             imap_holder, config,
-            lambda c: email_client.move_email_to_folder(c, args["email_id"], args["folder"], source_folder),
+            lambda c: email_client.move_email_to_folder(c, args["email_id"], target_folder, source_folder),
         )
         return {"moved": True}, UndoRecipe(**recipe_data), message_id
 
@@ -815,8 +828,18 @@ def _dispatch_tool_unipile(
 
         if tool_name == "move_to_folder":
             source_folder = args.get("source_folder", "INBOX")
+            target_folder = args["folder"]
+
+            # Validate folder exists before attempting move (Unipile silently accepts invalid folders)
+            folders = loop.run_until_complete(unipile_client.list_folders(account_id))
+            folder_paths = [f.path for f in folders]
+            if not any(p.lower() == target_folder.lower() for p in folder_paths):
+                raise ValueError(
+                    f'Folder "{target_folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+                )
+
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.move_to_folder(account_id, args["email_id"], args["folder"], source_folder)
+                unipile_client.move_to_folder(account_id, args["email_id"], target_folder, source_folder)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"moved": True}, recipe, message_id

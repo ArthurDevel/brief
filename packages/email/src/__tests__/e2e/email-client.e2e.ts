@@ -381,6 +381,62 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     const found = await findEmailBySubject(client, subject);
     expect(found).toBeTruthy();
   });
+
+  it("moveToFolder throws when target folder does not exist", async () => {
+    const subject = `${TAG} Move nonexistent test ${Date.now()}`;
+    await client.sendEmail({ to: emailAddress, subject, body: "Move to nonexistent folder" });
+    await wait(DELIVERY_WAIT_MS);
+
+    const emailId = await findEmailBySubject(client, subject);
+
+    // Use a unique folder name per run to avoid leftover labels from previous runs
+    const bogusFolder = `NONEXISTENT_${Date.now()}`;
+
+    // Attempt to move to a folder that does not exist -- should throw
+    await expect(
+      client.moveToFolder(emailId, bogusFolder, "INBOX")
+    ).rejects.toThrow();
+
+    // Email should still be in the inbox (move should not have happened)
+    const stillInInbox = await findEmailBySubject(client, subject);
+    expect(stillInInbox).toBeTruthy();
+  });
+
+  it("moveToFolder works with a user-created label from listFolders", async () => {
+    // Skip if the account has no user-created folders (only special-use folders)
+    const folders = await client.listFolders();
+    const userFolder = folders.find(
+      (f) => !f.specialUse && !f.path.startsWith("[") && f.path !== "INBOX"
+    );
+
+    if (!userFolder) {
+      console.warn(`[e2e] Skipping user-folder move test -- no user-created folders found`);
+      return;
+    }
+
+    const subject = `${TAG} Move user-folder test ${Date.now()}`;
+    await client.sendEmail({ to: emailAddress, subject, body: "Move to user folder" });
+    await wait(DELIVERY_WAIT_MS);
+
+    const emailId = await findEmailBySubject(client, subject);
+
+    // Move to the user-created folder
+    const undoRecipe = await client.moveToFolder(emailId, userFolder.path, "INBOX");
+    expect(undoRecipe).toBeTruthy();
+    expect(undoRecipe!.operation).toBe("move_email");
+
+    // Verify it left inbox
+    await waitUntilGoneFromInbox(client, subject);
+
+    // Undo: move it back
+    const { from, to } = undoRecipe!.params as Record<string, string>;
+    const identifier = undoRecipe!.params.emailId ?? undoRecipe!.params.messageId;
+    await client.moveEmail(identifier as string, to, from);
+
+    // Verify it is back
+    const found = await findEmailBySubject(client, subject);
+    expect(found).toBeTruthy();
+  });
 });
 
 // ============================================================================

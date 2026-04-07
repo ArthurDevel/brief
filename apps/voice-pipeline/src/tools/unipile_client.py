@@ -62,10 +62,11 @@ async def list_inbox(account_id: str, limit: int) -> list[EmailSummary]:
     Returns:
         List of EmailSummary in reverse chronological order.
     """
+    inbox_id = await _resolve_inbox_folder_provider_id(account_id)
     params: dict[str, Any] = {
         "account_id": account_id,
         "limit": limit,
-        "folder": "INBOX",
+        "folder": inbox_id,
     }
 
     data = await _request("GET", "/api/v1/emails", params=params)
@@ -245,7 +246,7 @@ async def list_folders(account_id: str) -> list[FolderInfo]:
     results: list[FolderInfo] = []
     for f in items:
         name = f.get("name", "")
-        if name == "INBOX":
+        if (f.get("role") or "").lower() == "inbox":
             continue
         # Unipile returns role for special-use (e.g. "TRASH", "DRAFTS", "SENT")
         role = f.get("role")
@@ -293,6 +294,23 @@ async def move_to_folder(
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+async def _resolve_inbox_folder_provider_id(account_id: str) -> str:
+    """Resolve the inbox folder provider_id for a Unipile account by looking up the folder with role 'inbox'.
+
+    Args:
+        account_id: The Unipile account ID.
+
+    Returns:
+        The provider_id for the inbox folder.
+    """
+    data = await _request("GET", "/api/v1/folders", params={"account_id": account_id})
+    items = data.get("items", data if isinstance(data, list) else [])
+    for f in items:
+        if (f.get("role") or "").lower() == "inbox":
+            return f["provider_id"]
+    raise RuntimeError(f"No inbox folder found for Unipile account {account_id}")
+
 
 async def _request(
     method: str,

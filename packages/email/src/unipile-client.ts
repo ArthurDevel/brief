@@ -44,7 +44,8 @@ const UNIPILE_DSN = process.env.UNIPILE_DSN;
  * @returns Array of email summaries
  */
 export async function listInbox(accountId: string, limit: number): Promise<EmailSummary[]> {
-  const data = await unipileGet(`/api/v1/emails?account_id=${accountId}&limit=${limit}&folder=INBOX`);
+  const inboxId = await resolveInboxFolderProviderId(accountId);
+  const data = await unipileGet(`/api/v1/emails?account_id=${accountId}&limit=${limit}&folder=${inboxId}`);
   const items = data.items ?? data ?? [];
   return items.map(mapToEmailSummary);
 }
@@ -221,7 +222,7 @@ export async function listFolders(accountId: string): Promise<FolderInfo[]> {
   const items = data.items ?? data ?? [];
 
   return items
-    .filter((f: any) => f.name !== "INBOX")
+    .filter((f: any) => (f.role as string)?.toLowerCase() !== "inbox")
     .map((f: any) => ({
       path: (f.id as string) ?? (f.name as string),
       name: f.name as string,
@@ -662,6 +663,21 @@ function extractReferencesFromData(data: Record<string, unknown>): string[] {
  * @param role - Unipile folder role string
  * @returns RFC 6154 flag or null
  */
+/**
+ * Resolves the inbox folder ID for a Unipile account by looking up the folder with role "inbox".
+ * @param accountId - Unipile account ID
+ * @returns The folder ID for the inbox
+ */
+async function resolveInboxFolderProviderId(accountId: string): Promise<string> {
+  const data = await unipileGet(`/api/v1/folders?account_id=${accountId}`);
+  const items = data.items ?? data ?? [];
+  const inbox = items.find((f: any) => (f.role as string)?.toLowerCase() === "inbox");
+  if (!inbox) {
+    throw new Error(`No inbox folder found for Unipile account ${accountId}`);
+  }
+  return inbox.provider_id as string;
+}
+
 function mapUnipileRole(role: string | undefined): string | null {
   if (!role) return null;
   const lower = role.toLowerCase();
