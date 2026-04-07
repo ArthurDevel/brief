@@ -69,7 +69,7 @@ export async function upsertCustomEmailAccount(
 
   // Step 2: If existing account has a different identity, deactivate it
   if (existing && existing.imap_user !== input.imapUser) {
-    await deactivateAccount(supabase, existing.id);
+    await deactivateAccount(supabase, existing.id as string);
   }
 
   // Step 3: Store or update IMAP/SMTP passwords in Vault

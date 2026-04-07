@@ -44,7 +44,7 @@ const UNIPILE_DSN = process.env.UNIPILE_DSN;
  * @returns Array of email summaries
  */
 export async function listInbox(accountId: string, limit: number): Promise<EmailSummary[]> {
-  const data = await unipileGet(`/api/v1/emails?account_id=${accountId}&limit=${limit}`);
+  const data = await unipileGet(`/api/v1/emails?account_id=${accountId}&limit=${limit}&folder=INBOX`);
   const items = data.items ?? data ?? [];
   return items.map(mapToEmailSummary);
 }
