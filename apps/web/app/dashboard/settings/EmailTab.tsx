@@ -1,22 +1,23 @@
 /**
- * Email settings tab -- provider selection, IMAP/SMTP configuration.
+ * Email settings tab -- provider selection, connect/reconnect flows, custom IMAP/SMTP form.
  *
  * Lets the user pick a provider (Gmail, Outlook, Custom). For Gmail/Outlook,
- * input fields are embedded inline in the setup instructions. For Custom,
- * full IMAP and SMTP sections are shown.
- * A single Save button tests the connection before persisting.
+ * shows a "Connect" button that initiates Unipile hosted auth. For Custom,
+ * shows the full IMAP/SMTP form that POSTs to the custom email account route.
+ * Displays unified account status from the emailAccount summary.
  *
  * Responsibilities:
- * - Render provider selector with inline setup instructions
- * - Render full IMAP/SMTP forms for Custom provider
- * - Test connection before saving via /api/user/settings/test-connection
- * - Save email settings via /api/user/settings
+ * - Render provider selector
+ * - Gmail/Outlook: connect via Unipile hosted auth, show reconnect if needed
+ * - Custom: render IMAP/SMTP forms, save via /api/user/email-accounts/custom
+ * - Test connection via /api/user/settings/test-connection
+ * - Show unified account status from emailAccount summary
  */
 
 "use client";
 
 import { useState, useEffect } from "react";
-import type { UserSettings } from "@/lib/types";
+import type { UserSettings, EmailAccountSummary } from "@/lib/types";
 import { useEmailStatus } from "@/contexts/EmailStatusContext";
 
 // ============================================================================
@@ -30,12 +31,6 @@ const PROVIDERS: { id: Provider; label: string }[] = [
   { id: "outlook", label: "Outlook" },
   { id: "custom", label: "Custom" },
 ];
-
-const PROVIDER_PRESETS: Record<Provider, { imapHost: string; imapPort: number; smtpHost: string; smtpPort: number }> = {
-  gmail: { imapHost: "imap.gmail.com", imapPort: 993, smtpHost: "smtp.gmail.com", smtpPort: 587 },
-  outlook: { imapHost: "outlook.office365.com", imapPort: 993, smtpHost: "smtp.office365.com", smtpPort: 587 },
-  custom: { imapHost: "", imapPort: 993, smtpHost: "", smtpPort: 587 },
-};
 
 // ============================================================================
 // API HELPERS
@@ -52,21 +47,40 @@ async function fetchSettings(): Promise<UserSettings> {
 }
 
 /**
- * Saves settings to the API.
- * @param data - Settings payload to save
- * @returns Updated user settings
+ * Saves a custom email account via the email-accounts API.
+ * @param data - Custom email account payload
+ * @returns The updated EmailAccountSummary
  */
-async function saveSettings(data: Record<string, unknown>): Promise<UserSettings> {
-  const res = await fetch("/api/user/settings", {
+async function saveCustomAccount(data: Record<string, unknown>): Promise<EmailAccountSummary> {
+  const res = await fetch("/api/user/email-accounts/custom", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
   if (!res.ok) {
     const body = await res.json();
-    throw new Error(body.error || "Failed to save settings");
+    throw new Error(body.error || "Failed to save email account");
   }
   return res.json();
+}
+
+/**
+ * Initiates a Unipile connect flow for Gmail or Outlook.
+ * @param provider - "gmail" or "outlook"
+ * @returns The hosted auth link URL
+ */
+async function initiateConnect(provider: string): Promise<string> {
+  const res = await fetch("/api/user/email-accounts/connect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider }),
+  });
+  if (!res.ok) {
+    const body = await res.json();
+    throw new Error(body.error || "Failed to initiate connection");
+  }
+  const data = await res.json();
+  return data.url;
 }
 
 interface TestResult {
@@ -75,7 +89,7 @@ interface TestResult {
 }
 
 /**
- * Tests IMAP and SMTP connections using stored credentials on the server.
+ * Tests email connection using stored credentials on the server.
  * @returns Per-protocol test results
  */
 async function testConnection(): Promise<TestResult> {
@@ -90,21 +104,6 @@ async function testConnection(): Promise<TestResult> {
 }
 
 // ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/**
- * Detects the provider based on the IMAP host.
- * @param imapHost - The IMAP host to check
- * @returns Detected provider
- */
-function detectProvider(imapHost: string): Provider {
-  if (imapHost === "imap.gmail.com") return "gmail";
-  if (imapHost === "outlook.office365.com") return "outlook";
-  return "custom";
-}
-
-// ============================================================================
 // COMPONENT
 // ============================================================================
 
@@ -114,9 +113,8 @@ export default function EmailTab() {
   // Provider
   const [provider, setProvider] = useState<Provider>("gmail");
 
-  // Shared fields for Gmail/Outlook (single email + password)
-  const [email, setEmail] = useState("");
-  const [appPassword, setAppPassword] = useState("");
+  // Active email account summary from settings
+  const [emailAccount, setEmailAccount] = useState<EmailAccountSummary | null>(null);
 
   // IMAP state (Custom only)
   const [imapHost, setImapHost] = useState("");
@@ -130,37 +128,31 @@ export default function EmailTab() {
   const [smtpUser, setSmtpUser] = useState("");
   const [smtpPassword, setSmtpPassword] = useState("");
 
-  // Tracks whether passwords already exist on the server
-  const [hasPassword, setHasPassword] = useState(false);
-
   // UI state
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [connectionFailed, setConnectionFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
   // Load settings on mount
   useEffect(() => {
     async function load() {
       try {
         const settings = await fetchSettings();
-        const detected = detectProvider(settings.imapHost);
-        setProvider(detected);
+        setEmailAccount(settings.emailAccount);
 
-        if (detected !== "custom") {
-          // Gmail/Outlook: single email + password
-          setEmail(settings.imapUser);
-          setHasPassword(settings.hasImapPassword);
-        } else {
-          // Custom: separate IMAP/SMTP fields
-          setImapHost(settings.imapHost);
-          setImapPort(settings.imapPort);
-          setImapUser(settings.imapUser);
-          setSmtpHost(settings.smtpHost);
-          setSmtpPort(settings.smtpPort);
-          setSmtpUser(settings.smtpUser);
-          setHasPassword(settings.hasImapPassword && settings.hasSmtpPassword);
+        if (settings.emailAccount) {
+          // Set provider from existing account
+          setProvider(settings.emailAccount.provider);
+
+          if (settings.emailAccount.connectionType === "imap_smtp") {
+            // Load custom fields from the account
+            // NOTE: We don't have host/port details in the summary DTO,
+            // so we only populate what we can. The user field serves as emailAddress.
+            setImapUser(settings.emailAccount.emailAddress ?? "");
+            setSmtpUser(settings.emailAccount.emailAddress ?? "");
+          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load settings");
@@ -176,7 +168,7 @@ export default function EmailTab() {
   // ============================================================================
 
   /**
-   * Switches the provider, resets fields, and applies presets.
+   * Switches the provider and resets UI state.
    * @param newProvider - The provider to switch to
    */
   function handleProviderChange(newProvider: Provider) {
@@ -184,13 +176,7 @@ export default function EmailTab() {
     setError(null);
     setSaved(false);
 
-    if (newProvider !== "custom") {
-      const preset = PROVIDER_PRESETS[newProvider];
-      setImapHost(preset.imapHost);
-      setImapPort(preset.imapPort);
-      setSmtpHost(preset.smtpHost);
-      setSmtpPort(preset.smtpPort);
-    } else {
+    if (newProvider === "custom") {
       setImapHost("");
       setImapPort(993);
       setSmtpHost("");
@@ -199,89 +185,65 @@ export default function EmailTab() {
   }
 
   /**
-   * Tests the connection, then saves if successful.
-   * For Gmail/Outlook, uses the shared email + appPassword for both protocols.
-   * For Custom, uses separate IMAP/SMTP fields.
+   * Initiates the Unipile connect flow for Gmail/Outlook.
+   * Opens the hosted auth link in a new window.
    */
-  async function handleSave() {
+  async function handleConnect() {
+    setConnecting(true);
+    setError(null);
+
+    try {
+      const url = await initiateConnect(provider);
+      window.open(url, "_blank");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to connect");
+      setConnecting(false);
+    }
+  }
+
+  /**
+   * Saves the custom IMAP/SMTP account, then tests the connection.
+   */
+  async function handleSaveCustom() {
     setSaving(true);
     setError(null);
-    setConnectionFailed(false);
     setSaved(false);
 
-    // Build the connection params based on provider
-    let imapH: string, imapP: number, imapU: string, imapPw: string;
-    let smtpH: string, smtpP: number, smtpU: string, smtpPw: string;
-
-    if (provider !== "custom") {
-      const preset = PROVIDER_PRESETS[provider];
-      imapH = preset.imapHost;
-      imapP = preset.imapPort;
-      imapU = email;
-      imapPw = appPassword;
-      smtpH = preset.smtpHost;
-      smtpP = preset.smtpPort;
-      smtpU = email;
-      smtpPw = appPassword;
-    } else {
-      imapH = imapHost;
-      imapP = imapPort;
-      imapU = imapUser;
-      imapPw = imapPassword;
-      smtpH = smtpHost;
-      smtpP = smtpPort;
-      smtpU = smtpUser;
-      smtpPw = smtpPassword;
-    }
-
-    // Require passwords
-    const needsPassword = !hasPassword && !imapPw;
-    const needsSmtpPassword = !hasPassword && !smtpPw;
-    if (needsPassword || needsSmtpPassword) {
-      setError(provider !== "custom"
-        ? "Please enter your app password."
-        : "Please enter passwords for both IMAP and SMTP.");
+    // Require passwords if none stored yet
+    const hasExistingPasswords = emailAccount?.hasImapPassword && emailAccount?.hasSmtpPassword;
+    if (!hasExistingPasswords && (!imapPassword || !smtpPassword)) {
+      setError("Please enter passwords for both IMAP and SMTP.");
       setSaving(false);
       return;
     }
 
     try {
-      // Step 1: Save settings
+      // Step 1: Save custom account
       const payload: Record<string, unknown> = {
-        imapHost: imapH, imapPort: imapP, imapUser: imapU,
-        smtpHost: smtpH, smtpPort: smtpP, smtpUser: smtpU,
+        provider: "custom",
+        imapHost, imapPort, imapUser,
+        smtpHost, smtpPort, smtpUser,
       };
-      if (imapPw) payload.imapPassword = imapPw;
-      if (smtpPw) payload.smtpPassword = smtpPw;
+      if (imapPassword) payload.imapPassword = imapPassword;
+      if (smtpPassword) payload.smtpPassword = smtpPassword;
 
-      await saveSettings(payload);
+      const updatedAccount = await saveCustomAccount(payload);
+      setEmailAccount(updatedAccount);
 
-      setHasPassword(true);
-      if (provider !== "custom") {
-        setAppPassword("");
-      } else {
-        setImapPassword("");
-        setSmtpPassword("");
-      }
+      // Clear password fields after save
+      setImapPassword("");
+      setSmtpPassword("");
 
       // Step 2: Test connection using stored credentials
       const result = await testConnection();
       if (!result.imap.ok || !result.smtp.ok) {
-        setConnectionFailed(true);
-        if (provider !== "custom") {
-          setError(
-            "We failed to connect to your inbox. Did you use the App Password as described above? "
-            + "This is not your regular password."
-          );
-        } else {
-          const parts: string[] = [];
-          if (!result.imap.ok) parts.push("receiving emails");
-          if (!result.smtp.ok) parts.push("sending emails");
-          setError(
-            `Your settings were saved, but we could not connect for ${parts.join(" and ")}. `
-            + "Please double-check your credentials."
-          );
-        }
+        const parts: string[] = [];
+        if (!result.imap.ok) parts.push("receiving emails");
+        if (!result.smtp.ok) parts.push("sending emails");
+        setError(
+          `Your settings were saved, but we could not connect for ${parts.join(" and ")}. `
+          + "Please double-check your credentials."
+        );
         setSaving(false);
         return;
       }
@@ -303,11 +265,16 @@ export default function EmailTab() {
     return <p className="text-[var(--text-secondary)]">Loading...</p>;
   }
 
+  // Determine if the current account is Unipile-backed and needs reconnect
+  const isUnipileAccount = emailAccount?.connectionType === "unipile";
+  const needsReconnect = emailAccount?.status === "reconnect_required";
+  const isConnected = emailAccount?.status === "connected";
+
   return (
     <div className="">
       {/* Provider Selector */}
       <section className="settings-panel">
-        <h2 >Email Provider</h2>
+        <h2>Email Provider</h2>
         <div className="flex">
           {PROVIDERS.map((p) => (
             <button
@@ -325,36 +292,69 @@ export default function EmailTab() {
           ))}
         </div>
 
-        {/* Gmail inline instructions */}
-        {provider === "gmail" && (
-          <GmailInstructions
-            email={email}
-            onEmailChange={setEmail}
-            appPassword={appPassword}
-            onAppPasswordChange={setAppPassword}
-            hasPassword={hasPassword}
-            connectionFailed={connectionFailed}
-            saving={saving}
-            saved={saved}
-            error={error}
-            onSave={handleSave}
-          />
-        )}
+        {/* Gmail/Outlook: Connect or Reconnect flow */}
+        {provider !== "custom" && (
+          <div className="mt-6 text-[13px] text-[var(--text-secondary)]">
+            {/* Show current account status if connected via Unipile */}
+            {isUnipileAccount && emailAccount?.provider === provider && (
+              <AccountStatusBadge account={emailAccount} />
+            )}
 
-        {/* Outlook inline instructions */}
-        {provider === "outlook" && (
-          <OutlookInstructions
-            email={email}
-            onEmailChange={setEmail}
-            appPassword={appPassword}
-            onAppPasswordChange={setAppPassword}
-            hasPassword={hasPassword}
-            connectionFailed={connectionFailed}
-            saving={saving}
-            saved={saved}
-            error={error}
-            onSave={handleSave}
-          />
+            {/* Show error if any */}
+            {error && <p className="text-red-600 text-sm font-medium mb-4">{error}</p>}
+
+            {/* Connect / Reconnect button */}
+            {needsReconnect && isUnipileAccount && emailAccount?.provider === provider ? (
+              <div>
+                <p className="mb-4">
+                  Your {provider === "gmail" ? "Gmail" : "Outlook"} connection needs to be refreshed.
+                  Click below to reconnect.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleConnect}
+                  disabled={connecting}
+                  className="w-full bg-amber-500 py-3 text-[13px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50 transition"
+                >
+                  {connecting ? "Redirecting..." : "Reconnect"}
+                </button>
+              </div>
+            ) : isConnected && isUnipileAccount && emailAccount?.provider === provider ? (
+              <p className="mt-2">
+                Your {provider === "gmail" ? "Gmail" : "Outlook"} account is connected.
+                To connect a different account, click below.
+              </p>
+            ) : (
+              <p className="mb-4">
+                Connect your {provider === "gmail" ? "Gmail" : "Outlook"} account securely. You will
+                be redirected to sign in with {provider === "gmail" ? "Google" : "Microsoft"}.
+              </p>
+            )}
+
+            {/* Show connect button unless already connected with this provider */}
+            {!(isConnected && isUnipileAccount && emailAccount?.provider === provider) && !needsReconnect && (
+              <button
+                type="button"
+                onClick={handleConnect}
+                disabled={connecting}
+                className="w-full bg-[var(--btn-primary-bg)] py-3 text-[13px] font-semibold text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition mt-4"
+              >
+                {connecting ? "Redirecting..." : `Connect with ${provider === "gmail" ? "Gmail" : "Outlook"}`}
+              </button>
+            )}
+
+            {/* Re-connect option even when already connected */}
+            {isConnected && isUnipileAccount && emailAccount?.provider === provider && (
+              <button
+                type="button"
+                onClick={handleConnect}
+                disabled={connecting}
+                className="w-full border border-[var(--border-color)] py-3 text-[13px] font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-50 transition mt-4"
+              >
+                {connecting ? "Redirecting..." : "Connect a different account"}
+              </button>
+            )}
+          </div>
         )}
 
         {/* Custom hint */}
@@ -374,19 +374,26 @@ export default function EmailTab() {
 
       {provider === "custom" && (
         <>
+          {/* Show account status for existing custom accounts */}
+          {emailAccount && emailAccount.provider === "custom" && (
+            <section className="settings-panel">
+              <AccountStatusBadge account={emailAccount} />
+            </section>
+          )}
+
           <section className="settings-panel">
-            <h2 >IMAP (Incoming Mail)</h2>
+            <h2>IMAP (Incoming Mail)</h2>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <InputField label="Host" value={imapHost} onChange={setImapHost} placeholder="imap.example.com" />
               <InputField label="Port" type="number" value={String(imapPort)} onChange={(v) => setImapPort(Number(v))} />
               <InputField label="Email" value={imapUser} onChange={setImapUser} placeholder="you@example.com" />
               <div>
                 <InputField
-                  label={hasPassword ? "Password (leave blank to keep current)" : "Password"}
+                  label={emailAccount?.hasImapPassword ? "Password (leave blank to keep current)" : "Password"}
                   type="password"
                   value={imapPassword}
                   onChange={setImapPassword}
-                  placeholder={hasPassword ? "********" : "App password"}
+                  placeholder={emailAccount?.hasImapPassword ? "********" : "App password"}
                 />
                 <VaultNotice />
               </div>
@@ -394,18 +401,18 @@ export default function EmailTab() {
           </section>
 
           <section className="settings-panel">
-            <h2 >SMTP (Outgoing Mail)</h2>
+            <h2>SMTP (Outgoing Mail)</h2>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <InputField label="Host" value={smtpHost} onChange={setSmtpHost} placeholder="smtp.example.com" />
               <InputField label="Port" type="number" value={String(smtpPort)} onChange={(v) => setSmtpPort(Number(v))} />
               <InputField label="Email" value={smtpUser} onChange={setSmtpUser} placeholder="you@example.com" />
               <div>
                 <InputField
-                  label={hasPassword ? "Password (leave blank to keep current)" : "Password"}
+                  label={emailAccount?.hasSmtpPassword ? "Password (leave blank to keep current)" : "Password"}
                   type="password"
                   value={smtpPassword}
                   onChange={setSmtpPassword}
-                  placeholder={hasPassword ? "********" : "App password"}
+                  placeholder={emailAccount?.hasSmtpPassword ? "********" : "App password"}
                 />
                 <VaultNotice />
               </div>
@@ -414,12 +421,12 @@ export default function EmailTab() {
         </>
       )}
 
-      {/* Save (Custom only -- Gmail/Outlook have it inline) */}
+      {/* Save (Custom only) */}
       {provider === "custom" && (
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={handleSave}
+            onClick={handleSaveCustom}
             disabled={saving}
             className="bg-[var(--btn-primary-bg)] px-6 py-2 text-[13px] font-medium text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
           >
@@ -440,177 +447,33 @@ export default function EmailTab() {
 // HELPER COMPONENTS
 // ============================================================================
 
-interface ProviderInstructionsProps {
-  email: string;
-  onEmailChange: (value: string) => void;
-  appPassword: string;
-  onAppPasswordChange: (value: string) => void;
-  hasPassword: boolean;
-  connectionFailed: boolean;
-  saving: boolean;
-  saved: boolean;
-  error: string | null;
-  onSave: () => void;
-}
-
-const STEP_HIGHLIGHT = "bg-amber-50 border-l-2 border-amber-400 pl-3 -ml-3 py-1 rounded-r";
-
 /**
- * Gmail setup instructions with inline email and app password fields.
+ * Displays the current account connection status as a compact badge.
+ * @param account - The email account summary
  */
-function GmailInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, connectionFailed, saving, saved, error, onSave }: ProviderInstructionsProps) {
+function AccountStatusBadge({ account }: { account: EmailAccountSummary }) {
+  const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
+    connected: { bg: "bg-green-100", text: "text-green-700", label: "Connected" },
+    reconnect_required: { bg: "bg-amber-100", text: "text-amber-700", label: "Reconnect required" },
+    pending: { bg: "bg-blue-100", text: "text-blue-700", label: "Pending" },
+    error: { bg: "bg-red-100", text: "text-red-700", label: "Error" },
+  };
+
+  const config = statusConfig[account.status] ?? statusConfig.error;
+
   return (
-    <div className="mt-6 text-[13px] text-[var(--text-secondary)]">
-      <ol className="list-decimal list-outside pl-5 space-y-4 mb-6">
-        <li>
-          Enter your Gmail address
-          <div className="mt-1.5 -ml-3 mr-3">
-            <InlineInput
-              value={email}
-              onChange={onEmailChange}
-              placeholder="you@gmail.com"
-            />
-          </div>
-        </li>
-        <li className={connectionFailed ? STEP_HIGHLIGHT : ""}>
-          Make sure{" "}
-          <a
-            href="https://myaccount.google.com/signinoptions/two-step-verification"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 underline"
-          >
-            2-Step Verification
-          </a>
-          {" "}is enabled on your Google Account
-        </li>
-        <li className={connectionFailed ? STEP_HIGHLIGHT : ""}>
-          Go to{" "}
-          <a
-            href="https://myaccount.google.com/apppasswords"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 underline"
-          >
-            App passwords
-          </a>
-          {" "}and create a new one (type a name, e.g. &quot;Mail&quot;)
-        </li>
-        <li>
-          {hasPassword ? "Paste your new app password (leave blank to keep current)" : "Paste your app password"}
-          <div className="mt-1.5 -ml-3 mr-3">
-            <InlineInput
-              value={appPassword}
-              onChange={onAppPasswordChange}
-              placeholder={hasPassword ? "********" : "16-character app password"}
-              type="password"
-            />
-            <VaultNotice />
-          </div>
-        </li>
-      </ol>
-
-      {error && <p className="text-red-600 text-sm font-medium mb-4">{error}</p>}
-
-      <button
-        type="button"
-        onClick={onSave}
-        disabled={saving}
-        className="w-full bg-[var(--btn-primary-bg)] py-3 text-[13px] font-semibold text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition"
-      >
-        {saving ? "Testing connection..." : "Test & Save"}
-      </button>
-      {saved && (
-        <span className="mt-3 inline-block bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
-          Connection verified and saved
+    <div className="flex items-center gap-3 mb-4">
+      <span className={`${config.bg} ${config.text} px-3 py-1 text-[12px] font-medium`}>
+        {config.label}
+      </span>
+      {account.emailAddress && (
+        <span className="text-[13px] text-[var(--text-secondary)]">
+          {account.emailAddress}
         </span>
       )}
-    </div>
-  );
-}
-
-/**
- * Outlook setup instructions with inline email and app password fields.
- */
-function OutlookInstructions({ email, onEmailChange, appPassword, onAppPasswordChange, hasPassword, connectionFailed, saving, saved, error, onSave }: ProviderInstructionsProps) {
-  return (
-    <div className="mt-6 text-[13px] text-[var(--text-secondary)]">
-      <ol className="list-decimal list-outside pl-5 space-y-4 mb-6">
-        <li>
-          Enter your Outlook email address
-          <div className="mt-1.5 -ml-3 mr-3">
-            <InlineInput
-              value={email}
-              onChange={onEmailChange}
-              placeholder="you@outlook.com"
-            />
-          </div>
-        </li>
-        <li>
-          Sign in to your{" "}
-          <a
-            href="https://account.microsoft.com/security"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 underline"
-          >
-            Microsoft account security page
-          </a>
-        </li>
-        <li className={connectionFailed ? STEP_HIGHLIGHT : ""}>
-          Enable{" "}
-          <a
-            href="https://aka.ms/MFASetup"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 underline"
-          >
-            two-step verification
-          </a>
-          {" "}if not already active
-        </li>
-        <li className={connectionFailed ? STEP_HIGHLIGHT : ""}>
-          Go to{" "}
-          <a
-            href="https://account.live.com/proofs/AppPassword"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 underline"
-          >
-            App passwords
-          </a>
-          {" "}and create a new one
-          <p className="mt-2 text-xs text-[var(--text-secondary)]">
-            For work/school accounts, your admin may need to enable IMAP access.
-          </p>
-        </li>
-        <li>
-          {hasPassword ? "Paste your new app password (leave blank to keep current)" : "Paste your app password"}
-          <div className="mt-1.5 -ml-3 mr-3">
-            <InlineInput
-              value={appPassword}
-              onChange={onAppPasswordChange}
-              placeholder={hasPassword ? "********" : "App password"}
-              type="password"
-            />
-            <VaultNotice />
-          </div>
-        </li>
-      </ol>
-
-      {error && <p className="text-red-600 text-sm font-medium mb-4">{error}</p>}
-
-      <button
-        type="button"
-        onClick={onSave}
-        disabled={saving}
-        className="w-full bg-[var(--btn-primary-bg)] py-3 text-[13px] font-semibold text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition"
-      >
-        {saving ? "Testing connection..." : "Test & Save"}
-      </button>
-      {saved && (
-        <span className="mt-3 inline-block bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
-          Connection verified and saved
+      {account.lastError && (
+        <span className="text-[12px] text-red-600">
+          {account.lastError}
         </span>
       )}
     </div>
@@ -631,25 +494,6 @@ function VaultNotice() {
 . Your emails are never stored on our servers.
       </span>
     </div>
-  );
-}
-
-interface InlineInputProps {
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  type?: string;
-}
-
-function InlineInput({ value, onChange, placeholder, type = "text" }: InlineInputProps) {
-  return (
-    <input
-      type={type}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      className="w-full border border-[var(--border-color)] px-3 py-2 text-[15px] font-medium placeholder-zinc-300 focus:border-[var(--btn-primary-bg)] focus:outline-none transition"
-    />
   );
 }
 

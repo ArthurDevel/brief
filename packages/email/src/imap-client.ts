@@ -376,8 +376,13 @@ export async function readThread(client: ImapFlow, emailId: string): Promise<Thr
       if (byId) for (const uid of byId) matchedUids.add(uid);
 
       // Find messages that reference this Message-ID
+      // Search both References and In-Reply-To headers because Gmail does not
+      // support IMAP HEADER search on References (returns 0 results).
       const byRef = await client.search({ header: { references: id } });
       if (byRef) for (const uid of byRef) matchedUids.add(uid);
+
+      const byInReplyTo = await client.search({ header: { "in-reply-to": id } });
+      if (byInReplyTo) for (const uid of byInReplyTo) matchedUids.add(uid);
     }
 
     if (matchedUids.size === 0) {

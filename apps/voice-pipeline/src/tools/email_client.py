@@ -32,7 +32,7 @@ import aiosmtplib
 from imapclient import IMAPClient
 from markdownify import markdownify
 
-from src.session import ImapConfig, SmtpConfig
+from src.session import EmailAccount, ImapConfig, SmtpConfig
 from src.tools.query_translator import translate_query
 
 logger = logging.getLogger(__name__)
@@ -172,6 +172,64 @@ def close_imap_connection(client: IMAPClient) -> None:
         client.logout()
     except Exception:
         logger.warning("[email_client] Error during IMAP logout, ignoring")
+
+
+@dataclass
+class EmailClientContext:
+    """Provider-aware email client context.
+
+    For custom (imap_smtp) accounts, wraps the IMAP client holder and SMTP config.
+    For Unipile accounts, holds the account_id for API calls.
+
+    Attributes:
+        connection_type: "unipile" or "imap_smtp".
+        imap_holder: Mutable IMAP client holder (only for imap_smtp).
+        smtp_config: SMTP config (only for imap_smtp).
+        unipile_account_id: Unipile account ID (only for unipile).
+    """
+
+    connection_type: str  # "unipile" | "imap_smtp"
+    imap_holder: dict[str, Any] | None = None
+    smtp_config: SmtpConfig | None = None
+    unipile_account_id: str | None = None
+
+
+def create_email_client_context(
+    account: EmailAccount,
+    imap_holder: dict[str, Any] | None = None,
+) -> EmailClientContext:
+    """Create a provider-aware email client context from an EmailAccount.
+
+    For custom accounts, the caller must provide the imap_holder with a live
+    IMAP connection. For Unipile accounts, only the account_id is needed.
+
+    Args:
+        account: The user's active email account.
+        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}.
+            Required for imap_smtp accounts, ignored for unipile.
+
+    Returns:
+        EmailClientContext ready for use by tool handlers.
+
+    Raises:
+        RuntimeError: If a custom account is missing the imap_holder.
+    """
+    if account.connection_type == "imap_smtp":
+        if imap_holder is None:
+            raise RuntimeError("imap_holder is required for imap_smtp accounts")
+        return EmailClientContext(
+            connection_type="imap_smtp",
+            imap_holder=imap_holder,
+            smtp_config=account.smtp_config,
+        )
+
+    # Unipile account
+    if not account.unipile_account_id:
+        raise RuntimeError("unipile_account_id is required for unipile accounts")
+    return EmailClientContext(
+        connection_type="unipile",
+        unipile_account_id=account.unipile_account_id,
+    )
 
 
 def with_reconnect(

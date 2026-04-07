@@ -1,12 +1,13 @@
 """
-Newsletter summary background job.
+Newsletter summary background job (provider-aware).
 
-Fetches newsletters via IMAP for each opted-in user, generates an LLM summary
-using OpenRouter, and stores it in the database.
+Fetches newsletters via IMAP or Unipile for each opted-in user, generates
+an LLM summary using OpenRouter, and stores it in the database.
 
 Responsibilities:
-- Query opted-in users with valid IMAP credentials and newsletter config
-- Fetch newsletter emails by sender + date using IMAP overfetch + client-side filter
+- Query opted-in users with valid newsletter config from user_settings
+- Resolve mailbox access from user_email_accounts (custom or Unipile)
+- Fetch newsletter emails by sender + date using the active provider
 - Generate LLM-powered summaries with Langfuse tracing
 - Upsert daily summaries into the newsletter_summaries table
 - Orchestrate the full daily job with per-user error isolation
@@ -14,6 +15,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import email
 import email.policy
 import logging
@@ -28,13 +30,12 @@ from markdownify import markdownify
 from src.config import NEWSLETTER_LLM_MODEL
 from langfuse import propagate_attributes
 from src.langfuse_client import get_langfuse_client
-from src.session import ImapConfig, _timezone_from_country_code
+from src.session import EmailAccount, ImapConfig, build_email_account, _timezone_from_country_code
 from src.tools.email_client import (
     close_imap_connection,
     create_imap_connection,
     with_reconnect,
 )
-from src.tools.vault import retrieve_secret
 
 from supabase import Client
 from zoneinfo import ZoneInfo
@@ -90,10 +91,10 @@ class NewsletterEmail:
 
 @dataclass
 class OptedInUser:
-    """A user who has opted in to newsletter summaries with valid credentials."""
+    """A user who has opted in to newsletter summaries with a valid email account."""
 
     user_id: str
-    imap_config: ImapConfig
+    email_account: EmailAccount
     newsletter_config: NewsletterConfig
     timezone: str
 
@@ -155,9 +156,9 @@ def generate_on_demand_for_user(
 ) -> None:
     """Generate a newsletter summary on-demand for a single user (sync, blocking).
 
-    Queries user_settings for the user's IMAP credentials and newsletter config,
-    builds an OptedInUser, and runs the full summary generation pipeline. The
-    async LLM call is handled internally via asyncio.run().
+    Queries user_settings for the user's newsletter config and resolves
+    mailbox access from user_email_accounts. Runs the full summary generation
+    pipeline. The async LLM call is handled internally via asyncio.run().
 
     Designed to be called from asyncio.to_thread() so it does not block the
     event loop.
@@ -195,7 +196,11 @@ def generate_on_demand_for_user(
 # ============================================================================
 
 def get_opted_in_users(supabase: Client) -> list[OptedInUser]:
-    """Query users who have newsletter_config.enabled = true and valid IMAP credentials.
+    """Query users who have newsletter_config.enabled = true and a valid email account.
+
+    Newsletter opt-in state comes from user_settings. Mailbox access is resolved
+    from user_email_accounts. For custom accounts, Vault secrets are retrieved
+    for IMAP config. For Unipile accounts, only the account_id is needed.
 
     Resolves each user's timezone using the same chain as session.py:
     1. call_schedule.timezone (explicit IANA timezone)
@@ -206,15 +211,12 @@ def get_opted_in_users(supabase: Client) -> list[OptedInUser]:
         supabase: Supabase client with service role permissions.
 
     Returns:
-        List of OptedInUser objects with resolved IMAP configs and timezones.
+        List of OptedInUser objects with resolved email accounts and timezones.
     """
+    # Step 1: Get all users with newsletter_config from user_settings
     response = (
         supabase.table("user_settings")
-        .select(
-            "user_id, newsletter_config, "
-            "imap_host, imap_port, imap_user, imap_password_secret_id, "
-            "call_schedule, phone"
-        )
+        .select("user_id, newsletter_config, call_schedule, phone")
         .not_.is_("newsletter_config", "null")
         .execute()
     )
@@ -227,30 +229,16 @@ def get_opted_in_users(supabase: Client) -> list[OptedInUser]:
         if not newsletter_config_raw or not newsletter_config_raw.get("enabled"):
             continue
 
-        # Skip users without IMAP credentials
-        if not row.get("imap_password_secret_id") or not row.get("imap_host"):
+        user_id = row["user_id"]
+
+        # Step 2: Resolve email account from user_email_accounts
+        email_account = _load_active_email_account(supabase, user_id)
+        if email_account is None:
             logger.warning(
-                "[newsletter] User %s has newsletter enabled but no IMAP credentials, skipping",
-                row["user_id"],
+                "[newsletter] User %s has newsletter enabled but no active email account, skipping",
+                user_id,
             )
             continue
-
-        # Retrieve IMAP password from Vault
-        try:
-            imap_password = retrieve_secret(supabase, row["imap_password_secret_id"])
-        except Exception as exc:
-            logger.error(
-                "[newsletter] Failed to retrieve IMAP password for user %s: %s",
-                row["user_id"], exc,
-            )
-            continue
-
-        imap_config = ImapConfig(
-            host=str(row["imap_host"]),
-            port=int(row["imap_port"]),
-            user=str(row["imap_user"]),
-            password=imap_password,
-        )
 
         newsletter_config = NewsletterConfig(
             enabled=True,
@@ -269,8 +257,8 @@ def get_opted_in_users(supabase: Client) -> list[OptedInUser]:
             user_timezone = "UTC"
 
         users.append(OptedInUser(
-            user_id=row["user_id"],
-            imap_config=imap_config,
+            user_id=user_id,
+            email_account=email_account,
             newsletter_config=newsletter_config,
             timezone=user_timezone,
         ))
@@ -279,24 +267,22 @@ def get_opted_in_users(supabase: Client) -> list[OptedInUser]:
 
 
 def _build_opted_in_user(supabase: Client, user_id: str) -> OptedInUser | None:
-    """Build an OptedInUser for a single user by querying user_settings.
+    """Build an OptedInUser for a single user.
 
-    Returns None if the user has no valid newsletter config or IMAP credentials.
+    Reads newsletter config from user_settings and resolves mailbox access
+    from user_email_accounts. Returns None if the user has no valid newsletter
+    config or no active email account.
 
     Args:
         supabase: Supabase client with service role permissions.
         user_id: The user ID to look up.
 
     Returns:
-        An OptedInUser instance, or None if config/credentials are missing.
+        An OptedInUser instance, or None if config/account are missing.
     """
     response = (
         supabase.table("user_settings")
-        .select(
-            "user_id, newsletter_config, "
-            "imap_host, imap_port, imap_user, imap_password_secret_id, "
-            "call_schedule, phone"
-        )
+        .select("user_id, newsletter_config, call_schedule, phone")
         .eq("user_id", user_id)
         .single()
         .execute()
@@ -310,17 +296,10 @@ def _build_opted_in_user(supabase: Client, user_id: str) -> OptedInUser | None:
     if not newsletter_config_raw or not newsletter_config_raw.get("enabled"):
         return None
 
-    if not row.get("imap_password_secret_id") or not row.get("imap_host"):
+    # Resolve email account from user_email_accounts
+    email_account = _load_active_email_account(supabase, user_id)
+    if email_account is None:
         return None
-
-    imap_password = retrieve_secret(supabase, row["imap_password_secret_id"])
-
-    imap_config = ImapConfig(
-        host=str(row["imap_host"]),
-        port=int(row["imap_port"]),
-        user=str(row["imap_user"]),
-        password=imap_password,
-    )
 
     newsletter_config = NewsletterConfig(
         enabled=True,
@@ -339,31 +318,25 @@ def _build_opted_in_user(supabase: Client, user_id: str) -> OptedInUser | None:
         user_timezone = "UTC"
 
     return OptedInUser(
-        user_id=row["user_id"],
-        imap_config=imap_config,
+        user_id=user_id,
+        email_account=email_account,
         newsletter_config=newsletter_config,
         timezone=user_timezone,
     )
 
 
 def fetch_newsletters_for_date(
-    imap_config: ImapConfig,
+    account: EmailAccount,
     senders: list[str],
     target_date: date,
     user_timezone: str,
 ) -> list[NewsletterEmail]:
     """Fetch newsletter emails from specific senders for a given date.
 
-    Uses the overfetch + client-side filter strategy:
-    1. IMAP SEARCH with a 3-day window (target_date-1 to target_date+2) per sender
-    2. FETCH INTERNALDATE for each match
-    3. Client-side filter: keep only emails whose INTERNALDATE falls on target_date
-       in the user's timezone
-
-    Results from multiple senders are merged and deduplicated by UID.
+    Dispatches to IMAP or Unipile based on the account's connection_type.
 
     Args:
-        imap_config: IMAP connection parameters.
+        account: The user's active email account.
         senders: List of sender email addresses to search for.
         target_date: The calendar date to fetch newsletters for.
         user_timezone: IANA timezone string for date comparison.
@@ -374,42 +347,10 @@ def fetch_newsletters_for_date(
     if not senders:
         return []
 
-    imap_holder: dict[str, Any] = {
-        "client": create_imap_connection(imap_config),
-        "config": imap_config,
-    }
-
-    try:
-        # Build the 3-day search window for IMAP
-        since_date = target_date - timedelta(days=1)
-        before_date = target_date + timedelta(days=2)
-
-        seen_uids: set[int] = set()
-        emails: list[NewsletterEmail] = []
-        tz = ZoneInfo(user_timezone)
-
-        for sender in senders:
-            try:
-                fetched = _fetch_sender_emails(
-                    imap_holder, imap_config, sender, since_date, before_date, target_date, tz
-                )
-                for uid, newsletter_email in fetched:
-                    if uid not in seen_uids:
-                        seen_uids.add(uid)
-                        emails.append(newsletter_email)
-            except Exception as exc:
-                logger.error(
-                    "[newsletter] Failed to fetch emails from sender '%s': %s",
-                    sender, exc,
-                )
-
-        return emails
-
-    finally:
-        try:
-            close_imap_connection(imap_holder["client"])
-        except Exception:
-            pass
+    if account.connection_type == "unipile":
+        return _fetch_newsletters_via_unipile(account, senders, target_date, user_timezone)
+    else:
+        return _fetch_newsletters_via_imap(account, senders, target_date, user_timezone)
 
 
 async def generate_summary(
@@ -521,7 +462,7 @@ async def generate_daily_summary_for_user(
         return None
 
     newsletters = fetch_newsletters_for_date(
-        user.imap_config,
+        user.email_account,
         user.newsletter_config.newsletters,
         target_date,
         user.timezone,
@@ -571,6 +512,236 @@ async def generate_daily_summary_for_user(
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def _load_active_email_account(supabase: Client, user_id: str) -> EmailAccount | None:
+    """Load the active email account for a user from user_email_accounts.
+
+    For custom accounts, resolves IMAP/SMTP passwords from Vault.
+    For Unipile accounts, only the account_id is needed.
+
+    Args:
+        supabase: Supabase client with service role permissions.
+        user_id: The user ID to look up.
+
+    Returns:
+        EmailAccount if found and valid, None otherwise.
+    """
+    account_response = (
+        supabase.table("user_email_accounts")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    account_rows = cast(list[dict[str, Any]], account_response.data or [])
+    if not account_rows:
+        return None
+
+    try:
+        return build_email_account(account_rows[0], supabase)
+    except Exception as exc:
+        logger.error(
+            "[newsletter] Failed to build email account for user %s: %s",
+            user_id, exc,
+        )
+        return None
+
+
+def _fetch_newsletters_via_imap(
+    account: EmailAccount,
+    senders: list[str],
+    target_date: date,
+    user_timezone: str,
+) -> list[NewsletterEmail]:
+    """Fetch newsletter emails via IMAP for a custom account.
+
+    Uses the overfetch + client-side filter strategy:
+    1. IMAP SEARCH with a 3-day window (target_date-1 to target_date+2) per sender
+    2. FETCH INTERNALDATE for each match
+    3. Client-side filter: keep only emails whose INTERNALDATE falls on target_date
+       in the user's timezone
+
+    Results from multiple senders are merged and deduplicated by UID.
+
+    Args:
+        account: Custom email account (must have imap_config).
+        senders: List of sender email addresses to search for.
+        target_date: The calendar date to fetch newsletters for.
+        user_timezone: IANA timezone string for date comparison.
+
+    Returns:
+        List of NewsletterEmail objects found for the target date.
+
+    Raises:
+        RuntimeError: If the account has no IMAP config.
+    """
+    if not account.imap_config:
+        raise RuntimeError("Custom account has no IMAP config for newsletter fetch")
+
+    imap_config = account.imap_config
+
+    imap_holder: dict[str, Any] = {
+        "client": create_imap_connection(imap_config),
+        "config": imap_config,
+    }
+
+    try:
+        # Build the 3-day search window for IMAP
+        since_date = target_date - timedelta(days=1)
+        before_date = target_date + timedelta(days=2)
+
+        seen_uids: set[int] = set()
+        emails: list[NewsletterEmail] = []
+        tz = ZoneInfo(user_timezone)
+
+        for sender in senders:
+            try:
+                fetched = _fetch_sender_emails(
+                    imap_holder, imap_config, sender, since_date, before_date, target_date, tz
+                )
+                for uid, newsletter_email in fetched:
+                    if uid not in seen_uids:
+                        seen_uids.add(uid)
+                        emails.append(newsletter_email)
+            except Exception as exc:
+                logger.error(
+                    "[newsletter] Failed to fetch emails from sender '%s': %s",
+                    sender, exc,
+                )
+
+        return emails
+
+    finally:
+        try:
+            close_imap_connection(imap_holder["client"])
+        except Exception:
+            pass
+
+
+def _fetch_newsletters_via_unipile(
+    account: EmailAccount,
+    senders: list[str],
+    target_date: date,
+    user_timezone: str,
+) -> list[NewsletterEmail]:
+    """Fetch newsletter emails via Unipile API.
+
+    Searches for emails from each sender using the Unipile search API,
+    then filters client-side by date in the user's timezone.
+
+    Args:
+        account: Unipile email account (must have unipile_account_id).
+        senders: List of sender email addresses to search for.
+        target_date: The calendar date to fetch newsletters for.
+        user_timezone: IANA timezone string for date comparison.
+
+    Returns:
+        List of NewsletterEmail objects found for the target date.
+
+    Raises:
+        RuntimeError: If the account has no unipile_account_id.
+    """
+    if not account.unipile_account_id:
+        raise RuntimeError("Unipile account has no unipile_account_id for newsletter fetch")
+
+    return asyncio.run(_fetch_newsletters_via_unipile_async(
+        account.unipile_account_id, senders, target_date, user_timezone
+    ))
+
+
+async def _fetch_newsletters_via_unipile_async(
+    account_id: str,
+    senders: list[str],
+    target_date: date,
+    user_timezone: str,
+) -> list[NewsletterEmail]:
+    """Async implementation of Unipile newsletter fetching.
+
+    Searches for emails from each sender, filters by date, and extracts content.
+
+    Args:
+        account_id: The Unipile account ID.
+        senders: List of sender email addresses to search for.
+        target_date: The calendar date to fetch newsletters for.
+        user_timezone: IANA timezone string for date comparison.
+
+    Returns:
+        List of NewsletterEmail objects found for the target date.
+    """
+    from src.tools.unipile_client import _request
+
+    tz = ZoneInfo(user_timezone)
+    seen_ids: set[str] = set()
+    emails: list[NewsletterEmail] = []
+
+    for sender in senders:
+        try:
+            # Search for emails from this sender
+            params: dict[str, Any] = {
+                "account_id": account_id,
+                "q": f"from:{sender}",
+                "limit": 20,
+            }
+            data = await _request("GET", "/api/v1/emails", params=params)
+            items = data.get("items", [])
+
+            for item in items:
+                email_id = str(item.get("provider_id", item.get("id", "")))
+                if email_id in seen_ids:
+                    continue
+
+                # Client-side date filter
+                date_str = item.get("date", "")
+                if date_str:
+                    try:
+                        item_dt = datetime.fromisoformat(date_str)
+                        if item_dt.tzinfo is None:
+                            item_dt = item_dt.replace(tzinfo=timezone.utc)
+                        local_date = item_dt.astimezone(tz).date()
+                        if local_date != target_date:
+                            continue
+                    except ValueError:
+                        continue
+                else:
+                    continue
+
+                seen_ids.add(email_id)
+
+                # Extract email content -- fetch full email for body
+                full_email = await _request("GET", f"/api/v1/emails/{email_id}", params={"account_id": account_id})
+
+                from_obj = full_email.get("from", {})
+                from_addr = sender
+                if isinstance(from_obj, dict):
+                    identifier = from_obj.get("identifier", "")
+                    display_name = from_obj.get("display_name", "")
+                    if display_name and identifier:
+                        from_addr = f"{display_name} <{identifier}>"
+                    elif identifier:
+                        from_addr = identifier
+
+                body = str(full_email.get("body", full_email.get("text_body", "")))
+                subject = str(full_email.get("subject", ""))
+                message_id = str(full_email.get("message_id", email_id))
+
+                emails.append(NewsletterEmail(
+                    subject=subject,
+                    body=body,
+                    from_addr=from_addr,
+                    date=date_str,
+                    message_id=message_id,
+                ))
+
+        except Exception as exc:
+            logger.error(
+                "[newsletter] Failed to fetch Unipile emails from sender '%s': %s",
+                sender, exc,
+            )
+
+    return emails
+
 
 def _fetch_sender_emails(
     imap_holder: dict[str, Any],

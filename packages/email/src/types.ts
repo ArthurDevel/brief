@@ -7,7 +7,12 @@
  * - ImapConfig/SmtpConfig for connection parameters
  * - EmailSummary for inbox listing
  * - Email for full email content
+ * - EmailAccountRecord for provider-agnostic account data
+ * - EmailAccountClient for provider-agnostic email operations
  */
+
+import type { UndoRecipe } from "@dublin/tools/src/types";
+export type { UndoRecipe };
 
 // ============================================================================
 // CONNECTION CONFIG
@@ -119,4 +124,64 @@ export interface ThreadMessage {
   subject: string;
   body: string;
   date: string;
+}
+
+// ============================================================================
+// EMAIL ACCOUNT RECORD
+// ============================================================================
+
+/**
+ * A user's email account as stored in user_email_accounts.
+ * Used by provider-agnostic email operations across web and voice.
+ * @param id - Row ID
+ * @param userId - Owner user ID
+ * @param provider - Mail provider
+ * @param connectionType - How the account connects
+ * @param emailAddress - The email address, if known
+ * @param unipileAccountId - Unipile account ID (Unipile-backed only)
+ * @param status - Current connection status
+ * @param lastError - Most recent error message, if any
+ * @param customConfig - IMAP/SMTP config (custom accounts only)
+ */
+export interface EmailAccountRecord {
+  id: string;
+  userId: string;
+  provider: "gmail" | "outlook" | "custom";
+  connectionType: "unipile" | "imap_smtp";
+  emailAddress: string | null;
+  unipileAccountId: string | null;
+  status: string;
+  lastError: string | null;
+  customConfig?: {
+    imap: ImapConfig;
+    smtp: SmtpConfig;
+  };
+}
+
+// ============================================================================
+// EMAIL ACCOUNT CLIENT
+// ============================================================================
+
+/**
+ * Provider-agnostic email client interface.
+ * Implemented by both custom IMAP/SMTP and Unipile-backed clients.
+ */
+export interface EmailAccountClient {
+  listInbox(limit: number): Promise<EmailSummary[]>;
+  searchEmails(query: string): Promise<EmailSummary[]>;
+  readEmail(emailId: string): Promise<Email>;
+  readThread(emailId: string): Promise<ThreadMessage[]>;
+  markAsRead(emailId: string): Promise<void>;
+  archiveEmail(emailId: string, sourceFolder?: string): Promise<UndoRecipe | null>;
+  deleteEmail(emailId: string, sourceFolder?: string): Promise<UndoRecipe | null>;
+  moveToFolder(emailId: string, folder: string, sourceFolder?: string): Promise<UndoRecipe | null>;
+  moveEmail(identifier: string, destFolder: string, sourceFolder?: string): Promise<void>;
+  listFolders(): Promise<FolderInfo[]>;
+  resolveSpecialUseFolder(flag: string): Promise<string | null>;
+  saveDraft(input: { to: string; subject: string; body: string; cc?: string; inReplyTo?: string; references?: string }): Promise<UndoRecipe | null>;
+  deleteDraft(uid: number): Promise<void>;
+  sendEmail(input: { to: string; subject: string; body: string }): Promise<void>;
+  replyEmail(input: { context: ReplyContext; body: string; replyAll: boolean; senderAddress: string }): Promise<void>;
+  fetchReplyContext(emailId: string): Promise<ReplyContext>;
+  fetchEmailMetaBatch(ids: EmailMetaRequest[]): Promise<Map<string, EmailMeta>>;
 }

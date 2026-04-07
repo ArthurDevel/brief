@@ -2,23 +2,22 @@
  * Bulk approve/reject API endpoint.
  *
  * Accepts an array of action IDs and an operation (approve or reject).
- * For reject: performs a single DB update. For approve: opens one IMAP
- * connection and delegates to bulkExecuteActions for batched execution.
+ * For reject: performs a single DB update. For approve: loads the active
+ * email account and delegates to bulkExecuteActions for execution.
  *
  * Responsibilities:
  * - Authenticate the request and verify ownership of all actions
  * - Validate input (actionIds array, operation string)
  * - Reject path: single DB update, return counts
- * - Approve path: load credentials, open IMAP, call bulkExecuteActions, close
+ * - Approve path: load active email account, call bulkExecuteActions
  */
 
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase/client";
-import { bulkExecuteActions, retrieveSecret } from "@dublin/tools";
-import { createImapConnection, closeImapConnection } from "@dublin/email";
+import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
+import { getActiveEmailAccountRecord } from "@/lib/email-accounts";
+import { bulkExecuteActions } from "@dublin/tools";
 import type { BulkActionResponse } from "@dublin/tools";
-import type { SmtpConfig } from "@dublin/email";
 
 const VALID_OPERATIONS = ["approve", "reject"] as const;
 type Operation = (typeof VALID_OPERATIONS)[number];
@@ -165,7 +164,7 @@ async function handleReject(
 }
 
 /**
- * Handles the approve operation: loads credentials, opens IMAP, calls bulkExecuteActions.
+ * Handles the approve operation: loads active email account, calls bulkExecuteActions.
  * @param actionIds - The action IDs to approve
  * @param supabase - Supabase client
  * @param userId - Authenticated user ID
@@ -176,55 +175,19 @@ async function handleApprove(
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
 ): Promise<NextResponse<BulkActionResponse | { error: string }>> {
-  // Load user settings to get credential secret IDs
-  const { data: settings, error: settingsError } = await supabase
-    .from("user_settings")
-    .select("imap_host, imap_port, imap_user, imap_password_secret_id, smtp_host, smtp_port, smtp_user, smtp_password_secret_id")
-    .eq("user_id", userId)
-    .single();
+  // Load active email account with resolved credentials
+  const serviceClient = createServiceRoleClient();
+  const emailAccount = await getActiveEmailAccountRecord(supabase, serviceClient, userId);
 
-  if (settingsError || !settings) {
-    return NextResponse.json({ error: "Email settings not configured" }, { status: 400 });
+  if (!emailAccount) {
+    return NextResponse.json({ error: "No active email account configured" }, { status: 400 });
   }
-
-  if (!settings.imap_password_secret_id) {
-    return NextResponse.json({ error: "IMAP password not configured" }, { status: 400 });
-  }
-
-  // Retrieve secrets from Vault
-  const imapPassword = await retrieveSecret(supabase, settings.imap_password_secret_id);
-
-  let smtpPassword: string | null = null;
-  if (settings.smtp_password_secret_id) {
-    smtpPassword = await retrieveSecret(supabase, settings.smtp_password_secret_id);
-  }
-
-  const smtpConfig: SmtpConfig = {
-    host: settings.smtp_host,
-    port: settings.smtp_port,
-    user: settings.smtp_user,
-    password: smtpPassword ?? "",
-  };
-
-  // Open one IMAP connection for the entire batch
-  const imapClient = await createImapConnection({
-    host: settings.imap_host,
-    port: settings.imap_port,
-    user: settings.imap_user,
-    password: imapPassword,
-  });
 
   try {
-    const response = await bulkExecuteActions(actionIds, supabase, imapClient, smtpConfig);
+    const response = await bulkExecuteActions(actionIds, supabase, emailAccount);
     return NextResponse.json(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to execute bulk actions";
     return NextResponse.json({ error: message }, { status: 500 });
-  } finally {
-    try {
-      await closeImapConnection(imapClient);
-    } catch {
-      // Connection may already be closed -- ignore
-    }
   }
 }

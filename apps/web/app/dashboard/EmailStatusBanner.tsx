@@ -3,8 +3,8 @@
 /**
  * EmailStatusBanner.tsx
  *
- * Presentational banner that warns the user when their email is not configured
- * or the connection is broken.
+ * Presentational banner that warns the user when their email is not configured,
+ * the connection is broken, or a reconnection is required.
  * - Reads email status from EmailStatusContext
  * - Shows a red banner with actionable link to settings
  * - Hidden on the settings page and when status is loading or connected
@@ -25,6 +25,10 @@ const STATUS_MESSAGES: Record<string, { text: string; linkText: string }> = {
   error: {
     text: "Could not connect to your email account.",
     linkText: "Check your settings",
+  },
+  reconnect_required: {
+    text: "Your email account needs to be reconnected.",
+    linkText: "Reconnect now",
   },
 };
 
