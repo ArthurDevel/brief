@@ -19,6 +19,9 @@ import { getCookieOptions } from "./lib/supabase/client";
 /** Routes that do not require authentication. */
 const PUBLIC_ROUTES = ["/login", "/api/auth", "/ingest", "/api/trigger-call", "/api/user/email-accounts/notify"];
 
+/** User IDs allowed to access /admin/* routes. */
+const ADMIN_USER_IDS = (process.env.ADMIN_USER_IDS || "").split(",").filter(Boolean);
+
 /** PostHog middleware handler (proxy + identity cookie). */
 const posthogHandler = postHogMiddleware({
   proxy: {
@@ -105,6 +108,13 @@ export async function middleware(request: NextRequest) {
   if (!user && !isPublicRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    return NextResponse.redirect(url);
+  }
+
+  // Block non-admin users from /admin/* routes
+  if (user && pathname.startsWith("/admin") && !ADMIN_USER_IDS.includes(user.id)) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/dashboard";
     return NextResponse.redirect(url);
   }
 
