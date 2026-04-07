@@ -15,8 +15,15 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Generator
 from unittest.mock import MagicMock
+
+from dotenv import load_dotenv
+
+# Load test env vars from .env.test.local at the repo root
+_env_file = Path(__file__).resolve().parents[4] / ".env.test.local"
+load_dotenv(_env_file)
 
 import pytest  # type: ignore[import-untyped]
 from imapclient import IMAPClient  # type: ignore[import-untyped]
@@ -175,7 +182,7 @@ def _load_accounts() -> list[E2EAccount]:
     for key, builder in ALL_BUILDERS:
         try:
             accounts.append(builder())
-        except KeyError as e:
+        except (KeyError, Exception) as e:
             skipped.append(f"{key}: {e}")
 
     if skipped:

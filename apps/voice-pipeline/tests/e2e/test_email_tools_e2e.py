@@ -37,9 +37,20 @@ from tests.e2e.conftest import (
 
 TAG = f"[{TEST_RUN_ID}]"
 SEED_SUBJECT = f"{TAG} Seed email"
+THREAD_SUBJECT = f"{TAG} Thread test"
 SEARCH_SUBJECT = f"{TAG} Searchable uniquetoken"
 
 DUMMY_USER_ID = "e2e-test-user"
+
+# User-created folder that must exist on all test accounts
+USER_FOLDER_NAME = "e2e-test"
+
+# Gmail system folders/categories (not user-created, should not be used for move tests)
+GMAIL_SYSTEM_NAMES = {
+    "category_forums", "category_promotions", "category_personal",
+    "category_updates", "category_social", "starred", "chat", "unread",
+    "sent", "spam", "draft", "important", "trash",
+}
 
 
 # ============================================================================
@@ -187,6 +198,12 @@ def _ensure_seeded(account: E2EAccount, supabase: MagicMock) -> dict[str, str]:
 
     dispatch("send_email", {
         "to": account.email_address,
+        "subject": THREAD_SUBJECT,
+        "body": f"Thread starter for {TEST_RUN_ID}",
+    }, account, supabase)
+
+    dispatch("send_email", {
+        "to": account.email_address,
         "subject": SEARCH_SUBJECT,
         "body": f"Search body for {TEST_RUN_ID}",
     }, account, supabase)
@@ -195,8 +212,12 @@ def _ensure_seeded(account: E2EAccount, supabase: MagicMock) -> dict[str, str]:
     time.sleep(DELIVERY_WAIT_S)
 
     seed_email_id = find_email_id_by_subject(account, supabase, SEED_SUBJECT)
+    thread_email_id = find_email_id_by_subject(account, supabase, THREAD_SUBJECT)
 
-    _seeded[account.label] = {"seed_email_id": seed_email_id}
+    _seeded[account.label] = {
+        "seed_email_id": seed_email_id,
+        "thread_email_id": thread_email_id,
+    }
     return _seeded[account.label]
 
 
@@ -494,3 +515,175 @@ class TestMoveToFolder:
         # Verify email is still in inbox
         result, _, _ = dispatch("list_inbox", {"limit": 50}, account, mock_supabase)
         assert SEED_SUBJECT in result["markdown"]
+
+
+# ============================================================================
+# TESTS: MOVE TO USER-CREATED LABEL
+# ============================================================================
+
+class TestMoveToUserFolder:
+    def _find_user_folder(self, account: E2EAccount, supabase: MagicMock) -> str:
+        """Find a user-created folder suitable for move tests.
+
+        Looks for 'e2e-test' by name first, then falls back to any
+        non-special-use folder (Unipile/Gmail returns opaque IDs as names).
+
+        Returns:
+            The folder path.
+
+        Raises:
+            RuntimeError: If no user-created folder is found on the account.
+        """
+        result, _, _ = dispatch("list_folders", {}, account, supabase)
+        folders = result["folders"]
+
+        # Prefer the known e2e-test folder by name
+        for f in folders:
+            if f["name"].lower() == USER_FOLDER_NAME:
+                return f["path"]
+
+        # Fallback: any folder that isn't a known system folder
+        # (Unipile/Gmail returns opaque IDs as names for user labels)
+        for f in folders:
+            if f["name"].lower() not in GMAIL_SYSTEM_NAMES and f["name"] != "INBOX":
+                return f["path"]
+
+        available = [f["name"] for f in folders]
+        raise RuntimeError(
+            f'No user-created folder found on {account.label}. '
+            f"Available: {available}. Create one manually on the test account."
+        )
+
+    def test_move_to_user_folder_removes_from_inbox(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
+        user_folder = self._find_user_folder(account, mock_supabase)
+
+        subject = f"{TAG} Move user-folder test {int(time.time() * 1000)}"
+        dispatch("send_email", {
+            "to": account.email_address,
+            "subject": subject,
+            "body": "Move to user folder body",
+        }, account, mock_supabase)
+        time.sleep(DELIVERY_WAIT_S)
+
+        email_id = find_email_id_by_subject(account, mock_supabase, subject)
+
+        result, undo_recipe, _ = dispatch("move_to_folder", {
+            "email_id": email_id,
+            "folder": user_folder,
+            "source_folder": "INBOX",
+        }, account, mock_supabase)
+
+        assert result["moved"] is True
+        assert undo_recipe is not None
+        wait_until_gone_from_inbox(account, mock_supabase, subject)
+
+    def test_move_to_user_folder_undo_restores(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
+        if account.connection_type == "unipile":
+            pytest.xfail("Unipile undo fails: Outlook IDs go stale after move (see #168)")
+
+        user_folder = self._find_user_folder(account, mock_supabase)
+
+        subject = f"{TAG} Move user-folder undo test {int(time.time() * 1000)}"
+        dispatch("send_email", {
+            "to": account.email_address,
+            "subject": subject,
+            "body": "Move to user folder undo body",
+        }, account, mock_supabase)
+        time.sleep(DELIVERY_WAIT_S)
+
+        email_id = find_email_id_by_subject(account, mock_supabase, subject)
+
+        _, undo_recipe, _ = dispatch("move_to_folder", {
+            "email_id": email_id,
+            "folder": user_folder,
+            "source_folder": "INBOX",
+        }, account, mock_supabase)
+        wait_until_gone_from_inbox(account, mock_supabase, subject)
+
+        assert undo_recipe is not None, "move_to_folder should return an undo recipe"
+        undo(undo_recipe, account, mock_supabase)
+
+        restored_id = find_email_id_by_subject(account, mock_supabase, subject)
+        assert restored_id
+
+
+# ============================================================================
+# TESTS: READ THREAD
+# ============================================================================
+
+class TestReadThread:
+    def test_returns_thread_with_starter(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
+        if account.connection_type == "unipile":
+            pytest.skip("read_thread is not implemented for Unipile accounts")
+
+        ids = _ensure_seeded(account, mock_supabase)
+        result, undo_recipe, _ = dispatch(
+            "read_thread", {"email_id": ids["thread_email_id"]}, account, mock_supabase
+        )
+
+        markdown = result["markdown"]
+        assert THREAD_SUBJECT in markdown
+        assert TEST_RUN_ID in markdown
+        assert undo_recipe is None
+
+
+# ============================================================================
+# TESTS: MARK AS READ
+# ============================================================================
+
+class TestMarkAsRead:
+    def test_mark_as_read_sticks(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
+        if account.connection_type == "unipile":
+            pytest.skip("mark_as_read is not implemented for Unipile accounts")
+
+        ids = _ensure_seeded(account, mock_supabase)
+        result, undo_recipe, _ = dispatch(
+            "mark_as_read", {"email_id": ids["seed_email_id"]}, account, mock_supabase
+        )
+
+        assert result["marked"] is True
+        assert undo_recipe is None
+
+        # Verify via read_email that the email is marked as read
+        read_result, _, _ = dispatch(
+            "read_email", {"email_id": ids["seed_email_id"]}, account, mock_supabase
+        )
+        assert "Read" in read_result["markdown"] or "read" in read_result["markdown"].lower()
+
+
+# ============================================================================
+# TESTS: REPLY EMAIL
+# ============================================================================
+
+class TestReplyEmail:
+    def test_reply_grows_thread(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
+        if account.connection_type == "unipile":
+            pytest.skip("reply_email is not implemented for Unipile accounts")
+
+        ids = _ensure_seeded(account, mock_supabase)
+
+        result, undo_recipe, _ = dispatch("reply_email", {
+            "email_id": ids["thread_email_id"],
+            "body": f"Reply body {TEST_RUN_ID}",
+            "reply_all": False,
+        }, account, mock_supabase)
+
+        assert result["sent"] is True
+        assert undo_recipe is None
+
+        # Wait for delivery + Gmail threading indexing (can be slow)
+        time.sleep(DELIVERY_WAIT_S)
+        thread_retries = 12  # ~60s total on top of DELIVERY_WAIT_S
+        for attempt in range(thread_retries):
+            thread_result, _, _ = dispatch(
+                "read_thread", {"email_id": ids["thread_email_id"]}, account, mock_supabase
+            )
+            # format_thread outputs "N messages" in the header
+            if "(1 messages)" not in thread_result["markdown"]:
+                break
+            if attempt < thread_retries - 1:
+                time.sleep(RETRY_WAIT_S)
+        else:
+            pytest.fail(
+                f"Thread did not grow after reply. Got: {thread_result['markdown'][:200]}"
+            )
