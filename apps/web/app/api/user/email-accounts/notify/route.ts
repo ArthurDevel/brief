@@ -20,7 +20,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { getAccount } from "@/lib/unipile/client";
+import { getAccount, deleteAccount } from "@/lib/unipile/client";
 
 // ============================================================================
 // CONSTANTS
@@ -124,9 +124,41 @@ export async function POST(
       .eq("id", existingAccount.id);
   }
 
-  // Reuse existing row if same user still has an active account
-  // (covers both reconnect and connection-type switch, e.g. IMAP -> Unipile)
-  const canReuseRow = existingAccount && !identityChanged;
+  // Delete the old Unipile account if the unipile_account_id changed.
+  // This covers both identity changes (different email) AND provider switches
+  // with the same email (e.g. Outlook -> Gmail on the same mailbox).
+  const oldUnipileId = existingAccount?.unipile_account_id as string | null;
+  const unipileAccountChanged = oldUnipileId && oldUnipileId !== account_id;
+  if (unipileAccountChanged) {
+    try {
+      await deleteAccount(oldUnipileId);
+      console.log(`[email-accounts/notify] Deleted old Unipile account ${oldUnipileId}`);
+    } catch (err) {
+      console.error("[email-accounts/notify] Failed to delete old Unipile account:", err);
+    }
+  }
+
+  // Determine which DB row to write to:
+  // 1. Same identity (reconnect / connection-type switch) -> reuse active row
+  // 2. Identity changed but an inactive row with the same email exists -> reactivate it
+  // 3. Otherwise -> insert a new row
+  let reuseRowId: string | null = null;
+
+  if (existingAccount && !identityChanged) {
+    reuseRowId = existingAccount.id as string;
+  } else if (identityChanged) {
+    const { data: inactiveRow } = await serviceClient
+      .from("user_email_accounts")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("email_address", newEmail)
+      .eq("is_active", false)
+      .maybeSingle();
+
+    if (inactiveRow) {
+      reuseRowId = inactiveRow.id as string;
+    }
+  }
 
   const accountRow = {
     user_id: userId,
@@ -149,11 +181,11 @@ export async function POST(
     smtp_password_secret_id: null,
   };
 
-  if (canReuseRow) {
+  if (reuseRowId) {
     const { error } = await serviceClient
       .from("user_email_accounts")
       .update(accountRow)
-      .eq("id", existingAccount.id);
+      .eq("id", reuseRowId);
 
     if (error) {
       throw new Error(`Failed to update email account: ${error.message}`);

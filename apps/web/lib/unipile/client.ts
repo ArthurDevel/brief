@@ -171,6 +171,32 @@ export async function getAccount(accountId: string): Promise<UnipileAccount> {
   };
 }
 
+/**
+ * Deletes (unlinks) an account from Unipile. Does not affect the underlying
+ * Gmail/Outlook account -- only removes it from Unipile's system.
+ * @param accountId - The Unipile account ID to delete
+ */
+export async function deleteAccount(accountId: string): Promise<void> {
+  assertEnvVars();
+
+  const response = await fetch(
+    `${UNIPILE_DSN}/api/v1/accounts/${accountId}`,
+    {
+      method: "DELETE",
+      headers: {
+        "X-API-KEY": UNIPILE_API_KEY!,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Unipile deleteAccount failed (${response.status}): ${text}`
+    );
+  }
+}
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
