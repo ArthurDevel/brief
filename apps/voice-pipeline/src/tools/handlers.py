@@ -931,7 +931,7 @@ def _dispatch_undo(
         loop = asyncio.new_event_loop()
         try:
             account_id = recipe.params["account_id"]
-            body = {"folder": recipe.params["to_folder"]}
+            body = {"folders": recipe.params["to_folders"]}
             loop.run_until_complete(
                 unipile_client._request("PUT", f"/api/v1/emails/{recipe.params['email_id']}", params={"account_id": account_id}, json_body=body)
             )

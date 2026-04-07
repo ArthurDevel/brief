@@ -132,16 +132,24 @@ async def archive_email(
     Returns:
         Tuple of (undo recipe dict, message_id or None).
     """
-    # Unipile folders is an array of label strings. Empty array removes from inbox.
-    body: dict[str, Any] = {"folders": []}
+    # Outlook has role "archive"; Gmail does not -- use folders: [] to remove from inbox
+    try:
+        archive_folder_id = await _resolve_folder_by_role(account_id, "archive")
+        folders = [archive_folder_id]
+    except RuntimeError:
+        archive_folder_id = None
+        folders = []
+
+    body: dict[str, Any] = {"folders": folders}
     await _request("PUT", f"/api/v1/emails/{email_id}", params={"account_id": account_id}, json_body=body)
 
+    inbox_folder_id = await _resolve_folder_by_role(account_id, "inbox")
     undo_recipe: UndoRecipe = {
         "operation": "unipile_move_email",
         "params": {
             "account_id": account_id,
             "email_id": email_id,
-            "to_folders": [source_folder or "INBOX"],
+            "to_folders": [inbox_folder_id],
         },
     }
     return undo_recipe, None
@@ -152,7 +160,10 @@ async def delete_email(
     email_id: str,
     source_folder: str | None,
 ) -> tuple[UndoRecipe | None, str | None]:
-    """Delete an email through Unipile (moves to Trash).
+    """Delete an email through Unipile (moves to Trash via PUT).
+
+    Uses PUT with folders=[trash_folder_id] instead of DELETE, because
+    DELETE permanently removes the email and makes undo impossible.
 
     Args:
         account_id: The Unipile account ID.
@@ -162,14 +173,17 @@ async def delete_email(
     Returns:
         Tuple of (undo recipe dict, message_id or None).
     """
-    await _request("DELETE", f"/api/v1/emails/{email_id}", params={"account_id": account_id})
+    trash_folder_id = await _resolve_folder_by_role(account_id, "trash")
+    body: dict[str, Any] = {"folders": [trash_folder_id]}
+    await _request("PUT", f"/api/v1/emails/{email_id}", params={"account_id": account_id}, json_body=body)
 
+    inbox_folder_id = await _resolve_folder_by_role(account_id, "inbox")
     undo_recipe: UndoRecipe = {
         "operation": "unipile_move_email",
         "params": {
             "account_id": account_id,
             "email_id": email_id,
-            "to_folders": [source_folder or "INBOX"],
+            "to_folders": [inbox_folder_id],
         },
     }
     return undo_recipe, None
@@ -280,12 +294,17 @@ async def move_to_folder(
     body: dict[str, Any] = {"folders": [target_folder]}
     await _request("PUT", f"/api/v1/emails/{email_id}", params={"account_id": account_id}, json_body=body)
 
+    # Resolve source folder for undo -- "INBOX" needs to be resolved to actual folder ID
+    resolved_source = source_folder
+    if source_folder == "INBOX":
+        resolved_source = await _resolve_folder_by_role(account_id, "inbox")
+
     undo_recipe: UndoRecipe = {
         "operation": "unipile_move_email",
         "params": {
             "account_id": account_id,
             "email_id": email_id,
-            "to_folders": [source_folder],
+            "to_folders": [resolved_source],
         },
     }
     return undo_recipe, None
@@ -294,6 +313,24 @@ async def move_to_folder(
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+async def _resolve_folder_by_role(account_id: str, role: str) -> str:
+    """Resolve a folder's Unipile ID by its role (e.g. 'inbox', 'trash', 'archive').
+
+    Args:
+        account_id: The Unipile account ID.
+        role: The folder role to find.
+
+    Returns:
+        The folder's Unipile ID.
+    """
+    data = await _request("GET", "/api/v1/folders", params={"account_id": account_id})
+    items = data.get("items", data if isinstance(data, list) else [])
+    for f in items:
+        if (f.get("role") or "").lower() == role.lower():
+            return f["id"]
+    raise RuntimeError(f"No folder with role '{role}' found for Unipile account {account_id}")
+
 
 async def _resolve_inbox_folder_provider_id(account_id: str) -> str:
     """Resolve the inbox folder provider_id for a Unipile account by looking up the folder with role 'inbox'.
