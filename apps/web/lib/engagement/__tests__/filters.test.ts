@@ -341,3 +341,115 @@ describe("applyCooldown", () => {
     expect(result.map((c) => c.userId)).toEqual(["u2", "u3"]);
   });
 });
+
+// ============================================================================
+// FULL PIPELINE SCENARIO
+// ============================================================================
+
+describe("full pipeline: filters -> prioritize -> cooldown", () => {
+  it("given 6 users at different lifecycle stages, sends exactly the right email to each", () => {
+    // -- Alice: signed up 25h ago, never finished onboarding (missing phone).
+    //    No prior emails sent. Expect: onboarding_incomplete_1h (highest priority P1)
+    const alice = makeUser({ createdAt: hoursAgo(25) });
+    const aliceSettings = makeSettings(alice.userId, { phone: null });
+
+    // -- Bob: completed onboarding 4 days ago, 0 sessions, no schedule.
+    //    Already received "welcome" 2 days ago. Expect: no_call_nudge_24h (next P2)
+    const bob = makeUser();
+    const bobSettings = makeSettings(bob.userId, { updatedAt: daysAgo(4) });
+
+    // -- Carol: completed onboarding 48h ago, had one session 25h ago.
+    //    No prior emails. Eligible for welcome + first_call_followup.
+    //    Expect: welcome (higher priority within P2)
+    const carol = makeUser();
+    const carolSettings = makeSettings(carol.userId, { updatedAt: hoursAgo(48) });
+
+    // -- Dave: completed onboarding, 5 sessions, last session 4 days ago.
+    //    Was emailed "welcome" 10h ago (within cooldown).
+    //    Eligible for reengagement_3d, but blocked by 24h cooldown. Expect: nothing.
+    const dave = makeUser();
+    const daveSettings = makeSettings(dave.userId, { updatedAt: daysAgo(10) });
+
+    // -- Eve: free plan, signed up 15 days ago, 3 sessions, last session 2 days ago.
+    //    No prior emails. Eligible for upgrade_nudge.
+    //    Also eligible for welcome (onboarding 15d ago) -- but welcome is higher priority.
+    //    Expect: welcome
+    const eve = makeUser({ createdAt: daysAgo(15) });
+    const eveSettings = makeSettings(eve.userId, { updatedAt: daysAgo(15) });
+
+    // -- Frank: unconfirmed email, signed up 73h ago, incomplete onboarding.
+    //    Should receive nothing.
+    const frank = makeUser({ createdAt: hoursAgo(73), emailConfirmedAt: null });
+    const frankSettings = makeSettings(frank.userId, { pinHash: null });
+
+    const users = [alice, bob, carol, dave, eve, frank];
+    const settings = [aliceSettings, bobSettings, carolSettings, daveSettings, eveSettings, frankSettings];
+
+    // Everyone except Alice and Frank has a connected email account
+    const emailAccounts = [
+      makeEmailAccount(bob.userId),
+      makeEmailAccount(carol.userId),
+      makeEmailAccount(dave.userId),
+      makeEmailAccount(eve.userId),
+    ];
+
+    const sessions = [
+      makeSession(carol.userId, hoursAgo(25)),
+      makeSession(dave.userId, daysAgo(10)),
+      makeSession(dave.userId, daysAgo(8)),
+      makeSession(dave.userId, daysAgo(6)),
+      makeSession(dave.userId, daysAgo(5)),
+      makeSession(dave.userId, daysAgo(4)),
+      makeSession(eve.userId, daysAgo(10)),
+      makeSession(eve.userId, daysAgo(5)),
+      makeSession(eve.userId, daysAgo(2)),
+    ];
+
+    const subscriptions = [
+      { userId: eve.userId, plan: "free" as const },
+    ];
+
+    const sent = [
+      makeSent(bob.userId, "welcome", daysAgo(2)),
+      makeSent(dave.userId, "welcome", hoursAgo(10)),
+    ];
+
+    // Step 1: Run all filters
+    const incomplete = filterIncompleteOnboarding(users, settings, emailAccounts, sent);
+    const getStarted = filterGetStarted(users, settings, emailAccounts, sessions, sent);
+    const reactivation = filterReactivation(users, settings, emailAccounts, sessions, sent);
+    const upgrade = filterUpgrade(users, settings, emailAccounts, sessions, subscriptions, sent);
+
+    const allCandidates = [...incomplete, ...getStarted, ...reactivation, ...upgrade];
+
+    // Step 2: Prioritize (one email per user)
+    const prioritized = prioritizeCandidates(allCandidates);
+
+    // Step 3: Apply cooldown
+    const final = applyCooldown(prioritized, sent);
+
+    // -- Assert exact results
+    const result = new Map(final.map((c) => [c.userId, c.emailType]));
+
+    // Alice: incomplete onboarding, P1 wins
+    expect(result.get(alice.userId)).toBe("onboarding_incomplete_1h");
+
+    // Bob: welcome already sent, next best is no_call_nudge_24h
+    expect(result.get(bob.userId)).toBe("no_call_nudge_24h");
+
+    // Carol: welcome beats first_call_followup
+    expect(result.get(carol.userId)).toBe("welcome");
+
+    // Dave: blocked by cooldown (emailed 10h ago)
+    expect(result.has(dave.userId)).toBe(false);
+
+    // Eve: welcome beats upgrade_nudge
+    expect(result.get(eve.userId)).toBe("welcome");
+
+    // Frank: unconfirmed email, gets nothing
+    expect(result.has(frank.userId)).toBe(false);
+
+    // Exactly 4 emails go out this cron run
+    expect(final).toHaveLength(4);
+  });
+});
