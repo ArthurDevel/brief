@@ -54,8 +54,8 @@ const EMAIL_PRIORITY: EmailType[] = [
 // ============================================================================
 
 /**
- * Checks whether a user has confirmed their email.
- * @param user - the user to check
+ * Checks whether a user has confirmed their email address.
+ * @param user - the user data
  * @returns true if emailConfirmedAt is set
  */
 function isEmailConfirmed(user: UserData): boolean {
@@ -133,8 +133,6 @@ export function filterIncompleteOnboarding(
   const candidates: EmailCandidate[] = [];
 
   for (const user of users) {
-    if (!isEmailConfirmed(user)) continue;
-
     const userSettings = settingsMap.get(user.userId);
 
     // If no settings row exists, user is incomplete (nothing set up yet)

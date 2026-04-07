@@ -33,12 +33,14 @@ import {
 // ============================================================================
 
 /**
- * Fetches all confirmed users from the auth admin API, paginating
+ * Fetches all users from the auth admin API, paginating
  * through results with perPage: 1000.
+ * Includes both confirmed and unconfirmed users so Path 1
+ * (incomplete onboarding) can reach unconfirmed users.
  * @param supabase - service role Supabase client
- * @returns array of UserData for confirmed users
+ * @returns array of UserData for all users with an email
  */
-async function fetchConfirmedUsers(
+async function fetchAllUsers(
   supabase: SupabaseClient
 ): Promise<UserData[]> {
   const users: UserData[] = [];
@@ -55,13 +57,12 @@ async function fetchConfirmedUsers(
     }
 
     for (const user of data.users) {
-      // Only include users with confirmed emails
-      if (user.email_confirmed_at && user.email) {
+      if (user.email) {
         users.push({
           userId: user.id,
           email: user.email,
           createdAt: user.created_at,
-          emailConfirmedAt: user.email_confirmed_at,
+          emailConfirmedAt: user.email_confirmed_at ?? null,
         });
       }
     }
@@ -211,7 +212,7 @@ export async function findAllCandidates(
 ): Promise<EmailCandidate[]> {
   // Step 1: Fetch all data in parallel
   const [users, settings, emailAccounts, sessions, subscriptions, sent] = await Promise.all([
-    fetchConfirmedUsers(supabase),
+    fetchAllUsers(supabase),
     fetchUserSettings(supabase),
     fetchEmailAccounts(supabase),
     fetchSessions(supabase),

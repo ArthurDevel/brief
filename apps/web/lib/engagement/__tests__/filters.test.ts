@@ -121,7 +121,7 @@ describe("filterIncompleteOnboarding", () => {
     const userC = makeUser({ createdAt: hoursAgo(73) });
     const settingsC = makeSettings(userC.userId);
 
-    // User with unconfirmed email -- should not appear
+    // User with unconfirmed email -- Path 1 does not filter on email confirmation
     const userD = makeUser({ createdAt: hoursAgo(73), emailConfirmedAt: null });
     const settingsD = makeSettings(userD.userId, { pinHash: null });
 
@@ -148,8 +148,12 @@ describe("filterIncompleteOnboarding", () => {
     expect(types).toContain(`${userA.userId}:onboarding_incomplete_24h`);
     expect(types).toContain(`${userA.userId}:onboarding_incomplete_72h`);
     expect(types).not.toContain(`${userA.userId}:onboarding_incomplete_1h`);
-    // userB, userC, userD should not appear
-    expect(result.every((c) => c.userId === userA.userId)).toBe(true);
+    // userD (unconfirmed email) gets all 3 incomplete emails (Path 1 ignores email confirmation)
+    expect(types).toContain(`${userD.userId}:onboarding_incomplete_1h`);
+    expect(types).toContain(`${userD.userId}:onboarding_incomplete_24h`);
+    expect(types).toContain(`${userD.userId}:onboarding_incomplete_72h`);
+    // userB (too early) and userC (complete) should not appear
+    expect(result.every((c) => c.userId === userA.userId || c.userId === userD.userId)).toBe(true);
   });
 });
 
@@ -378,7 +382,8 @@ describe("full pipeline: filters -> prioritize -> cooldown", () => {
     const eveSettings = makeSettings(eve.userId, { updatedAt: daysAgo(15) });
 
     // -- Frank: unconfirmed email, signed up 73h ago, incomplete onboarding.
-    //    Should receive nothing.
+    //    Path 1 does not require email confirmation, so he gets incomplete emails.
+    //    Expect: onboarding_incomplete_1h (highest priority P1)
     const frank = makeUser({ createdAt: hoursAgo(73), emailConfirmedAt: null });
     const frankSettings = makeSettings(frank.userId, { pinHash: null });
 
@@ -446,10 +451,10 @@ describe("full pipeline: filters -> prioritize -> cooldown", () => {
     // Eve: welcome beats upgrade_nudge
     expect(result.get(eve.userId)).toBe("welcome");
 
-    // Frank: unconfirmed email, gets nothing
-    expect(result.has(frank.userId)).toBe(false);
+    // Frank: unconfirmed email but Path 1 still sends incomplete onboarding
+    expect(result.get(frank.userId)).toBe("onboarding_incomplete_1h");
 
-    // Exactly 4 emails go out this cron run
-    expect(final).toHaveLength(4);
+    // Exactly 5 emails go out this cron run
+    expect(final).toHaveLength(5);
   });
 });
