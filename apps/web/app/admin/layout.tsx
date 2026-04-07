@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase/client";
-import { Mail, Menu, User, LogOut, ArrowLeft } from "lucide-react";
+import { Mail, Eye, Menu, User, LogOut, ArrowLeft } from "lucide-react";
 
 // ============================================================================
 // CONSTANTS
@@ -25,6 +25,7 @@ import { Mail, Menu, User, LogOut, ArrowLeft } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/admin/transactional", label: "Transactional Emails", icon: Mail },
+  { href: "/admin/transactional/preview", label: "Email Preview", icon: Eye },
 ] as const;
 
 // ============================================================================
@@ -33,12 +34,19 @@ const NAV_ITEMS = [
 
 /**
  * Checks if a nav item is active based on the current pathname.
+ * Matches exactly, or as a prefix only if the nav item is the longest match
+ * (so /admin/transactional does not match /admin/transactional/preview).
  * @param href - the nav item's href
  * @param pathname - the current pathname
  * @returns whether the nav item is active
  */
 function isActive(href: string, pathname: string): boolean {
-  return pathname.startsWith(href);
+  if (pathname === href) return true;
+  // Only match as prefix if no other nav item is a better (longer) match
+  if (pathname.startsWith(href + "/")) {
+    return !NAV_ITEMS.some((item) => item.href !== href && pathname.startsWith(item.href) && item.href.length > href.length);
+  }
+  return false;
 }
 
 // ============================================================================
