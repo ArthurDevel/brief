@@ -402,6 +402,7 @@ def test_get_newsletter_summary_returns_summary_and_marks_listened() -> None:
         args={},
         email_ctx=EmailClientContext(
             connection_type="imap_smtp",
+            provider="custom",
             imap_holder={"client": MagicMock(), "config": FAKE_IMAP_CONFIG},
             smtp_config=MagicMock(),
         ),
@@ -454,6 +455,7 @@ def test_set_newsletter_config_merges_partial_update() -> None:
         args={"enabled": True},
         email_ctx=EmailClientContext(
             connection_type="imap_smtp",
+            provider="custom",
             imap_holder={"client": MagicMock(), "config": FAKE_IMAP_CONFIG},
             smtp_config=MagicMock(),
         ),

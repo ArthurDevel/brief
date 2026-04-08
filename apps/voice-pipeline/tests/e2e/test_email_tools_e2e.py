@@ -354,8 +354,8 @@ class TestArchiveEmail:
         wait_until_gone_from_inbox(account, mock_supabase, subject)
 
     def test_archive_undo_restores_to_inbox(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
-        if account.connection_type == "unipile":
-            pytest.xfail("Unipile undo fails: Outlook IDs go stale after move (see #168)")
+        if account.email_ctx.provider == "gmail" and account.connection_type == "unipile":
+            pytest.xfail("Gmail Unipile undo has sync delay (separate from #168)")
 
         subject = f"{TAG} Archive undo test {int(time.time() * 1000)}"
         dispatch("send_email", {
@@ -406,8 +406,8 @@ class TestDeleteEmail:
         wait_until_gone_from_inbox(account, mock_supabase, subject)
 
     def test_delete_undo_restores_to_inbox(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
-        if account.connection_type == "unipile":
-            pytest.xfail("Unipile undo fails: Outlook IDs go stale after move (see #168)")
+        if account.email_ctx.provider == "gmail" and account.connection_type == "unipile":
+            pytest.xfail("Gmail Unipile undo has sync delay (separate from #168)")
 
         subject = f"{TAG} Delete undo test {int(time.time() * 1000)}"
         dispatch("send_email", {
@@ -467,8 +467,8 @@ class TestMoveToFolder:
         wait_until_gone_from_inbox(account, mock_supabase, subject)
 
     def test_move_to_folder_undo_restores_to_inbox(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
-        if account.connection_type == "unipile":
-            pytest.xfail("Unipile undo fails: Outlook IDs go stale after move (see #168)")
+        if account.email_ctx.provider == "gmail" and account.connection_type == "unipile":
+            pytest.xfail("Gmail Unipile undo has sync delay (separate from #168)")
 
         subject = f"{TAG} Move undo test {int(time.time() * 1000)}"
         dispatch("send_email", {
@@ -578,8 +578,8 @@ class TestMoveToUserFolder:
         wait_until_gone_from_inbox(account, mock_supabase, subject)
 
     def test_move_to_user_folder_undo_restores(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
-        if account.connection_type == "unipile":
-            pytest.xfail("Unipile undo fails: Outlook IDs go stale after move (see #168)")
+        if account.email_ctx.provider == "gmail" and account.connection_type == "unipile":
+            pytest.xfail("Gmail Unipile undo has sync delay (separate from #168)")
 
         user_folder = self._find_user_folder(account, mock_supabase)
 

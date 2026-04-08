@@ -791,7 +791,7 @@ def _dispatch_tool_unipile(
         if tool_name == "archive_email":
             source_folder = args.get("source_folder", "INBOX")
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.archive_email(account_id, args["email_id"], source_folder)
+                unipile_client.archive_email(account_id, args["email_id"], source_folder, email_ctx.provider)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"archived": True}, recipe, message_id
@@ -799,7 +799,7 @@ def _dispatch_tool_unipile(
         if tool_name == "delete_email":
             source_folder = args.get("source_folder", "INBOX")
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.delete_email(account_id, args["email_id"], source_folder)
+                unipile_client.delete_email(account_id, args["email_id"], source_folder, email_ctx.provider)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"deleted": True}, recipe, message_id
@@ -839,7 +839,7 @@ def _dispatch_tool_unipile(
                 )
 
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.move_to_folder(account_id, args["email_id"], target_folder, source_folder)
+                unipile_client.move_to_folder(account_id, args["email_id"], target_folder, source_folder, email_ctx.provider)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"moved": True}, recipe, message_id
@@ -930,10 +930,13 @@ def _dispatch_undo(
     if recipe.operation == "unipile_move_email":
         loop = asyncio.new_event_loop()
         try:
-            account_id = recipe.params["account_id"]
-            body = {"folders": recipe.params["to_folders"]}
             loop.run_until_complete(
-                unipile_client._request("PUT", f"/api/v1/emails/{recipe.params['email_id']}", params={"account_id": account_id}, json_body=body)
+                unipile_client.undo_move_email(
+                    account_id=recipe.params["account_id"],
+                    email_id=recipe.params["email_id"],
+                    to_folders=recipe.params["to_folders"],
+                    rfc_message_id=recipe.params.get("rfc_message_id"),
+                )
             )
         finally:
             loop.close()

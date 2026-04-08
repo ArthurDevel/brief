@@ -82,6 +82,7 @@ def _build_gmail_unipile() -> E2EAccount:
         connection_type="unipile",
         email_ctx=EmailClientContext(
             connection_type="unipile",
+            provider="gmail",
             unipile_account_id=account_id,
         ),
     )
@@ -99,6 +100,7 @@ def _build_outlook_unipile() -> E2EAccount:
         connection_type="unipile",
         email_ctx=EmailClientContext(
             connection_type="unipile",
+            provider="outlook",
             unipile_account_id=account_id,
         ),
     )
@@ -127,6 +129,7 @@ def _build_gmail_imap() -> E2EAccount:
         connection_type="imap_smtp",
         email_ctx=EmailClientContext(
             connection_type="imap_smtp",
+            provider="gmail",
             imap_holder={"client": client, "config": imap_config},
             smtp_config=smtp_config,
         ),
@@ -156,6 +159,7 @@ def _build_outlook_imap() -> E2EAccount:
         connection_type="imap_smtp",
         email_ctx=EmailClientContext(
             connection_type="imap_smtp",
+            provider="outlook",
             imap_holder={"client": client, "config": imap_config},
             smtp_config=smtp_config,
         ),

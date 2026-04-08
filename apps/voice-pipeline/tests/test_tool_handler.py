@@ -42,6 +42,7 @@ def _make_email_ctx() -> EmailClientContext:
     """Create a minimal EmailClientContext for testing (custom/imap_smtp)."""
     return EmailClientContext(
         connection_type="imap_smtp",
+        provider="custom",
         imap_holder={"client": MagicMock(), "config": MagicMock()},
         smtp_config=SmtpConfig(host="", port=0, user="", password=""),
     )

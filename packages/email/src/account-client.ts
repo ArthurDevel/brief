@@ -85,15 +85,15 @@ async function createUnipileClient(account: EmailAccountRecord): Promise<EmailAc
     readThread: (emailId: string) => unipile.readThread(accountId, emailId),
     markAsRead: (emailId: string) => unipile.markAsRead(accountId, emailId),
     archiveEmail: (emailId: string, sourceFolder?: string) =>
-      unipile.archiveEmail(accountId, emailId, sourceFolder ?? "INBOX"),
+      unipile.archiveEmail(accountId, emailId, sourceFolder ?? "INBOX", account.provider),
     deleteEmail: (emailId: string, sourceFolder?: string) =>
-      unipile.deleteEmail(accountId, emailId, sourceFolder ?? "INBOX"),
+      unipile.deleteEmail(accountId, emailId, sourceFolder ?? "INBOX", account.provider),
     moveToFolder: async (emailId: string, folder: string, sourceFolder?: string) => {
       await validateFolderExists(folder, () => unipile.listFolders(accountId));
-      return unipile.moveToFolder(accountId, emailId, folder, sourceFolder ?? "INBOX");
+      return unipile.moveToFolder(accountId, emailId, folder, sourceFolder ?? "INBOX", account.provider);
     },
-    moveEmail: (emailId: string, destFolder: string, sourceFolder?: string) =>
-      unipile.moveEmail(accountId, emailId, sourceFolder ?? "INBOX", destFolder),
+    moveEmail: (emailId: string, destFolder: string, sourceFolder?: string, rfcMessageId?: string) =>
+      unipile.moveEmail(accountId, emailId, sourceFolder ?? "INBOX", destFolder, rfcMessageId),
     listFolders: () => unipile.listFolders(accountId),
     resolveSpecialUseFolder: (flag: string) => unipile.resolveSpecialUseFolder(accountId, flag),
     saveDraft: (input) => unipile.saveDraft(accountId, input),
@@ -143,7 +143,7 @@ async function createCustomClient(account: EmailAccountRecord): Promise<EmailAcc
       await validateFolderExists(folder, () => imapClient.listFolders(client));
       return imapClient.moveEmailToFolder(client, emailId, folder, sourceFolder ?? "INBOX");
     },
-    moveEmail: (messageId: string, destFolder: string, sourceFolder?: string) =>
+    moveEmail: (messageId: string, destFolder: string, sourceFolder?: string, _rfcMessageId?: string) =>
       imapClient.moveEmail(client, messageId, sourceFolder ?? "INBOX", destFolder),
     listFolders: () => imapClient.listFolders(client),
     resolveSpecialUseFolder: async (flag: string) => {

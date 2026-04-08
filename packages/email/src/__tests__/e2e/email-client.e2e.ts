@@ -333,7 +333,8 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     // Undo: move it back to INBOX (IMAP uses messageId, Unipile uses emailId)
     const { from, to } = undoRecipe!.params as Record<string, string>;
     const identifier = undoRecipe!.params.emailId ?? undoRecipe!.params.messageId;
-    await client.moveEmail(identifier as string, to, from);
+    const rfcMessageId = undoRecipe!.params.rfcMessageId as string | undefined;
+    await client.moveEmail(identifier as string, to, from, rfcMessageId);
 
     // Verify it is back in inbox
     const found = await findEmailBySubject(client, subject);
@@ -376,7 +377,8 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     // Undo: move it back (IMAP uses messageId, Unipile uses emailId)
     const { from, to } = undoRecipe!.params as Record<string, string>;
     const identifier = undoRecipe!.params.emailId ?? undoRecipe!.params.messageId;
-    await client.moveEmail(identifier as string, to, from);
+    const rfcMessageId = undoRecipe!.params.rfcMessageId as string | undefined;
+    await client.moveEmail(identifier as string, to, from, rfcMessageId);
 
     // Verify it is back
     const found = await findEmailBySubject(client, subject);
@@ -424,7 +426,8 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     // Undo: move it back (IMAP uses messageId, Unipile uses emailId)
     const { from, to } = undoRecipe!.params as Record<string, string>;
     const identifier = undoRecipe!.params.emailId ?? undoRecipe!.params.messageId;
-    await client.moveEmail(identifier as string, to, from);
+    const rfcMessageId = undoRecipe!.params.rfcMessageId as string | undefined;
+    await client.moveEmail(identifier as string, to, from, rfcMessageId);
 
     // Verify it is back
     const found = await findEmailBySubject(client, subject);
@@ -506,7 +509,8 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     // Undo: move it back
     const { from, to } = undoRecipe!.params as Record<string, string>;
     const identifier = undoRecipe!.params.emailId ?? undoRecipe!.params.messageId;
-    await client.moveEmail(identifier as string, to, from);
+    const rfcMessageId = undoRecipe!.params.rfcMessageId as string | undefined;
+    await client.moveEmail(identifier as string, to, from, rfcMessageId);
 
     // Verify it is back
     const found = await findEmailBySubject(client, subject);

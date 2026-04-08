@@ -114,75 +114,112 @@ export async function markAsRead(accountId: string, emailId: string): Promise<vo
  * Archives an email via Unipile by removing it from INBOX.
  * Unipile uses { folders: ["LABEL"] } as an array of strings.
  * Archiving means setting folders to exclude INBOX.
+ * For Outlook, captures the RFC Message-ID before the move so undo can re-find the email.
  * @param accountId - Unipile account ID
  * @param emailId - The Unipile email ID
  * @param sourceFolder - The folder the email is currently in (for undo)
+ * @param provider - Email provider ("gmail", "outlook", or "custom")
  * @returns UndoRecipe to reverse the archive
  */
 export async function archiveEmail(
   accountId: string,
   emailId: string,
-  sourceFolder: string
+  sourceFolder: string,
+  provider: string
 ): Promise<UndoRecipe> {
+  // For Outlook: fetch the stable RFC Message-ID BEFORE moving
+  let rfcMessageId: string | null = null;
+  if (provider === "outlook") {
+    rfcMessageId = await getRfcMessageId(accountId, emailId);
+  }
+
   // Outlook has role "archive"; Gmail does not -- use folders: [] to remove from inbox
   const archiveFolderId = await resolveFolderByRole(accountId, "archive").catch(() => null);
   const folders = archiveFolderId ? [archiveFolderId] : [];
   await unipilePut(`/api/v1/emails/${emailId}?account_id=${accountId}`, { folders });
 
   const inboxFolderId = await resolveFolderByRole(accountId, "inbox");
+  const params: Record<string, string> = {
+    emailId,
+    from: archiveFolderId ?? "archive",
+    to: inboxFolderId,
+  };
+  if (rfcMessageId) {
+    params.rfcMessageId = rfcMessageId;
+  }
+
   return {
     operation: "move_email",
-    params: {
-      emailId,
-      from: archiveFolderId ?? "archive",
-      to: inboxFolderId,
-    },
+    params,
   };
 }
 
 /**
  * Deletes an email via Unipile by moving it to the trash folder.
+ * For Outlook, captures the RFC Message-ID before the move so undo can re-find the email.
  * @param accountId - Unipile account ID
  * @param emailId - The Unipile email ID
  * @param sourceFolder - The folder the email is currently in (for undo)
+ * @param provider - Email provider ("gmail", "outlook", or "custom")
  * @returns UndoRecipe to reverse the deletion
  */
 export async function deleteEmail(
   accountId: string,
   emailId: string,
-  sourceFolder: string
+  sourceFolder: string,
+  provider: string
 ): Promise<UndoRecipe> {
+  // For Outlook: fetch the stable RFC Message-ID BEFORE moving
+  let rfcMessageId: string | null = null;
+  if (provider === "outlook") {
+    rfcMessageId = await getRfcMessageId(accountId, emailId);
+  }
+
   const trashFolderId = await resolveFolderByRole(accountId, "trash");
   const inboxFolderId = await resolveFolderByRole(accountId, "inbox");
   await unipilePut(`/api/v1/emails/${emailId}?account_id=${accountId}`, {
     folders: [trashFolderId],
   });
 
+  const params: Record<string, string> = {
+    emailId,
+    from: trashFolderId,
+    to: inboxFolderId,
+  };
+  if (rfcMessageId) {
+    params.rfcMessageId = rfcMessageId;
+  }
+
   return {
     operation: "move_email",
-    params: {
-      emailId,
-      from: trashFolderId,
-      to: inboxFolderId,
-    },
+    params,
   };
 }
 
 /**
  * Moves an email to a target folder via Unipile.
  * Unipile expects { folders: ["LABEL_NAME"] } as an array of strings.
+ * For Outlook, captures the RFC Message-ID before the move so undo can re-find the email.
  * @param accountId - Unipile account ID
  * @param emailId - The Unipile email ID
  * @param targetFolder - Destination folder
  * @param sourceFolder - Source folder (for undo)
+ * @param provider - Email provider ("gmail", "outlook", or "custom")
  * @returns UndoRecipe to reverse the move
  */
 export async function moveToFolder(
   accountId: string,
   emailId: string,
   targetFolder: string,
-  sourceFolder: string
+  sourceFolder: string,
+  provider: string
 ): Promise<UndoRecipe> {
+  // For Outlook: fetch the stable RFC Message-ID BEFORE moving
+  let rfcMessageId: string | null = null;
+  if (provider === "outlook") {
+    rfcMessageId = await getRfcMessageId(accountId, emailId);
+  }
+
   await unipilePut(`/api/v1/emails/${emailId}?account_id=${accountId}`, {
     folders: [targetFolder],
   });
@@ -192,30 +229,45 @@ export async function moveToFolder(
     ? await resolveFolderByRole(accountId, "inbox")
     : sourceFolder;
 
+  const params: Record<string, string> = {
+    emailId,
+    from: targetFolder,
+    to: resolvedSource,
+  };
+  if (rfcMessageId) {
+    params.rfcMessageId = rfcMessageId;
+  }
+
   return {
     operation: "move_email",
-    params: {
-      emailId,
-      from: targetFolder,
-      to: resolvedSource,
-    },
+    params,
   };
 }
 
 /**
  * Moves an email between folders via Unipile. Used by undo operations.
+ * For Outlook (rfcMessageId provided): re-finds the email by its stable RFC
+ * Message-ID first, since the original ID is stale after a move.
+ * For Gmail (rfcMessageId omitted): uses the original emailId directly.
  * @param accountId - Unipile account ID
  * @param emailId - The Unipile email ID
  * @param from - Source folder (unused -- Unipile replaces all folders)
  * @param to - Destination folder
+ * @param rfcMessageId - RFC Message-ID for Outlook re-find, or undefined for Gmail
  */
 export async function moveEmail(
   accountId: string,
   emailId: string,
   from: string,
-  to: string
+  to: string,
+  rfcMessageId?: string
 ): Promise<void> {
-  await unipilePut(`/api/v1/emails/${emailId}?account_id=${accountId}`, {
+  // Outlook path: re-find the email under its new ID
+  const targetId = rfcMessageId
+    ? await refindEmailByMessageId(accountId, rfcMessageId)
+    : emailId;
+
+  await unipilePut(`/api/v1/emails/${targetId}?account_id=${accountId}`, {
     folders: [to],
   });
 }
@@ -232,7 +284,7 @@ export async function listFolders(accountId: string): Promise<FolderInfo[]> {
   return items
     .filter((f: any) => (f.role as string)?.toLowerCase() !== "inbox")
     .map((f: any) => ({
-      path: (f.id as string) ?? (f.name as string),
+      path: (f.provider_id as string) ?? (f.id as string) ?? (f.name as string),
       name: f.name as string,
       specialUse: mapUnipileRole(f.role as string | undefined),
     }));
@@ -683,9 +735,11 @@ async function fetchRawFolders(accountId: string): Promise<any[]> {
 
 /**
  * Resolves a folder by its Unipile role (e.g. "inbox", "trash", "archive").
+ * Returns the provider_id, which is required by the PUT /emails endpoint
+ * for moves to actually happen on the Exchange/Gmail side.
  * @param accountId - Unipile account ID
  * @param role - Unipile folder role
- * @returns The folder's Unipile ID
+ * @returns The folder's provider_id
  */
 async function resolveFolderByRole(accountId: string, role: string): Promise<string> {
   const items = await fetchRawFolders(accountId);
@@ -693,7 +747,9 @@ async function resolveFolderByRole(accountId: string, role: string): Promise<str
   if (!folder) {
     throw new Error(`No folder with role "${role}" found for Unipile account ${accountId}`);
   }
-  return folder.id as string;
+  // The PUT /emails endpoint needs provider_id (not the Unipile internal id)
+  // for the move to actually happen on the Exchange/Gmail side.
+  return folder.provider_id as string;
 }
 
 /**
@@ -708,6 +764,52 @@ async function resolveInboxFolderProviderId(accountId: string): Promise<string> 
     throw new Error(`No inbox folder found for Unipile account ${accountId}`);
   }
   return inbox.provider_id as string;
+}
+
+/**
+ * Fetches the RFC 2822 Message-ID header for an email.
+ * Must be called BEFORE moving the email, because Outlook invalidates
+ * the old ID after a move.
+ * @param accountId - Unipile account ID
+ * @param emailId - The email's provider_id
+ * @returns The Message-ID header value (e.g. "<abc@example.com>")
+ */
+async function getRfcMessageId(accountId: string, emailId: string): Promise<string> {
+  const data = await unipileGet(
+    `/api/v1/emails/${emailId}?account_id=${accountId}&include_headers=true`
+  );
+
+  const headers = (data.headers ?? []) as Array<{ name: string; value: string }>;
+  for (const header of headers) {
+    if (header.name?.toLowerCase() === "message-id") {
+      return header.value;
+    }
+  }
+
+  throw new Error(`Message-ID header not found for email ${emailId} (account ${accountId})`);
+}
+
+/**
+ * Re-finds an email by its RFC Message-ID after a move.
+ * Outlook changes the Unipile id and provider_id when an email is moved.
+ * This uses the stable RFC Message-ID to locate the email under its new
+ * Unipile internal ID.
+ * @param accountId - Unipile account ID
+ * @param rfcMessageId - The RFC 2822 Message-ID header value
+ * @returns The Unipile internal ID (not provider_id) of the re-found email
+ */
+async function refindEmailByMessageId(accountId: string, rfcMessageId: string): Promise<string> {
+  const encoded = encodeURIComponent(rfcMessageId);
+  const data = await unipileGet(
+    `/api/v1/emails?account_id=${accountId}&message_id=${encoded}`
+  );
+
+  const items = data.items ?? [];
+  if (items.length === 0) {
+    throw new Error(`No email found with Message-ID ${rfcMessageId} (account ${accountId})`);
+  }
+
+  return items[0].id as string;
 }
 
 function mapUnipileRole(role: string | undefined): string | null {
