@@ -16,6 +16,12 @@
 const UNIPILE_API_KEY = process.env.UNIPILE_API_KEY;
 const UNIPILE_DSN = process.env.UNIPILE_DSN;
 
+// OAuth scopes -- restrict permissions to read/modify only, exclude sending.
+// Google: full OAuth URL required (short names return 400).
+// Microsoft: short PascalCase names required (not full Graph URLs).
+const GOOGLE_SCOPES = "https://www.googleapis.com/auth/gmail.modify";
+const MICROSOFT_SCOPES = "Mail.Read,Mail.ReadWrite";
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -93,6 +99,8 @@ export async function createHostedAuthLink(
     notify_url: input.notifyUrl,
     success_redirect_url: input.successRedirectUrl,
     name: input.name,
+    google_scopes: GOOGLE_SCOPES,
+    microsoft_scopes: MICROSOFT_SCOPES,
   };
 
   if (input.type === "reconnect" && input.reconnectAccountId) {
