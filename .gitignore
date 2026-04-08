@@ -12,3 +12,4 @@ package-lock.json
 .claude/settings.local.json
 supabase/.temp/
 .vercel
+.seed-cache.json

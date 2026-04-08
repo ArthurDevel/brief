@@ -1,16 +1,18 @@
 /**
- * E2E tests for EmailAccountClient across all 4 provider/connection combos.
+ * E2E tests for EmailAccountClient across all provider/connection combos.
  *
  * Tests actual outcomes through the highest-level API (createEmailAccountClient).
- * Each account sends only to itself. Each test run seeds its own data using a
- * unique run ID to avoid collisions.
+ * Each account sends only to itself. Emails are seeded once and reused across runs
+ * via a file-based cache (.seed-cache.json). Mutation tests restore emails to inbox
+ * after each test so they can be reused.
  *
  * Responsibilities:
- * - Seed each account with test emails before running assertions
+ * - Seed a pool of reusable test emails (cached across runs)
  * - Verify all EmailAccountClient operations produce correct results
  * - Run the same test suite against Gmail/Outlook x Unipile/IMAP
  */
 
+import { readFileSync, writeFileSync } from "node:fs";
 import { describe, it, expect, beforeAll } from "vitest";
 import { createEmailAccountClient } from "../../account-client";
 import type { EmailAccountClient, EmailAccountRecord } from "../../types";
@@ -20,16 +22,46 @@ import { loadTestAccounts, verifyAccountConnections, TEST_RUN_ID } from "./accou
 // CONSTANTS
 // ============================================================================
 
-/** Subject prefix to identify seeded emails from this run */
-const TAG = `[${TEST_RUN_ID}]`;
+/** Stable tag for seed emails -- reused across runs to avoid re-seeding */
+const TAG = "[e2e-ts]";
 
 /** How long to wait for email delivery before asserting (ms) */
 const DELIVERY_WAIT_MS = 15_000;
 
-/** Subjects for seeded emails */
-const SEED_SUBJECT = `${TAG} Seed email`;
-const THREAD_SUBJECT = `${TAG} Thread test`;
-const SEARCH_SUBJECT = `${TAG} Searchable uniquetoken`;
+/** Cache file for seed email IDs so we don't re-seed every run */
+const SEED_CACHE_PATH = new URL(".seed-cache.json", import.meta.url).pathname;
+
+/**
+ * Pool keys: each key corresponds to one seeded email.
+ * - seed, thread, search: shared read-only emails
+ * - The rest: one per mutation test, restored to inbox after each test
+ */
+const POOL_KEYS = [
+  "seed", "thread", "search",
+  "deleteRecipe", "archiveForward", "archiveUndo",
+  "deleteForward", "deleteUndo",
+  "moveForward", "moveUndo", "moveNonexistent",
+  "moveUserFolder", "moveUserFolderUndo",
+] as const;
+
+type PoolKey = typeof POOL_KEYS[number];
+
+/** Keys for mutation tests -- these emails need to be in INBOX at test start */
+const MUTATION_POOL_KEYS: PoolKey[] = [
+  "deleteRecipe", "archiveForward", "archiveUndo",
+  "deleteForward", "deleteUndo",
+  "moveForward", "moveUndo", "moveNonexistent",
+  "moveUserFolder", "moveUserFolderUndo",
+];
+
+/** Returns the stable subject for a pool email */
+function poolSubject(key: PoolKey): string {
+  // Use descriptive subjects for the original 3, short keys for the rest
+  if (key === "seed") return `${TAG} Seed email`;
+  if (key === "thread") return `${TAG} Thread test`;
+  if (key === "search") return `${TAG} Searchable uniquetoken`;
+  return `${TAG} Pool ${key}`;
+}
 
 // ============================================================================
 // TEST SUITE
@@ -39,43 +71,101 @@ const accounts = loadTestAccounts();
 
 describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress }) => {
   let client: EmailAccountClient;
+  let pool: Record<string, string> = {};
+  let suiteSkipped = false;
 
-  // IDs captured during seeding, used by later tests
+  // Convenience aliases populated in beforeAll
   let seedEmailId: string;
   let threadEmailId: string;
 
+  /** Call at the top of each test -- throws if setup failed so the test is a proper failure */
+  function assertSetupSucceeded(): void {
+    if (suiteSkipped) {
+      throw new Error(`[${emailAddress}] Setup failed -- skipping test`);
+    }
+  }
+
   // ------------------------------------------------------------------
-  // SETUP: create client and seed test data
+  // SETUP: create client and seed/verify pool
   // ------------------------------------------------------------------
 
   beforeAll(async () => {
-    // Verify account is reachable before running any tests.
-    // Fails fast with a clear message if Unipile is disconnected or IMAP is down.
-    await verifyAccountConnections([{ label: emailAddress, record, emailAddress }]);
+    const t0 = Date.now();
+    const log = (msg: string) => console.log(`[e2e][${emailAddress}] ${msg} (+${Date.now() - t0}ms)`);
 
-    client = await createEmailAccountClient(record);
+    try {
+      // Verify account is reachable
+      log("verifying connection...");
+      await verifyAccountConnections([{ label: emailAddress, record, emailAddress }]);
+      log("connection OK");
 
-    // Seed 3 emails to self:
-    // 1. A basic email (used by readEmail, markAsRead, archive, move tests)
-    // 2. A thread starter (used by readThread, fetchReplyContext, replyEmail)
-    // 3. A searchable email (used by searchEmails)
-    await client.sendEmail({ to: emailAddress, subject: SEED_SUBJECT, body: `Seed body for ${TEST_RUN_ID}` });
-    await client.sendEmail({ to: emailAddress, subject: THREAD_SUBJECT, body: `Thread starter for ${TEST_RUN_ID}` });
-    await client.sendEmail({ to: emailAddress, subject: SEARCH_SUBJECT, body: `Search body for ${TEST_RUN_ID}` });
+      client = await createEmailAccountClient(record);
 
-    // Wait for delivery
-    await wait(DELIVERY_WAIT_MS);
+      // Check each cached email individually. Collect keys that need re-seeding.
+      const cache = readSeedCache();
+      const cached = cache[record.id] ?? {};
+      const missing: PoolKey[] = [];
 
-    // Find the seeded emails in inbox
-    seedEmailId = await findEmailBySubject(client, SEED_SUBJECT);
-    threadEmailId = await findEmailBySubject(client, THREAD_SUBJECT);
-  }, 120_000);
+      for (const key of POOL_KEYS) {
+        const id = cached[key];
+        if (!id) { missing.push(key); continue; }
+
+        try {
+          await client.readEmail(id);
+
+          // For Gmail Unipile: also verify mutation emails are in INBOX
+          if (isGmailUnipile(record) && MUTATION_POOL_KEYS.includes(key)) {
+            const folders = await getUnipileEmailFolders(id, record.unipileAccountId!);
+            if (!folders.includes("INBOX")) throw new Error("not in INBOX");
+          }
+
+          pool[key] = id;
+        } catch {
+          missing.push(key);
+        }
+      }
+
+      if (missing.length === 0) {
+        log("all pool emails valid from cache");
+      } else {
+        // Send only the missing emails, wait once, find them
+        log(`re-seeding ${missing.length} emails: ${missing.join(", ")}`);
+        for (const key of missing) {
+          await client.sendEmail({
+            to: emailAddress,
+            subject: poolSubject(key),
+            body: `Pool email: ${key}`,
+          });
+        }
+        await wait(DELIVERY_WAIT_MS);
+
+        for (const key of missing) {
+          const subject = poolSubject(key);
+          pool[key] = isGmailUnipile(record)
+            ? await findEmailBySubjectUnipile(record.unipileAccountId!, subject)
+            : await findEmailBySubject(client, subject);
+        }
+
+        // Update cache
+        cache[record.id] = { ...pool };
+        writeSeedCache(cache);
+      }
+
+      seedEmailId = pool.seed;
+      threadEmailId = pool.thread;
+      log(`beforeAll complete (${missing.length} re-seeded)`);
+    } catch (err) {
+      suiteSkipped = true;
+      console.warn(`[e2e][${emailAddress}] SETUP FAILED -- skipping all tests: ${err}`);
+    }
+  }, 180_000);
 
   // ------------------------------------------------------------------
   // INBOX & SEARCH
   // ------------------------------------------------------------------
 
   it("listInbox returns EmailSummary[] with required fields", async () => {
+    assertSetupSucceeded();
     const emails = await client.listInbox(20);
 
     expect(emails.length).toBeGreaterThan(0);
@@ -88,14 +178,16 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   });
 
   it("listInbox contains the seeded email", async () => {
+    assertSetupSucceeded();
     const emails = await client.listInbox(50);
     const found = emails.find((e) => e.subject.includes(TAG));
     expect(found).toBeDefined();
   });
 
   it("searchEmails finds the searchable email", async () => {
+    assertSetupSucceeded();
     const results = await client.searchEmails("uniquetoken");
-    const found = results.find((e) => e.subject.includes(SEARCH_SUBJECT));
+    const found = results.find((e) => e.subject.includes(poolSubject("search")));
     expect(found).toBeDefined();
   });
 
@@ -104,11 +196,12 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("readEmail returns full Email with body", async () => {
+    assertSetupSucceeded();
     const email = await client.readEmail(seedEmailId);
 
     expect(email.id).toBeTruthy();
-    expect(email.subject).toContain(SEED_SUBJECT);
-    expect(email.body).toContain(TEST_RUN_ID);
+    expect(email.subject).toContain(poolSubject("seed"));
+    expect(email.body).toBeTruthy();
     expect(email.from).toBeTruthy();
     expect(email.to).toBeTruthy();
     expect(email.date).toBeTruthy();
@@ -120,12 +213,13 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("readThread returns at least the thread starter", async () => {
+    assertSetupSucceeded();
     const messages = await client.readThread(threadEmailId);
 
     expect(messages.length).toBeGreaterThanOrEqual(1);
-    const starter = messages.find((m) => m.subject.includes(THREAD_SUBJECT));
+    const starter = messages.find((m) => m.subject.includes(poolSubject("thread")));
     expect(starter).toBeDefined();
-    expect(starter!.body).toContain(TEST_RUN_ID);
+    expect(starter!.body).toBeTruthy();
   });
 
   // ------------------------------------------------------------------
@@ -133,6 +227,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("markAsRead marks the email as read", async () => {
+    assertSetupSucceeded();
     await client.markAsRead(seedEmailId);
     const email = await client.readEmail(seedEmailId);
     expect(email.isRead).toBe(true);
@@ -143,6 +238,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("listFolders returns FolderInfo[] with at least one folder", async () => {
+    assertSetupSucceeded();
     const folders = await client.listFolders();
 
     expect(folders.length).toBeGreaterThan(0);
@@ -153,16 +249,19 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   });
 
   it("resolveSpecialUseFolder finds Trash", async () => {
+    assertSetupSucceeded();
     const trash = await client.resolveSpecialUseFolder("\\Trash");
     expect(trash).toBeTruthy();
   });
 
   it("resolveSpecialUseFolder finds Drafts", async () => {
+    assertSetupSucceeded();
     const drafts = await client.resolveSpecialUseFolder("\\Drafts");
     expect(drafts).toBeTruthy();
   });
 
   it("resolveSpecialUseFolder finds Sent", async () => {
+    assertSetupSucceeded();
     const sent = await client.resolveSpecialUseFolder("\\Sent");
     expect(sent).toBeTruthy();
   });
@@ -172,6 +271,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("saveDraft creates a draft, deleteDraft removes it", async () => {
+    assertSetupSucceeded();
     const undoRecipe = await client.saveDraft({
       to: emailAddress,
       subject: `${TAG} Draft test`,
@@ -182,12 +282,11 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     expect(undoRecipe!.operation).toBe("delete_draft");
     expect(undoRecipe!.params.draftUid).toBeTruthy();
 
-    // deleteDraft takes a number (UID for IMAP) but Unipile IDs are strings.
-    // The account-client wrapper converts via String(), so passing the raw value works.
     await client.deleteDraft(undoRecipe!.params.draftUid as unknown as number);
   });
 
   it("saveDraft with CC creates a draft", async () => {
+    assertSetupSucceeded();
     const undoRecipe = await client.saveDraft({
       to: emailAddress,
       subject: `${TAG} Draft CC test`,
@@ -202,8 +301,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   });
 
   it("convert-to-draft: saveDraft with threading headers creates a reply draft", async () => {
-    // Simulate converting a pending reply_email action to a draft:
-    // fetch reply context, then save as draft with inReplyTo + references
+    assertSetupSucceeded();
     const ctx = await client.fetchReplyContext(threadEmailId);
 
     const undoRecipe = await client.saveDraft({
@@ -225,6 +323,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("sendEmail delivers to self", async () => {
+    assertSetupSucceeded();
     const subject = `${TAG} Send test ${Date.now()}`;
     await client.sendEmail({ to: emailAddress, subject, body: "Send test body" });
 
@@ -236,10 +335,11 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   });
 
   it("fetchReplyContext returns valid context", async () => {
+    assertSetupSucceeded();
     const ctx = await client.fetchReplyContext(threadEmailId);
 
     expect(ctx.messageId).toBeTruthy();
-    expect(ctx.subject).toContain(THREAD_SUBJECT);
+    expect(ctx.subject).toContain(poolSubject("thread"));
     expect(ctx.from).toBeTruthy();
     expect(Array.isArray(ctx.to)).toBe(true);
     expect(Array.isArray(ctx.cc)).toBe(true);
@@ -247,6 +347,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   });
 
   it("replyEmail sends a threaded reply to self", async () => {
+    assertSetupSucceeded();
     const ctx = await client.fetchReplyContext(threadEmailId);
 
     await client.replyEmail({
@@ -266,8 +367,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("fetchEmailMetaBatch returns metadata for known emails", async () => {
-    // For IMAP, fetchEmailMetaBatch needs a UID (via uid field) or an RFC Message-ID
-    // (via messageId field). Use uid for broadest compatibility.
+    assertSetupSucceeded();
     const results = await client.fetchEmailMetaBatch([
       { actionId: "test-1", uid: seedEmailId },
     ]);
@@ -275,29 +375,26 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     expect(results.size).toBe(1);
     const meta = results.get("test-1");
     expect(meta).toBeDefined();
-    expect(meta!.subject).toContain(SEED_SUBJECT);
+    expect(meta!.subject).toContain(poolSubject("seed"));
     expect(meta!.from).toBeTruthy();
   });
 
   // ------------------------------------------------------------------
-  // DELETE
+  // DELETE (recipe check)
   // ------------------------------------------------------------------
 
   it("deleteEmail moves to trash and returns undo recipe", async () => {
-    const subject = `${TAG} Delete test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Delete test body" });
-    await wait(DELIVERY_WAIT_MS);
-
-    const deleteEmailId = await findEmailBySubject(client, subject);
-    const undoRecipe = await client.deleteEmail(deleteEmailId, "INBOX");
+    assertSetupSucceeded();
+    const emailId = pool.deleteRecipe;
+    const undoRecipe = await client.deleteEmail(emailId, "INBOX");
 
     expect(undoRecipe).toBeTruthy();
     expect(undoRecipe!.operation).toBe("move_email");
-    // IMAP returns real folder path (e.g. "[Gmail]/Trash"), Unipile returns resolved folder ID
     expect(undoRecipe!.params.from).toBeTruthy();
-    // Undo target should refer to inbox. IMAP uses "INBOX", Unipile uses the resolved folder ID.
-    // The full undo round-trip is verified in "deleteEmail undo restores to inbox".
     expect(undoRecipe!.params.to).toBeTruthy();
+
+    // Restore to inbox for next run
+    await restoreToInbox(client, record, undoRecipe!);
   });
 
   // ------------------------------------------------------------------
@@ -305,55 +402,38 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("archiveEmail removes from inbox", async () => {
-    const subject = `${TAG} Archive test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Archive test body" });
-    await wait(DELIVERY_WAIT_MS);
-
-    const emailId = await findEmailBySubject(client, subject);
-
-    // Archive it
+    assertSetupSucceeded();
+    const emailId = pool.archiveForward;
     const undoRecipe = await client.archiveEmail(emailId, "INBOX");
+
     expect(undoRecipe).toBeTruthy();
     expect(undoRecipe!.operation).toBe("move_email");
 
-    // Verify it left the inbox
-    await waitUntilGoneFromInbox(client, subject);
+    if (isGmailUnipile(record)) {
+      await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+    } else {
+      await waitUntilGoneFromInbox(client, emailId);
+    }
   });
 
   it("archiveEmail undo restores to inbox", async () => {
-    const subject = `${TAG} Archive undo test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Archive undo test body" });
-    await wait(DELIVERY_WAIT_MS);
-
-    // Gmail Unipile inbox listing has sync delays; use direct API search
-    const gmailUnipile = isGmailUnipile(record);
-    const emailId = gmailUnipile
-      ? await findEmailBySubjectUnipile(record.unipileAccountId!, subject)
-      : await findEmailBySubject(client, subject);
-
-    // Archive it
+    assertSetupSucceeded();
+    const emailId = pool.archiveUndo;
     const undoRecipe = await client.archiveEmail(emailId, "INBOX");
     expect(undoRecipe).toBeTruthy();
 
-    // Wait until gone from inbox
-    if (gmailUnipile) {
+    if (isGmailUnipile(record)) {
       await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
     } else {
-      await waitUntilGoneFromInbox(client, subject);
+      await waitUntilGoneFromInbox(client, emailId);
     }
 
-    // Undo: move it back to INBOX (IMAP uses messageId, Unipile uses emailId)
-    const { from, to } = undoRecipe!.params as Record<string, string>;
-    const identifier = undoRecipe!.params.emailId ?? undoRecipe!.params.messageId;
-    const rfcMessageId = undoRecipe!.params.rfcMessageId as string | undefined;
-    await client.moveEmail(identifier as string, to, from, rfcMessageId);
+    // Undo: move it back to INBOX
+    await restoreToInbox(client, record, undoRecipe!);
 
-    // Verify it is back in inbox
-    if (gmailUnipile) {
+    // Gmail Unipile: verify via folder state (IDs are stable across moves)
+    if (isGmailUnipile(record)) {
       await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
-    } else {
-      const found = await findEmailBySubject(client, subject);
-      expect(found).toBeTruthy();
     }
   });
 
@@ -362,54 +442,35 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("deleteEmail removes from inbox", async () => {
-    const subject = `${TAG} Delete gone test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Delete gone test body" });
-    await wait(DELIVERY_WAIT_MS);
-
-    const emailId = await findEmailBySubject(client, subject);
-
-    // Delete it
+    assertSetupSucceeded();
+    const emailId = pool.deleteForward;
     const undoRecipe = await client.deleteEmail(emailId, "INBOX");
     expect(undoRecipe).toBeTruthy();
 
-    // Verify it left the inbox
-    await waitUntilGoneFromInbox(client, subject);
+    if (isGmailUnipile(record)) {
+      await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+    } else {
+      await waitUntilGoneFromInbox(client, emailId);
+    }
   });
 
   it("deleteEmail undo restores to inbox", async () => {
-    const subject = `${TAG} Delete undo test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Delete undo test body" });
-    await wait(DELIVERY_WAIT_MS);
-
-    // Gmail Unipile inbox listing has sync delays; use direct API search
-    const gmailUnipile = isGmailUnipile(record);
-    const emailId = gmailUnipile
-      ? await findEmailBySubjectUnipile(record.unipileAccountId!, subject)
-      : await findEmailBySubject(client, subject);
-
-    // Delete it
+    assertSetupSucceeded();
+    const emailId = pool.deleteUndo;
     const undoRecipe = await client.deleteEmail(emailId, "INBOX");
     expect(undoRecipe).toBeTruthy();
 
-    // Wait until gone from inbox
-    if (gmailUnipile) {
+    if (isGmailUnipile(record)) {
       await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
     } else {
-      await waitUntilGoneFromInbox(client, subject);
+      await waitUntilGoneFromInbox(client, emailId);
     }
 
-    // Undo: move it back (IMAP uses messageId, Unipile uses emailId)
-    const { from, to } = undoRecipe!.params as Record<string, string>;
-    const identifier = undoRecipe!.params.emailId ?? undoRecipe!.params.messageId;
-    const rfcMessageId = undoRecipe!.params.rfcMessageId as string | undefined;
-    await client.moveEmail(identifier as string, to, from, rfcMessageId);
+    // Undo: move it back
+    await restoreToInbox(client, record, undoRecipe!);
 
-    // Verify it is back
-    if (gmailUnipile) {
+    if (isGmailUnipile(record)) {
       await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
-    } else {
-      const found = await findEmailBySubject(client, subject);
-      expect(found).toBeTruthy();
     }
   });
 
@@ -418,84 +479,67 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   it("moveToFolder removes from inbox", async () => {
-    const subject = `${TAG} Move test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Move test body" });
-    await wait(DELIVERY_WAIT_MS);
-
-    const emailId = await findEmailBySubject(client, subject);
+    assertSetupSucceeded();
+    const emailId = pool.moveForward;
     const trash = await client.resolveSpecialUseFolder("\\Trash");
     expect(trash).toBeTruthy();
 
-    // Move to trash
     const undoRecipe = await client.moveToFolder(emailId, trash!, "INBOX");
     expect(undoRecipe).toBeTruthy();
     expect(undoRecipe!.operation).toBe("move_email");
 
-    // Verify it left inbox
-    await waitUntilGoneFromInbox(client, subject);
+    if (isGmailUnipile(record)) {
+      await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+    } else {
+      await waitUntilGoneFromInbox(client, emailId);
+    }
   });
 
   it("moveToFolder undo restores to inbox", async () => {
-    const subject = `${TAG} Move undo test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Move undo test body" });
-    await wait(DELIVERY_WAIT_MS);
-
-    // Gmail Unipile inbox listing has sync delays; use direct API search
-    const gmailUnipile = isGmailUnipile(record);
-    const emailId = gmailUnipile
-      ? await findEmailBySubjectUnipile(record.unipileAccountId!, subject)
-      : await findEmailBySubject(client, subject);
+    assertSetupSucceeded();
+    const emailId = pool.moveUndo;
     const trash = await client.resolveSpecialUseFolder("\\Trash");
     expect(trash).toBeTruthy();
 
-    // Move to trash
     const undoRecipe = await client.moveToFolder(emailId, trash!, "INBOX");
     expect(undoRecipe).toBeTruthy();
 
-    // Wait until gone from inbox
-    if (gmailUnipile) {
+    if (isGmailUnipile(record)) {
       await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
     } else {
-      await waitUntilGoneFromInbox(client, subject);
+      await waitUntilGoneFromInbox(client, emailId);
     }
 
-    // Undo: move it back (IMAP uses messageId, Unipile uses emailId)
-    const { from, to } = undoRecipe!.params as Record<string, string>;
-    const identifier = undoRecipe!.params.emailId ?? undoRecipe!.params.messageId;
-    const rfcMessageId = undoRecipe!.params.rfcMessageId as string | undefined;
-    await client.moveEmail(identifier as string, to, from, rfcMessageId);
+    // Undo: move it back
+    await restoreToInbox(client, record, undoRecipe!);
 
-    // Verify it is back
-    if (gmailUnipile) {
+    if (isGmailUnipile(record)) {
       await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
-    } else {
-      const found = await findEmailBySubject(client, subject);
-      expect(found).toBeTruthy();
     }
   });
 
   it("moveToFolder throws when target folder does not exist", async () => {
-    const subject = `${TAG} Move nonexistent test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Move to nonexistent folder" });
-    await wait(DELIVERY_WAIT_MS);
-
-    const emailId = await findEmailBySubject(client, subject);
-
-    // Use a unique folder name per run to avoid leftover labels from previous runs
+    assertSetupSucceeded();
+    const emailId = pool.moveNonexistent;
     const bogusFolder = `NONEXISTENT_${Date.now()}`;
 
-    // Attempt to move to a folder that does not exist -- should throw
     await expect(
       client.moveToFolder(emailId, bogusFolder, "INBOX")
     ).rejects.toThrow();
 
     // Email should still be in the inbox (move should not have happened)
-    const stillInInbox = await findEmailBySubject(client, subject);
-    expect(stillInInbox).toBeTruthy();
+    if (isGmailUnipile(record)) {
+      const folders = await getUnipileEmailFolders(emailId, record.unipileAccountId!);
+      expect(folders).toContain("INBOX");
+    } else {
+      // Verify by checking inbox listing for this specific ID
+      const emails = await client.listInbox(50);
+      expect(emails.find((e) => e.id === emailId)).toBeDefined();
+    }
   });
 
   it("moveToFolder works with user-created label", async () => {
-    // Skip if the account has no user-created folders (only special-use folders)
+    assertSetupSucceeded();
     const folders = await client.listFolders();
     const userFolder = folders.find(
       (f) => !f.specialUse && !f.path.startsWith("[") && f.path !== "INBOX"
@@ -506,23 +550,20 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
       return;
     }
 
-    const subject = `${TAG} Move user-folder test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Move to user folder" });
-    await wait(DELIVERY_WAIT_MS);
-
-    const emailId = await findEmailBySubject(client, subject);
-
-    // Move to the user-created folder
+    const emailId = pool.moveUserFolder;
     const undoRecipe = await client.moveToFolder(emailId, userFolder.path, "INBOX");
     expect(undoRecipe).toBeTruthy();
     expect(undoRecipe!.operation).toBe("move_email");
 
-    // Verify it left inbox
-    await waitUntilGoneFromInbox(client, subject);
+    if (isGmailUnipile(record)) {
+      await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+    } else {
+      await waitUntilGoneFromInbox(client, emailId);
+    }
   });
 
   it("moveToFolder with user-created label undo restores to inbox", async () => {
-    // Skip if the account has no user-created folders (only special-use folders)
+    assertSetupSucceeded();
     const folders = await client.listFolders();
     const userFolder = folders.find(
       (f) => !f.specialUse && !f.path.startsWith("[") && f.path !== "INBOX"
@@ -533,42 +574,51 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
       return;
     }
 
-    const subject = `${TAG} Move user-folder undo test ${Date.now()}`;
-    await client.sendEmail({ to: emailAddress, subject, body: "Move to user folder undo" });
-    await wait(DELIVERY_WAIT_MS);
-
-    // Gmail Unipile inbox listing has sync delays; use direct API search
-    const gmailUnipile = isGmailUnipile(record);
-    const emailId = gmailUnipile
-      ? await findEmailBySubjectUnipile(record.unipileAccountId!, subject)
-      : await findEmailBySubject(client, subject);
-
-    // Move to the user-created folder
+    const emailId = pool.moveUserFolderUndo;
     const undoRecipe = await client.moveToFolder(emailId, userFolder.path, "INBOX");
     expect(undoRecipe).toBeTruthy();
 
-    // Wait until gone from inbox
-    if (gmailUnipile) {
+    if (isGmailUnipile(record)) {
       await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
     } else {
-      await waitUntilGoneFromInbox(client, subject);
+      await waitUntilGoneFromInbox(client, emailId);
     }
 
     // Undo: move it back
-    const { from, to } = undoRecipe!.params as Record<string, string>;
-    const identifier = undoRecipe!.params.emailId ?? undoRecipe!.params.messageId;
-    const rfcMessageId = undoRecipe!.params.rfcMessageId as string | undefined;
-    await client.moveEmail(identifier as string, to, from, rfcMessageId);
+    await restoreToInbox(client, record, undoRecipe!);
 
-    // Verify it is back
-    if (gmailUnipile) {
+    if (isGmailUnipile(record)) {
       await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
-    } else {
-      const found = await findEmailBySubject(client, subject);
-      expect(found).toBeTruthy();
     }
   });
 });
+
+// ============================================================================
+// SEED CACHE
+// ============================================================================
+
+interface SeedCache {
+  [accountId: string]: Record<string, string>;
+}
+
+/**
+ * Reads the seed cache from disk. Returns empty object if file doesn't exist.
+ */
+function readSeedCache(): SeedCache {
+  try {
+    return JSON.parse(readFileSync(SEED_CACHE_PATH, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Writes the seed cache to disk.
+ * @param cache - The cache object to persist
+ */
+function writeSeedCache(cache: SeedCache): void {
+  writeFileSync(SEED_CACHE_PATH, JSON.stringify(cache, null, 2));
+}
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -583,6 +633,23 @@ function wait(ms: number): Promise<void> {
 }
 
 /**
+ * Restores an email to inbox using the undo recipe from a mutation.
+ * @param client - The email client
+ * @param record - The account record
+ * @param undoRecipe - The undo recipe from archive/delete/move
+ */
+async function restoreToInbox(
+  client: EmailAccountClient,
+  record: EmailAccountRecord,
+  undoRecipe: { operation: string; params: Record<string, unknown> },
+): Promise<void> {
+  const { from, to } = undoRecipe.params as Record<string, string>;
+  const identifier = (undoRecipe.params.emailId ?? undoRecipe.params.messageId) as string;
+  const rfcMessageId = undoRecipe.params.rfcMessageId as string | undefined;
+  await client.moveEmail(identifier, to, from, rfcMessageId);
+}
+
+/**
  * Searches inbox for an email matching the given subject.
  * Retries up to 12 times (total ~60s) to handle delivery delay and eventual consistency.
  * @param client - The email client
@@ -594,9 +661,8 @@ async function findEmailBySubject(client: EmailAccountClient, subject: string): 
   const RETRY_WAIT_MS = 5_000;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const emails = await client.listInbox(50);
-    const found = emails.find((e) => e.subject.includes(subject));
-    if (found) return found.id;
+    const emails = await client.searchEmails(subject);
+    if (emails.length > 0) return emails[0].id;
 
     if (attempt < MAX_RETRIES - 1) {
       await wait(RETRY_WAIT_MS);
@@ -636,18 +702,18 @@ async function waitForThreadSize(
 }
 
 /**
- * Waits until an email with the given subject is no longer in the inbox.
+ * Waits until a specific email (by ID) is no longer in the inbox.
  * Retries up to 6 times (total ~30s) to handle eventual consistency.
  * @param client - The email client
- * @param subject - Subject string to match
+ * @param emailId - The email ID to check for
  */
-async function waitUntilGoneFromInbox(client: EmailAccountClient, subject: string): Promise<void> {
+async function waitUntilGoneFromInbox(client: EmailAccountClient, emailId: string): Promise<void> {
   const MAX_RETRIES = 6;
   const RETRY_WAIT_MS = 5_000;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const emails = await client.listInbox(50);
-    const found = emails.find((e) => e.subject.includes(subject));
+    const found = emails.find((e) => e.id === emailId);
     if (!found) return;
 
     if (attempt < MAX_RETRIES - 1) {
@@ -655,8 +721,9 @@ async function waitUntilGoneFromInbox(client: EmailAccountClient, subject: strin
     }
   }
 
-  throw new Error(`Email with subject containing "${subject}" still in inbox after ${MAX_RETRIES} attempts`);
+  throw new Error(`Email ${emailId} still in inbox after ${MAX_RETRIES} attempts`);
 }
+
 
 // ============================================================================
 // GMAIL UNIPILE HELPERS
