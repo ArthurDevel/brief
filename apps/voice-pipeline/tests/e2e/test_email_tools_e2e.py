@@ -14,6 +14,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from typing import Any
@@ -22,6 +23,7 @@ from unittest.mock import MagicMock
 import pytest  # type: ignore[import-untyped]
 
 from src.tools.handlers import _dispatch_tool, _dispatch_undo, UndoRecipe
+from src.tools.unipile_client import _request as unipile_request
 from tests.e2e.conftest import (
     E2EAccount,
     TEST_RUN_ID,
@@ -56,6 +58,15 @@ GMAIL_SYSTEM_NAMES = {
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def _is_gmail_unipile(account: E2EAccount) -> bool:
+    """Check if this is a Gmail account connected via Unipile.
+
+    Gmail Unipile has severe inbox listing sync delays, so these accounts
+    need alternative verification methods that check folder state directly.
+    """
+    return account.connection_type == "unipile" and account.email_ctx.provider == "gmail"
+
 
 def dispatch(
     tool_name: str,
@@ -141,6 +152,113 @@ def wait_until_gone_from_inbox(
 
     raise RuntimeError(
         f'Email with subject containing "{subject}" still in inbox after {MAX_RETRIES} attempts'
+    )
+
+
+def find_email_id_by_subject_unipile(
+    account: E2EAccount,
+    subject: str,
+) -> str:
+    """Find an email by subject via the Unipile API without folder filter.
+
+    The Unipile inbox listing (GET /emails?folder=INBOX) has severe sync delays
+    for Gmail. This helper lists all emails without a folder filter and matches
+    by subject, which is much faster.
+
+    Args:
+        account: The Unipile test account.
+        subject: Subject substring to match.
+
+    Returns:
+        The email's provider_id.
+
+    Raises:
+        RuntimeError: If not found after all retries.
+    """
+    account_id = account.email_ctx.unipile_account_id
+    for attempt in range(MAX_RETRIES):
+        data = asyncio.get_event_loop().run_until_complete(
+            unipile_request("GET", "/api/v1/emails", params={
+                "account_id": account_id,
+                "limit": 50,
+            })
+        )
+        for item in data.get("items", []):
+            if subject in (item.get("subject") or ""):
+                # Return provider_id to match what list_inbox/format_email_summaries uses
+                return str(item.get("provider_id", item.get("id")))
+        if attempt < MAX_RETRIES - 1:
+            time.sleep(RETRY_WAIT_S)
+
+    raise RuntimeError(
+        f'Could not find email with subject containing "{subject}" via Unipile API '
+        f"after {MAX_RETRIES} attempts"
+    )
+
+
+def _unipile_email_folders(email_id: str, account: E2EAccount) -> list[str]:
+    """Fetch the folders array for a Unipile email by ID.
+
+    Args:
+        email_id: The Unipile email ID (provider_id).
+        account: The test account.
+
+    Returns:
+        List of folder names (e.g. ["INBOX", "SENT"]).
+    """
+    account_id = account.email_ctx.unipile_account_id
+    data = asyncio.get_event_loop().run_until_complete(
+        unipile_request("GET", f"/api/v1/emails/{email_id}", params={"account_id": account_id})
+    )
+    return data.get("folders", [])
+
+
+def verify_undo_restored_to_inbox(email_id: str, account: E2EAccount) -> None:
+    """Verify that an undo restored the INBOX label by checking folder state directly.
+
+    The Unipile inbox listing has severe sync delays for Gmail, so we check
+    the email's folders array instead of polling the listing.
+
+    Args:
+        email_id: The Unipile email ID (provider_id).
+        account: The test account.
+
+    Raises:
+        AssertionError: If INBOX is not in the email's folders after retries.
+    """
+    for attempt in range(MAX_RETRIES):
+        folders = _unipile_email_folders(email_id, account)
+        if "INBOX" in folders:
+            return
+        if attempt < MAX_RETRIES - 1:
+            time.sleep(RETRY_WAIT_S)
+
+    raise AssertionError(
+        f"Email {email_id} does not have INBOX in its folders after {MAX_RETRIES} attempts. "
+        f"Folders: {folders}"
+    )
+
+
+def wait_until_gone_from_inbox_unipile(email_id: str, account: E2EAccount) -> None:
+    """Wait until the INBOX label is removed from a Unipile email.
+
+    Args:
+        email_id: The Unipile email ID (provider_id).
+        account: The test account.
+
+    Raises:
+        RuntimeError: If INBOX still present after all retries.
+    """
+    for attempt in range(MAX_RETRIES):
+        folders = _unipile_email_folders(email_id, account)
+        if "INBOX" not in folders:
+            return
+        if attempt < MAX_RETRIES - 1:
+            time.sleep(RETRY_WAIT_S)
+
+    raise RuntimeError(
+        f"Email {email_id} still has INBOX in folders after {MAX_RETRIES} attempts. "
+        f"Folders: {folders}"
     )
 
 
@@ -354,9 +472,6 @@ class TestArchiveEmail:
         wait_until_gone_from_inbox(account, mock_supabase, subject)
 
     def test_archive_undo_restores_to_inbox(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
-        if account.email_ctx.provider == "gmail" and account.connection_type == "unipile":
-            pytest.xfail("Gmail Unipile undo has sync delay (separate from #168)")
-
         subject = f"{TAG} Archive undo test {int(time.time() * 1000)}"
         dispatch("send_email", {
             "to": account.email_address,
@@ -365,19 +480,30 @@ class TestArchiveEmail:
         }, account, mock_supabase)
         time.sleep(DELIVERY_WAIT_S)
 
-        email_id = find_email_id_by_subject(account, mock_supabase, subject)
+        # Unipile inbox listing has sync delays for Gmail; use direct API search
+        if _is_gmail_unipile(account):
+            email_id = find_email_id_by_subject_unipile(account, subject)
+        else:
+            email_id = find_email_id_by_subject(account, mock_supabase, subject)
 
         _, undo_recipe, _ = dispatch("archive_email", {
             "email_id": email_id,
             "source_folder": "INBOX",
         }, account, mock_supabase)
-        wait_until_gone_from_inbox(account, mock_supabase, subject)
+
+        if _is_gmail_unipile(account):
+            wait_until_gone_from_inbox_unipile(email_id, account)
+        else:
+            wait_until_gone_from_inbox(account, mock_supabase, subject)
 
         assert undo_recipe is not None, "archive_email should return an undo recipe"
         undo(undo_recipe, account, mock_supabase)
 
-        restored_id = find_email_id_by_subject(account, mock_supabase, subject)
-        assert restored_id
+        if _is_gmail_unipile(account):
+            verify_undo_restored_to_inbox(email_id, account)
+        else:
+            restored_id = find_email_id_by_subject(account, mock_supabase, subject)
+            assert restored_id
 
 
 # ============================================================================
@@ -406,9 +532,6 @@ class TestDeleteEmail:
         wait_until_gone_from_inbox(account, mock_supabase, subject)
 
     def test_delete_undo_restores_to_inbox(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
-        if account.email_ctx.provider == "gmail" and account.connection_type == "unipile":
-            pytest.xfail("Gmail Unipile undo has sync delay (separate from #168)")
-
         subject = f"{TAG} Delete undo test {int(time.time() * 1000)}"
         dispatch("send_email", {
             "to": account.email_address,
@@ -417,19 +540,29 @@ class TestDeleteEmail:
         }, account, mock_supabase)
         time.sleep(DELIVERY_WAIT_S)
 
-        email_id = find_email_id_by_subject(account, mock_supabase, subject)
+        if _is_gmail_unipile(account):
+            email_id = find_email_id_by_subject_unipile(account, subject)
+        else:
+            email_id = find_email_id_by_subject(account, mock_supabase, subject)
 
         _, undo_recipe, _ = dispatch("delete_email", {
             "email_id": email_id,
             "source_folder": "INBOX",
         }, account, mock_supabase)
-        wait_until_gone_from_inbox(account, mock_supabase, subject)
+
+        if _is_gmail_unipile(account):
+            wait_until_gone_from_inbox_unipile(email_id, account)
+        else:
+            wait_until_gone_from_inbox(account, mock_supabase, subject)
 
         assert undo_recipe is not None, "delete_email should return an undo recipe"
         undo(undo_recipe, account, mock_supabase)
 
-        restored_id = find_email_id_by_subject(account, mock_supabase, subject)
-        assert restored_id
+        if _is_gmail_unipile(account):
+            verify_undo_restored_to_inbox(email_id, account)
+        else:
+            restored_id = find_email_id_by_subject(account, mock_supabase, subject)
+            assert restored_id
 
 
 # ============================================================================
@@ -467,9 +600,6 @@ class TestMoveToFolder:
         wait_until_gone_from_inbox(account, mock_supabase, subject)
 
     def test_move_to_folder_undo_restores_to_inbox(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
-        if account.email_ctx.provider == "gmail" and account.connection_type == "unipile":
-            pytest.xfail("Gmail Unipile undo has sync delay (separate from #168)")
-
         subject = f"{TAG} Move undo test {int(time.time() * 1000)}"
         dispatch("send_email", {
             "to": account.email_address,
@@ -478,7 +608,10 @@ class TestMoveToFolder:
         }, account, mock_supabase)
         time.sleep(DELIVERY_WAIT_S)
 
-        email_id = find_email_id_by_subject(account, mock_supabase, subject)
+        if _is_gmail_unipile(account):
+            email_id = find_email_id_by_subject_unipile(account, subject)
+        else:
+            email_id = find_email_id_by_subject(account, mock_supabase, subject)
 
         folders_result, _, _ = dispatch("list_folders", {}, account, mock_supabase)
         folders = folders_result["folders"]
@@ -493,13 +626,20 @@ class TestMoveToFolder:
             "folder": trash["path"],
             "source_folder": "INBOX",
         }, account, mock_supabase)
-        wait_until_gone_from_inbox(account, mock_supabase, subject)
+
+        if _is_gmail_unipile(account):
+            wait_until_gone_from_inbox_unipile(email_id, account)
+        else:
+            wait_until_gone_from_inbox(account, mock_supabase, subject)
 
         assert undo_recipe is not None, "move_to_folder should return an undo recipe"
         undo(undo_recipe, account, mock_supabase)
 
-        restored_id = find_email_id_by_subject(account, mock_supabase, subject)
-        assert restored_id
+        if _is_gmail_unipile(account):
+            verify_undo_restored_to_inbox(email_id, account)
+        else:
+            restored_id = find_email_id_by_subject(account, mock_supabase, subject)
+            assert restored_id
 
     def test_move_to_nonexistent_folder_raises(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
         ids = _ensure_seeded(account, mock_supabase)
@@ -578,9 +718,6 @@ class TestMoveToUserFolder:
         wait_until_gone_from_inbox(account, mock_supabase, subject)
 
     def test_move_to_user_folder_undo_restores(self, account: E2EAccount, mock_supabase: MagicMock) -> None:
-        if account.email_ctx.provider == "gmail" and account.connection_type == "unipile":
-            pytest.xfail("Gmail Unipile undo has sync delay (separate from #168)")
-
         user_folder = self._find_user_folder(account, mock_supabase)
 
         subject = f"{TAG} Move user-folder undo test {int(time.time() * 1000)}"
@@ -591,20 +728,30 @@ class TestMoveToUserFolder:
         }, account, mock_supabase)
         time.sleep(DELIVERY_WAIT_S)
 
-        email_id = find_email_id_by_subject(account, mock_supabase, subject)
+        if _is_gmail_unipile(account):
+            email_id = find_email_id_by_subject_unipile(account, subject)
+        else:
+            email_id = find_email_id_by_subject(account, mock_supabase, subject)
 
         _, undo_recipe, _ = dispatch("move_to_folder", {
             "email_id": email_id,
             "folder": user_folder,
             "source_folder": "INBOX",
         }, account, mock_supabase)
-        wait_until_gone_from_inbox(account, mock_supabase, subject)
+
+        if _is_gmail_unipile(account):
+            wait_until_gone_from_inbox_unipile(email_id, account)
+        else:
+            wait_until_gone_from_inbox(account, mock_supabase, subject)
 
         assert undo_recipe is not None, "move_to_folder should return an undo recipe"
         undo(undo_recipe, account, mock_supabase)
 
-        restored_id = find_email_id_by_subject(account, mock_supabase, subject)
-        assert restored_id
+        if _is_gmail_unipile(account):
+            verify_undo_restored_to_inbox(email_id, account)
+        else:
+            restored_id = find_email_id_by_subject(account, mock_supabase, subject)
+            assert restored_id
 
 
 # ============================================================================

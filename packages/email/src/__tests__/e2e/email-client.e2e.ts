@@ -13,8 +13,8 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { createEmailAccountClient } from "../../account-client";
-import type { EmailAccountClient } from "../../types";
-import { loadTestAccounts, TEST_RUN_ID } from "./accounts";
+import type { EmailAccountClient, EmailAccountRecord } from "../../types";
+import { loadTestAccounts, verifyAccountConnections, TEST_RUN_ID } from "./accounts";
 
 // ============================================================================
 // CONSTANTS
@@ -49,6 +49,10 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
   // ------------------------------------------------------------------
 
   beforeAll(async () => {
+    // Verify account is reachable before running any tests.
+    // Fails fast with a clear message if Unipile is disconnected or IMAP is down.
+    await verifyAccountConnections([{ label: emailAddress, record, emailAddress }]);
+
     client = await createEmailAccountClient(record);
 
     // Seed 3 emails to self:
@@ -321,14 +325,22 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     await client.sendEmail({ to: emailAddress, subject, body: "Archive undo test body" });
     await wait(DELIVERY_WAIT_MS);
 
-    const emailId = await findEmailBySubject(client, subject);
+    // Gmail Unipile inbox listing has sync delays; use direct API search
+    const gmailUnipile = isGmailUnipile(record);
+    const emailId = gmailUnipile
+      ? await findEmailBySubjectUnipile(record.unipileAccountId!, subject)
+      : await findEmailBySubject(client, subject);
 
     // Archive it
     const undoRecipe = await client.archiveEmail(emailId, "INBOX");
     expect(undoRecipe).toBeTruthy();
 
     // Wait until gone from inbox
-    await waitUntilGoneFromInbox(client, subject);
+    if (gmailUnipile) {
+      await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+    } else {
+      await waitUntilGoneFromInbox(client, subject);
+    }
 
     // Undo: move it back to INBOX (IMAP uses messageId, Unipile uses emailId)
     const { from, to } = undoRecipe!.params as Record<string, string>;
@@ -337,8 +349,12 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     await client.moveEmail(identifier as string, to, from, rfcMessageId);
 
     // Verify it is back in inbox
-    const found = await findEmailBySubject(client, subject);
-    expect(found).toBeTruthy();
+    if (gmailUnipile) {
+      await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
+    } else {
+      const found = await findEmailBySubject(client, subject);
+      expect(found).toBeTruthy();
+    }
   });
 
   // ------------------------------------------------------------------
@@ -365,14 +381,22 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     await client.sendEmail({ to: emailAddress, subject, body: "Delete undo test body" });
     await wait(DELIVERY_WAIT_MS);
 
-    const emailId = await findEmailBySubject(client, subject);
+    // Gmail Unipile inbox listing has sync delays; use direct API search
+    const gmailUnipile = isGmailUnipile(record);
+    const emailId = gmailUnipile
+      ? await findEmailBySubjectUnipile(record.unipileAccountId!, subject)
+      : await findEmailBySubject(client, subject);
 
     // Delete it
     const undoRecipe = await client.deleteEmail(emailId, "INBOX");
     expect(undoRecipe).toBeTruthy();
 
     // Wait until gone from inbox
-    await waitUntilGoneFromInbox(client, subject);
+    if (gmailUnipile) {
+      await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+    } else {
+      await waitUntilGoneFromInbox(client, subject);
+    }
 
     // Undo: move it back (IMAP uses messageId, Unipile uses emailId)
     const { from, to } = undoRecipe!.params as Record<string, string>;
@@ -381,8 +405,12 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     await client.moveEmail(identifier as string, to, from, rfcMessageId);
 
     // Verify it is back
-    const found = await findEmailBySubject(client, subject);
-    expect(found).toBeTruthy();
+    if (gmailUnipile) {
+      await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
+    } else {
+      const found = await findEmailBySubject(client, subject);
+      expect(found).toBeTruthy();
+    }
   });
 
   // ------------------------------------------------------------------
@@ -412,7 +440,11 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     await client.sendEmail({ to: emailAddress, subject, body: "Move undo test body" });
     await wait(DELIVERY_WAIT_MS);
 
-    const emailId = await findEmailBySubject(client, subject);
+    // Gmail Unipile inbox listing has sync delays; use direct API search
+    const gmailUnipile = isGmailUnipile(record);
+    const emailId = gmailUnipile
+      ? await findEmailBySubjectUnipile(record.unipileAccountId!, subject)
+      : await findEmailBySubject(client, subject);
     const trash = await client.resolveSpecialUseFolder("\\Trash");
     expect(trash).toBeTruthy();
 
@@ -421,7 +453,11 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     expect(undoRecipe).toBeTruthy();
 
     // Wait until gone from inbox
-    await waitUntilGoneFromInbox(client, subject);
+    if (gmailUnipile) {
+      await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+    } else {
+      await waitUntilGoneFromInbox(client, subject);
+    }
 
     // Undo: move it back (IMAP uses messageId, Unipile uses emailId)
     const { from, to } = undoRecipe!.params as Record<string, string>;
@@ -430,8 +466,12 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     await client.moveEmail(identifier as string, to, from, rfcMessageId);
 
     // Verify it is back
-    const found = await findEmailBySubject(client, subject);
-    expect(found).toBeTruthy();
+    if (gmailUnipile) {
+      await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
+    } else {
+      const found = await findEmailBySubject(client, subject);
+      expect(found).toBeTruthy();
+    }
   });
 
   it("moveToFolder throws when target folder does not exist", async () => {
@@ -497,14 +537,22 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     await client.sendEmail({ to: emailAddress, subject, body: "Move to user folder undo" });
     await wait(DELIVERY_WAIT_MS);
 
-    const emailId = await findEmailBySubject(client, subject);
+    // Gmail Unipile inbox listing has sync delays; use direct API search
+    const gmailUnipile = isGmailUnipile(record);
+    const emailId = gmailUnipile
+      ? await findEmailBySubjectUnipile(record.unipileAccountId!, subject)
+      : await findEmailBySubject(client, subject);
 
     // Move to the user-created folder
     const undoRecipe = await client.moveToFolder(emailId, userFolder.path, "INBOX");
     expect(undoRecipe).toBeTruthy();
 
     // Wait until gone from inbox
-    await waitUntilGoneFromInbox(client, subject);
+    if (gmailUnipile) {
+      await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+    } else {
+      await waitUntilGoneFromInbox(client, subject);
+    }
 
     // Undo: move it back
     const { from, to } = undoRecipe!.params as Record<string, string>;
@@ -513,8 +561,12 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     await client.moveEmail(identifier as string, to, from, rfcMessageId);
 
     // Verify it is back
-    const found = await findEmailBySubject(client, subject);
-    expect(found).toBeTruthy();
+    if (gmailUnipile) {
+      await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
+    } else {
+      const found = await findEmailBySubject(client, subject);
+      expect(found).toBeTruthy();
+    }
   });
 });
 
@@ -604,4 +656,143 @@ async function waitUntilGoneFromInbox(client: EmailAccountClient, subject: strin
   }
 
   throw new Error(`Email with subject containing "${subject}" still in inbox after ${MAX_RETRIES} attempts`);
+}
+
+// ============================================================================
+// GMAIL UNIPILE HELPERS
+// ============================================================================
+// Gmail Unipile's inbox listing (GET /emails?folder=INBOX) has 60+ second sync
+// delays. These helpers bypass that by listing emails without a folder filter
+// and checking folder state directly on individual emails.
+
+/**
+ * Returns true if the account is Gmail connected via Unipile.
+ * @param record - The email account record
+ */
+function isGmailUnipile(record: EmailAccountRecord): boolean {
+  return record.connectionType === "unipile" && record.provider === "gmail";
+}
+
+/**
+ * Makes a direct Unipile API request.
+ * @param method - HTTP method
+ * @param path - API path (e.g. "/api/v1/emails")
+ * @param params - Query parameters
+ * @returns Parsed JSON response
+ */
+async function unipileRequest(
+  method: string,
+  path: string,
+  params?: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const dsn = process.env.UNIPILE_DSN;
+  const apiKey = process.env.UNIPILE_API_KEY;
+  const url = new URL(`${dsn}${path}`);
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      url.searchParams.set(k, v);
+    }
+  }
+  const res = await fetch(url.toString(), {
+    method,
+    headers: { "X-API-KEY": apiKey!, Accept: "application/json" },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Unipile ${method} ${path} failed (HTTP ${res.status}): ${body}`);
+  }
+  return res.json() as Promise<Record<string, unknown>>;
+}
+
+/**
+ * Finds an email by subject via the Unipile API without folder filter.
+ * Bypasses the slow inbox listing sync delay for Gmail Unipile.
+ * @param accountId - Unipile account ID
+ * @param subject - Subject substring to match
+ * @returns The email's provider_id
+ */
+async function findEmailBySubjectUnipile(accountId: string, subject: string): Promise<string> {
+  const MAX_RETRIES = 12;
+  const RETRY_WAIT_MS = 5_000;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const data = await unipileRequest("GET", "/api/v1/emails", {
+      account_id: accountId,
+      limit: "50",
+    });
+    const items = (data.items ?? []) as Array<Record<string, unknown>>;
+    for (const item of items) {
+      if (typeof item.subject === "string" && item.subject.includes(subject)) {
+        return String(item.provider_id ?? item.id);
+      }
+    }
+    if (attempt < MAX_RETRIES - 1) {
+      await wait(RETRY_WAIT_MS);
+    }
+  }
+
+  throw new Error(
+    `Could not find email with subject containing "${subject}" via Unipile API after ${MAX_RETRIES} attempts`,
+  );
+}
+
+/**
+ * Fetches the folders array for a single Unipile email.
+ * @param emailId - The Unipile email ID (provider_id)
+ * @param accountId - Unipile account ID
+ * @returns List of folder names (e.g. ["INBOX", "SENT"])
+ */
+async function getUnipileEmailFolders(emailId: string, accountId: string): Promise<string[]> {
+  const data = await unipileRequest("GET", `/api/v1/emails/${emailId}`, {
+    account_id: accountId,
+  });
+  return (data.folders ?? []) as string[];
+}
+
+/**
+ * Polls until the email has "INBOX" in its folders array (undo verification).
+ * @param emailId - The Unipile email ID (provider_id)
+ * @param accountId - Unipile account ID
+ */
+async function verifyUndoRestoredToInbox(emailId: string, accountId: string): Promise<void> {
+  const MAX_RETRIES = 12;
+  const RETRY_WAIT_MS = 5_000;
+  let folders: string[] = [];
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    folders = await getUnipileEmailFolders(emailId, accountId);
+    if (folders.includes("INBOX")) return;
+
+    if (attempt < MAX_RETRIES - 1) {
+      await wait(RETRY_WAIT_MS);
+    }
+  }
+
+  throw new Error(
+    `Email ${emailId} does not have INBOX in its folders after ${MAX_RETRIES} attempts. Folders: ${JSON.stringify(folders)}`,
+  );
+}
+
+/**
+ * Polls until the email no longer has "INBOX" in its folders array.
+ * @param emailId - The Unipile email ID (provider_id)
+ * @param accountId - Unipile account ID
+ */
+async function waitUntilGoneFromInboxUnipile(emailId: string, accountId: string): Promise<void> {
+  const MAX_RETRIES = 6;
+  const RETRY_WAIT_MS = 5_000;
+  let folders: string[] = [];
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    folders = await getUnipileEmailFolders(emailId, accountId);
+    if (!folders.includes("INBOX")) return;
+
+    if (attempt < MAX_RETRIES - 1) {
+      await wait(RETRY_WAIT_MS);
+    }
+  }
+
+  throw new Error(
+    `Email ${emailId} still has INBOX in folders after ${MAX_RETRIES} attempts. Folders: ${JSON.stringify(folders)}`,
+  );
 }

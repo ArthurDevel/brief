@@ -175,17 +175,61 @@ ALL_BUILDERS = [
 
 
 # ============================================================================
+# CONNECTIVITY CHECKS
+# ============================================================================
+
+def _check_unipile_connection(account: E2EAccount) -> None:
+    """Verify a Unipile account is connected by listing its folders.
+
+    Fails fast with a clear message if the account is disconnected,
+    so we don't waste minutes on tests that will all fail.
+
+    Args:
+        account: The Unipile test account to check.
+
+    Raises:
+        RuntimeError: If the account is disconnected or unreachable.
+    """
+    import httpx
+
+    account_id = account.email_ctx.unipile_account_id
+    dsn = os.environ.get("UNIPILE_DSN", "")
+    api_key = os.environ.get("UNIPILE_API_KEY", "")
+
+    resp = httpx.get(
+        f"{dsn}/api/v1/folders",
+        params={"account_id": account_id},
+        headers={"X-API-KEY": api_key, "Accept": "application/json"},
+        timeout=15,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"{account.label}: Unipile account {account_id} is not connected "
+            f"(HTTP {resp.status_code}). Review the connection in the Unipile "
+            f"dashboard, then run again.\n{resp.text}"
+        )
+
+
+# ============================================================================
 # FIXTURES
 # ============================================================================
 
 def _load_accounts() -> list[E2EAccount]:
-    """Build all accounts whose env vars are present. Skip those that aren't."""
+    """Build all accounts whose env vars are present and connections are reachable.
+
+    IMAP accounts are checked during build (client.login fails fast).
+    Unipile accounts get an extra connectivity check after building.
+    """
     accounts: list[E2EAccount] = []
     skipped: list[str] = []
 
     for key, builder in ALL_BUILDERS:
         try:
-            accounts.append(builder())
+            account = builder()
+            # Unipile accounts need an explicit connectivity check
+            if account.connection_type == "unipile":
+                _check_unipile_connection(account)
+            accounts.append(account)
         except (KeyError, Exception) as e:
             skipped.append(f"{key}: {e}")
 
