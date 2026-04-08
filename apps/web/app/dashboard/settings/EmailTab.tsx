@@ -330,8 +330,9 @@ export default function EmailTab() {
               </p>
             ) : (
               <p className="mb-4">
-                Connect your {provider === "gmail" ? "Gmail" : "Outlook"} account securely. You will
-                be redirected to sign in with {provider === "gmail" ? "Google" : "Microsoft"}.
+                Connect your {provider === "gmail" ? "Gmail" : "Outlook"} account securely.
+                Your emails are never stored and we will never send emails on your behalf.
+                You will be redirected to sign in with {provider === "gmail" ? "Google" : "Microsoft"}.
               </p>
             )}
 
@@ -358,6 +359,19 @@ export default function EmailTab() {
                 {connecting ? "Redirecting..." : "Connect a different account"}
               </button>
             )}
+
+            {/* Unipile trust badge */}
+            <div className="flex items-center justify-center gap-1.5 mt-4 text-[var(--text-secondary)] text-xs">
+              <span>Authentication is securely handled by</span>
+              <a href="https://www.unipile.com/" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-[var(--bg-surface)] text-[var(--text-secondary)] px-2 py-0.5 rounded-full text-xs font-medium hover:bg-[var(--bg-hover)] transition border border-[var(--border-color)]">
+                <svg width="14" height="10" viewBox="0 0 79 65" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M34.2729 35.0963L20.9518 51.861C19.1738 54.09 15.7729 54.062 14.0372 51.804L1.09714 35.0399C-0.116363 33.4594 -0.116363 31.258 1.09714 29.6776L14.0372 12.9133C15.7729 10.6555 19.1738 10.6273 20.9518 12.8569L34.2729 29.6211C35.5429 31.2298 35.5429 33.5017 34.2729 35.0963Z" fill="#45BAB9"/>
+                  <path d="M56.371 29.6353L43.0501 12.871C41.2721 10.6414 37.8713 10.6696 36.1356 12.9275L31.5917 18.8119L40.1997 29.6353C41.4697 31.2299 41.4697 33.5018 40.1997 35.0964L31.5917 45.92L36.1356 51.804C37.8713 54.062 41.2721 54.09 43.0501 51.861L56.371 35.0964C57.641 33.5018 57.641 31.2299 56.371 29.6353Z" fill="#43B072"/>
+                  <path d="M77.637 29.6353L64.316 12.871C62.538 10.6414 59.137 10.6696 57.401 12.9275L53.45 18.0499L62.665 29.6353C63.935 31.2299 63.935 33.5018 62.665 35.0964L53.45 46.682L57.401 51.804C59.137 54.062 62.538 54.09 64.316 51.861L77.637 35.0964C78.921 33.5018 78.921 31.2299 77.637 29.6353Z" fill="#DDDF4C"/>
+                </svg>
+                Unipile
+              </a>
+            </div>
           </div>
         )}
 
