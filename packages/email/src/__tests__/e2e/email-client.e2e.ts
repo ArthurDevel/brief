@@ -113,7 +113,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
         try {
           await client.readEmail(id);
 
-          // For Gmail Unipile: also verify mutation emails are in INBOX
+          // For Unipile: also verify mutation emails are in INBOX
           if (isGmailUnipile(record) && MUTATION_POOL_KEYS.includes(key)) {
             const folders = await getUnipileEmailFolders(id, record.unipileAccountId!);
             if (!folders.includes("INBOX")) throw new Error("not in INBOX");
@@ -431,7 +431,7 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     // Undo: move it back to INBOX
     await restoreToInbox(client, record, undoRecipe!);
 
-    // Gmail Unipile: verify via folder state (IDs are stable across moves)
+    // Unipile: verify via folder state (IDs are stable across moves)
     if (isGmailUnipile(record)) {
       await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
     }
@@ -662,7 +662,8 @@ async function findEmailBySubject(client: EmailAccountClient, subject: string): 
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const emails = await client.searchEmails(subject);
-    if (emails.length > 0) return emails[0].id;
+    const found = emails.find((e) => e.subject.includes(subject));
+    if (found) return found.id;
 
     if (attempt < MAX_RETRIES - 1) {
       await wait(RETRY_WAIT_MS);
