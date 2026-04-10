@@ -130,6 +130,43 @@ def stop(session_id: str) -> str:
     return "\n".join(buffer)
 
 
+def make_log_line(
+    level: str,
+    module: str,
+    message: str,
+    timestamp: datetime | None = None,
+) -> str:
+    """Build a timestamped log line without requiring an active ContextVar.
+
+    This is used for pre-session startup markers that happen before the DB
+    session id exists. The caller can buffer these lines and append them once
+    session capture starts.
+
+    Args:
+        level: Log level name (e.g. "INFO").
+        module: Source module name.
+        message: The log message.
+        timestamp: Timestamp to use. Defaults to current UTC time.
+
+    Returns:
+        A formatted log line string compatible with normal session logs.
+    """
+    ts = timestamp or datetime.now(timezone.utc)
+    timestamp_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    return _format_line(timestamp_str, level, module, message)
+
+
+def append_lines(session_id: str, lines: list[str]) -> None:
+    """Append preformatted log lines to a session buffer.
+
+    Args:
+        session_id: Unique identifier for the voice session.
+        lines: Preformatted log lines to append in order.
+    """
+    for line in lines:
+        _handle_log_line(session_id, line)
+
+
 async def upload_session_logs(
     session_id: str, log_text: str, supabase: Client
 ) -> None:
