@@ -11,7 +11,7 @@
  * - Unipile path: wraps unipile-client functions with the stored account ID
  */
 
-import type { EmailAccountRecord, EmailAccountClient, EmailMetaRequest } from "./types";
+import type { EmailAccountRecord, EmailAccountClient, EmailMetaRequest, FolderInfo } from "./types";
 import type { ImapFlow } from "imapflow";
 
 // ============================================================================
@@ -35,6 +35,29 @@ export async function createEmailAccountClient(account: EmailAccountRecord): Pro
   }
 
   throw new Error(`Unknown connection type: ${account.connectionType}`);
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Validates that a target folder exists by checking against listFolders results.
+ * Throws with available folder names if the folder is not found.
+ * @param folder - The target folder path to validate
+ * @param listFoldersFn - Function that returns the available folders
+ */
+async function validateFolderExists(folder: string, listFoldersFn: () => Promise<FolderInfo[]>): Promise<void> {
+  const folders = await listFoldersFn();
+  const folderPaths = folders.map((f) => f.path);
+  const match = folderPaths.some(
+    (p) => p.toLowerCase() === folder.toLowerCase()
+  );
+  if (!match) {
+    throw new Error(
+      `Folder "${folder}" does not exist. Available folders: ${folderPaths.join(", ")}`
+    );
+  }
 }
 
 // ============================================================================
@@ -62,13 +85,15 @@ async function createUnipileClient(account: EmailAccountRecord): Promise<EmailAc
     readThread: (emailId: string) => unipile.readThread(accountId, emailId),
     markAsRead: (emailId: string) => unipile.markAsRead(accountId, emailId),
     archiveEmail: (emailId: string, sourceFolder?: string) =>
-      unipile.archiveEmail(accountId, emailId, sourceFolder ?? "INBOX"),
+      unipile.archiveEmail(accountId, emailId, sourceFolder ?? "INBOX", account.provider),
     deleteEmail: (emailId: string, sourceFolder?: string) =>
-      unipile.deleteEmail(accountId, emailId, sourceFolder ?? "INBOX"),
-    moveToFolder: (emailId: string, folder: string, sourceFolder?: string) =>
-      unipile.moveToFolder(accountId, emailId, folder, sourceFolder ?? "INBOX"),
-    moveEmail: (emailId: string, destFolder: string, sourceFolder?: string) =>
-      unipile.moveEmail(accountId, emailId, sourceFolder ?? "INBOX", destFolder),
+      unipile.deleteEmail(accountId, emailId, sourceFolder ?? "INBOX", account.provider),
+    moveToFolder: async (emailId: string, folder: string, sourceFolder?: string) => {
+      await validateFolderExists(folder, () => unipile.listFolders(accountId));
+      return unipile.moveToFolder(accountId, emailId, folder, sourceFolder ?? "INBOX", account.provider);
+    },
+    moveEmail: (emailId: string, destFolder: string, sourceFolder?: string, rfcMessageId?: string) =>
+      unipile.moveEmail(accountId, emailId, sourceFolder ?? "INBOX", destFolder, rfcMessageId),
     listFolders: () => unipile.listFolders(accountId),
     resolveSpecialUseFolder: (flag: string) => unipile.resolveSpecialUseFolder(accountId, flag),
     saveDraft: (input) => unipile.saveDraft(accountId, input),
@@ -114,9 +139,11 @@ async function createCustomClient(account: EmailAccountRecord): Promise<EmailAcc
       imapClient.archiveEmail(client, emailId, sourceFolder ?? "INBOX"),
     deleteEmail: (emailId: string, sourceFolder?: string) =>
       imapClient.deleteEmail(client, emailId, sourceFolder ?? "INBOX"),
-    moveToFolder: (emailId: string, folder: string, sourceFolder?: string) =>
-      imapClient.moveEmailToFolder(client, emailId, folder, sourceFolder ?? "INBOX"),
-    moveEmail: (messageId: string, destFolder: string, sourceFolder?: string) =>
+    moveToFolder: async (emailId: string, folder: string, sourceFolder?: string) => {
+      await validateFolderExists(folder, () => imapClient.listFolders(client));
+      return imapClient.moveEmailToFolder(client, emailId, folder, sourceFolder ?? "INBOX");
+    },
+    moveEmail: (messageId: string, destFolder: string, sourceFolder?: string, _rfcMessageId?: string) =>
       imapClient.moveEmail(client, messageId, sourceFolder ?? "INBOX", destFolder),
     listFolders: () => imapClient.listFolders(client),
     resolveSpecialUseFolder: async (flag: string) => {

@@ -823,8 +823,11 @@ async function dispatchUndo(
       const identifier = (recipe.params.emailId as string) ?? (recipe.params.messageId as string);
       const from = recipe.params.from as string;
       const to = recipe.params.to as string;
+      // Outlook undo: rfcMessageId is set when the email was moved on Outlook,
+      // because Outlook invalidates the original ID after a move.
+      const rfcMessageId = recipe.params.rfcMessageId as string | undefined;
 
-      await emailClient.moveEmail(identifier, to, from);
+      await emailClient.moveEmail(identifier, to, from, rfcMessageId);
       break;
     }
 

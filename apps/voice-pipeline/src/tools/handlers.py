@@ -689,9 +689,22 @@ def _dispatch_tool(
 
     if tool_name == "move_to_folder":
         source_folder = args.get("source_folder", "INBOX")
+        target_folder = args["folder"]
+
+        # Validate folder exists before attempting move (both Gmail and IMAP silently accept invalid folders)
+        folders = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.list_folders(c),
+        )
+        folder_paths = [f.path for f in folders]
+        if not any(p.lower() == target_folder.lower() for p in folder_paths):
+            raise ValueError(
+                f'Folder "{target_folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+            )
+
         recipe_data, message_id = email_client.with_reconnect(
             imap_holder, config,
-            lambda c: email_client.move_email_to_folder(c, args["email_id"], args["folder"], source_folder),
+            lambda c: email_client.move_email_to_folder(c, args["email_id"], target_folder, source_folder),
         )
         return {"moved": True}, UndoRecipe(**recipe_data), message_id
 
@@ -778,7 +791,7 @@ def _dispatch_tool_unipile(
         if tool_name == "archive_email":
             source_folder = args.get("source_folder", "INBOX")
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.archive_email(account_id, args["email_id"], source_folder)
+                unipile_client.archive_email(account_id, args["email_id"], source_folder, email_ctx.provider)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"archived": True}, recipe, message_id
@@ -786,7 +799,7 @@ def _dispatch_tool_unipile(
         if tool_name == "delete_email":
             source_folder = args.get("source_folder", "INBOX")
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.delete_email(account_id, args["email_id"], source_folder)
+                unipile_client.delete_email(account_id, args["email_id"], source_folder, email_ctx.provider)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"deleted": True}, recipe, message_id
@@ -815,8 +828,18 @@ def _dispatch_tool_unipile(
 
         if tool_name == "move_to_folder":
             source_folder = args.get("source_folder", "INBOX")
+            target_folder = args["folder"]
+
+            # Validate folder exists before attempting move (Unipile silently accepts invalid folders)
+            folders = loop.run_until_complete(unipile_client.list_folders(account_id))
+            folder_paths = [f.path for f in folders]
+            if not any(p.lower() == target_folder.lower() for p in folder_paths):
+                raise ValueError(
+                    f'Folder "{target_folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+                )
+
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.move_to_folder(account_id, args["email_id"], args["folder"], source_folder)
+                unipile_client.move_to_folder(account_id, args["email_id"], target_folder, source_folder, email_ctx.provider)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"moved": True}, recipe, message_id
@@ -907,10 +930,13 @@ def _dispatch_undo(
     if recipe.operation == "unipile_move_email":
         loop = asyncio.new_event_loop()
         try:
-            account_id = recipe.params["account_id"]
-            body = {"folder": recipe.params["to_folder"]}
             loop.run_until_complete(
-                unipile_client._request("PUT", f"/api/v1/emails/{recipe.params['email_id']}", params={"account_id": account_id}, json_body=body)
+                unipile_client.undo_move_email(
+                    account_id=recipe.params["account_id"],
+                    email_id=recipe.params["email_id"],
+                    to_folders=recipe.params["to_folders"],
+                    rfc_message_id=recipe.params.get("rfc_message_id"),
+                )
             )
         finally:
             loop.close()
