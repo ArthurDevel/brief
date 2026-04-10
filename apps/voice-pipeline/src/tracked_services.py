@@ -15,12 +15,19 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
+from pipecat.frames.frames import ErrorFrame, TTSSpeakFrame
 from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 
 
 logger = logging.getLogger(__name__)
+
+
+LLM_ERROR_FALLBACK_MESSAGE = (
+    "Sorry, the assistant is temporarily unavailable. Please try again soon."
+)
 
 
 class UsageTracker:
@@ -58,11 +65,17 @@ class UsageTracker:
 class TrackedOpenAILLMService(OpenAILLMService):
     """OpenAILLMService that captures generation IDs from streamed chunks."""
 
-    def __init__(self, usage_tracker: UsageTracker, **kwargs):
+    def __init__(
+        self,
+        usage_tracker: UsageTracker,
+        error_fallback_message: str | None = LLM_ERROR_FALLBACK_MESSAGE,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self._usage_tracker = usage_tracker
+        self._error_fallback_message = error_fallback_message
 
-    async def get_chat_completions(self, params_from_context):
+    async def get_chat_completions(self, params_from_context) -> Any:
         chunks = await super().get_chat_completions(params_from_context)
         return self._wrap_chunks(chunks)
 
@@ -73,6 +86,24 @@ class TrackedOpenAILLMService(OpenAILLMService):
                 self._usage_tracker.log_llm_generation(chunk.id)
                 captured = True
             yield chunk
+
+    async def push_error_frame(self, error: ErrorFrame) -> None:
+        """Speak a fallback message when the LLM fails.
+
+        Pipecat forwards non-fatal LLM errors upstream for logging, but nothing
+        audible reaches the caller. A short TTS frame keeps phone/WebRTC users
+        from hearing silence when the provider rejects a request.
+        """
+        if self._error_fallback_message:
+            try:
+                await self.push_frame(TTSSpeakFrame(
+                    self._error_fallback_message,
+                    append_to_context=False,
+                ))
+            except Exception as exc:
+                logger.warning("[llm] Failed to queue error fallback speech: %s", exc)
+
+        await super().push_error_frame(error)
 
 
 class TrackedDeepgramTTSService(DeepgramTTSService):
