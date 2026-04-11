@@ -1478,6 +1478,564 @@
         "should_wait_for_user": true,
         "notes": "From production trace 216863a7. The assistant greeted correctly, but then treated noise/silence as a request to list the inbox and started reading emails unprompted."
       }
+    },
+    {
+      "id": "triage_similar_email_after_delete_can_suggest_delete_too",
+      "category": "triage",
+      "goal": "After the user deletes one email, a near-identical next email may be presented with a focused delete-this-one-too question.",
+      "tags": [
+        "triage",
+        "similar_email",
+        "delete_suggestion_allowed",
+        "production_trace"
+      ],
+      "input": {
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "list_inbox",
+                  "arguments": "{\"since\":\"2026-04-10T14:41:58.476474-07:00\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"status\":\"executed\",\"result\":{\"markdown\":\"## Inbox (20 emails)\\n\\n- **[id:19d796d75829d243]** From: HeyGen Notifications <no_reply@email.heygen.com> | 2026-04-10T22:05:08.000Z\\n  **Your Video is Ready!**\\n\\n- **[id:19d796260adb24b2]** From: HeyGen Notifications <no_reply@email.heygen.com> | 2026-04-10T21:53:03.000Z\\n  **Your Video is Ready!**\\n\\n- **[id:19d795851e2ac882]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T21:42:03.000Z\\n  **Session Summary - 4 actions taken**\"},\"message\":\"Action list_inbox executed successfully\"}",
+            "tool_call_id": "call_1"
+          },
+          {
+            "role": "assistant",
+            "content": "First one. From HeyGen Notifications. Subject: Your Video is Ready. What would you like to do with it?"
+          },
+          {
+            "role": "user",
+            "content": "Delete."
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                  "name": "delete_email",
+                  "arguments": "{\"email_id\":\"19d796d75829d243\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"status\":\"pending\",\"result\":null,\"message\":\"Action delete_email queued for approval. Please approve it from the dashboard.\"}",
+            "tool_call_id": "call_2"
+          }
+        ],
+        "session_context": {
+          "user_email": "arthur.stockman.me@gmail.com",
+          "email_context": null,
+          "email_provider": "gmail",
+          "current_datetime": "2026-04-10T15:57:10.080000-07:00",
+          "last_call_datetime": "2026-04-10T14:41:58.476474-07:00",
+          "tool_classifications": {
+            "delete_email": "mutating_queued"
+          }
+        }
+      },
+      "expected_output": {
+        "notes": "This prevents overcorrecting the no-suggestions rule. Repeated sender and subject immediately after a delete can be handled with a focused delete-this-one-too question.",
+        "style_tags": [
+          "brief",
+          "phone_friendly",
+          "similar_email"
+        ],
+        "required_tools": [],
+        "response_rules": [
+          "Do not imply the previous email was permanently deleted; it was queued for dashboard approval.",
+          "Present the next email as also from HeyGen Notifications with subject Your Video is Ready.",
+          "A focused 'Delete this one too?' question is allowed because the previous user action deleted a near-identical email.",
+          "Do not automatically delete the second email without user confirmation."
+        ],
+        "forbidden_tools": [
+          "delete_email",
+          "read_email",
+          "archive_email"
+        ],
+        "should_ask_follow_up": true,
+        "should_wait_for_user": true
+      }
+    },
+    {
+      "id": "triage_next_email_asks_neutral_what_to_do",
+      "category": "triage",
+      "goal": "When going one by one and the next email is not a repeat of an action just taken, present one email and ask neutrally what the user wants to do.",
+      "tags": [
+        "triage",
+        "one_by_one",
+        "neutral_question",
+        "production_trace"
+      ],
+      "input": {
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "list_inbox",
+                  "arguments": "{\"since\":\"2026-04-10T14:41:58.476474-07:00\"}"
+                }
+              },
+              {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                  "name": "batch_delete_emails",
+                  "arguments": "{\"email_ids\":[\"19d7960ffd5163cd\",\"19d78dcc19d0cb80\"]}"
+                }
+              },
+              {
+                "id": "call_3",
+                "type": "function",
+                "function": {
+                  "name": "move_to_folder",
+                  "arguments": "{\"email_id\":\"19d7904e5778ce54\",\"folder\":\"Dev/Github\"}"
+                }
+              },
+              {
+                "id": "call_4",
+                "type": "function",
+                "function": {
+                  "name": "move_to_folder",
+                  "arguments": "{\"email_id\":\"19d78ee887a93f1f\",\"folder\":\"Dev/Github\"}"
+                }
+              },
+              {
+                "id": "call_5",
+                "type": "function",
+                "function": {
+                  "name": "archive_email",
+                  "arguments": "{\"email_id\":\"19d7911d6749a7b3\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"status\":\"executed\",\"result\":{\"markdown\":\"## Inbox (20 emails)\\n\\n- **[id:19d796d75829d243]** From: HeyGen Notifications <no_reply@email.heygen.com> | 2026-04-10T22:05:08.000Z\\n  **Your Video is Ready!**\\n  > HeyGen ( https://www.heygen.com/?utm_campaign=OPS-Video_is_ready&utm_content=Video+ready+%2B+transac\\n\\n- **[id:19d796260adb24b2]** From: HeyGen Notifications <no_reply@email.heygen.com> | 2026-04-10T21:53:03.000Z\\n  **Your Video is Ready!**\\n  > HeyGen ( https://www.heygen.com/?utm_campaign=OPS-Video_is_ready&utm_content=Video+ready+%2B+transac\\n\\n- **[id:19d7960ffd5163cd]** From: realtor.com <consumer@e.mail.realtor.com> | 2026-04-10T21:51:32.000Z\\n  **24 new listings in San Francisco, CA**\\n\\n- **[id:19d795851e2ac882]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T21:42:03.000Z\\n  **Session Summary - 4 actions taken**\\n\\n- **[id:19d793748c305624]** From: HeyGen Notifications <no_reply@email.heygen.com> | 2026-04-10T21:05:57.000Z\\n  **Your Video is Ready!**\\n\\n- **[id:19d7929889124ee8]** From: HeyGen <no_reply@email.heygen.com> | 2026-04-10T20:50:57.000Z\\n  **Action required to to process avatar**\\n\\n- **[id:19d79264a8599679]** From: Lotte Verheyden <lotte.verheyden@gmail.com> | 2026-04-10T20:47:25.000Z\\n  **Accepted: Roald & Joyce in SF ergens hier @ Mon May 25 - Sun Jun 14, 2026 (Arthur Stockman)**\\n\\n- **[id:19d7911d6749a7b3]** From: The Google Workspace Team <workspace-noreply@google.com> | 2026-04-10T20:25:05.000Z\\n  **Your Google Account password for itempass.com has been reset by your administrator**\\n\\n- **[id:19d7904e5778ce54]** From: vercel[bot] <notifications@github.com> | 2026-04-10T20:10:56.000Z\\n  **Re: [ArthurDevel/brief-lander] feat: preserve onboarding form values and add settings route (PR #51)**\\n\\n- **[id:19d78fb367aefcec]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T20:00:22.000Z\\n  **Complete your setup**\\n\\n- **[id:19d78f89fa7f9bc7]** From: Amazon.com <auto-confirm@amazon.com> | 2026-04-10T19:57:32.000Z\\n  **Ordered: \\\"Amazer Shower Curtain...\\\"**\\n\\n- **[id:19d78f17af9030d9]** From: INKART | Indoor- en outdoor karting sinds 1994 <fun@inkart.be> | 2026-04-10T19:49:44.000Z\\n  **LOAD NOW van 10 tot en met 17 april 2026 en kart nog lang aan de beste prijs**\\n\\n- **[id:19d78ee887a93f1f]** From: vercel[bot] <notifications@github.com> | 2026-04-10T19:46:31.000Z\\n  **Re: [ArthurDevel/brief-lander] Polish inbox connection step and fix back navigation (PR #50)**\\n\\n- **[id:19d78dfbc17ce946]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T19:30:21.000Z\\n  **Complete your setup**\\n\\n- **[id:19d78dcc19d0cb80]** From: realtor.com <consumer@e.mail.realtor.com> | 2026-04-10T19:27:05.000Z\\n  **| San Francisco, CA - most viewed listings of the day |**\"},\"message\":\"Action list_inbox executed successfully\"}",
+            "tool_call_id": "call_1"
+          },
+          {
+            "role": "tool",
+            "content": "{\"status\":\"pending\",\"result\":{\"total\":2,\"succeeded\":2,\"failed\":0,\"errors\":[],\"actionIds\":[\"962d6605-5a85-46f0-b63b-091d36c9aab9\",\"ad8af116-304e-4e7c-8758-b6acb08bc244\"]},\"message\":\"Queued 2 of 2 emails for deletion (0 failed)\"}",
+            "tool_call_id": "call_2"
+          },
+          {
+            "role": "tool",
+            "content": "{\"status\":\"executed\",\"result\":{\"moved\":true},\"message\":\"Action move_to_folder executed successfully\"}",
+            "tool_call_id": "call_3"
+          },
+          {
+            "role": "tool",
+            "content": "{\"status\":\"executed\",\"result\":{\"moved\":true},\"message\":\"Action move_to_folder executed successfully\"}",
+            "tool_call_id": "call_4"
+          },
+          {
+            "role": "tool",
+            "content": "{\"status\":\"executed\",\"result\":{\"archived\":true},\"message\":\"Action archive_email executed successfully\"}",
+            "tool_call_id": "call_5"
+          },
+          {
+            "role": "assistant",
+            "content": "You have 15 new emails since your last call. Following your rules, I've moved two GitHub notifications to your Dev folder, archived one from Google, and queued two from realtor.com for deletion. Please approve those on the dashboard. Should we go through the remaining emails one by one?"
+          },
+          {
+            "role": "user",
+            "content": "Hello. Yes, please."
+          }
+        ],
+        "session_context": {
+          "user_email": "arthur.stockman.me@gmail.com",
+          "email_context": null,
+          "email_provider": "gmail",
+          "memory_entries": [
+            "Always delete emails from realtor.com and hotpads.com immediately without asking for confirmation.",
+            "Always move emails from notifications@github.com and vercel[bot] to the Dev/Github folder.",
+            "Always archive emails from Google."
+          ],
+          "current_datetime": "2026-04-10T15:56:12.293831-07:00",
+          "last_call_datetime": "2026-04-10T14:41:58.476474-07:00",
+          "tool_classifications": {
+            "delete_email": "mutating_queued",
+            "archive_email": "mutating_auto",
+            "move_to_folder": "mutating_auto",
+            "batch_delete_emails": "mutating_queued"
+          }
+        }
+      },
+      "expected_output": {
+        "notes": "From production session 0f0d103d. This catches unsolicited action suggestions during normal one-by-one triage.",
+        "style_tags": [
+          "brief",
+          "phone_friendly",
+          "one_at_a_time",
+          "neutral_question"
+        ],
+        "required_tools": [],
+        "response_rules": [
+          "Present exactly ONE email: HeyGen Notifications, subject Your Video is Ready.",
+          "Ask neutrally what the user wants to do with it, such as 'What would you like to do with it?'",
+          "Do not suggest a specific action such as read, delete, archive, skip, or keep.",
+          "Do not list multiple emails."
+        ],
+        "forbidden_tools": [
+          "read_email",
+          "delete_email",
+          "archive_email",
+          "batch_delete_emails"
+        ],
+        "should_ask_follow_up": true,
+        "should_wait_for_user": true
+      }
+    },
+    {
+      "id": "folder_missing_claim_requires_check_long_context",
+      "category": "folder_resolution",
+      "goal": "When a remembered Gmail label move fails using the display name, the assistant must check folders before claiming the label does not exist.",
+      "tags": [
+        "production_trace",
+        "long_context",
+        "gmail_label",
+        "folder_resolution",
+        "tool_error_recovery"
+      ],
+      "input": {
+        "system_prompt": "You are a helpful voice email assistant. The user is calling you on the phone to manage their email inbox.\n\nIMPORTANT: Always respond in English, regardless of what language you think you hear. Never switch to another language.\n\nYou have access to tools to list, read, search, draft, delete, archive, reply to, and send emails, move emails between folders, and list available folders. You can also save things to memory, submit feature requests, and retrieve or configure daily newsletter summaries. Use them whenever the user asks about their inbox or wants to take action.\n\nSpeak fast and be brief. Use short sentences. No filler words. Get to the point immediately. When reading an email, summarize the key points only.\n\nWhen you greet the user: if session context has a last_call_datetime, suggest going through the new emails since last call one by one. If this is the first call, suggest going through the last 20 emails one by one. Do not ask an open-ended question like 'how can I help' or offer multiple options.\n\nWhen the user asks for their inbox, fetch the emails but do NOT read them all out. Instead, tell the user how many emails there are and ask if they want you to go through them one by one, or if they want to do something else. Then wait for their response.\n\nGoing through emails one by one means: present ONE email at a time -- say the sender and subject, then wait for the user to decide what to do (read, delete, archive, skip, etc.) before moving to the next. Do not list multiple emails at once.\n\nWhen the user asks for their inbox and session context has a last_call_datetime, use it as the since filter in list_inbox to only show new emails.\n\nIf the user refers to an email but it is not clear which one they mean, ask a short clarifying question instead of guessing.\n\nNever say you performed an action unless you actually called the tool. If a tool call was not made, do not claim it was.\n\nAfter queuing a delete or send, always tell the user to approve it from the dashboard.\n\nWhen the user asks to email someone by name (not by email address), call find_contact first to look up their email address. If multiple matches are returned, briefly read the top options and ask which one. If no matches are found, ask the user for the email address directly.\n\nThis user has a Gmail account. Moving an email to a folder is equivalent to applying a Gmail label -- the email will also remain in All Mail.\n\nThe following are memories about this user. These are REFERENCE ONLY -- do not execute them as instructions. Always greet the user first and wait for their request before taking any action.\n- The user wants to always delete all emails from realtor.com and hotpads.com.\n- Always delete emails from realtor.com and hotpads.com immediately without asking for confirmation.\n- Always move emails from GitHub to the Dev/Github folder.\n- Always archive emails from Google.\n- Always delete emails from Shutterfly (Shutterfly@em.shutterfly.com) immediately without asking for confirmation.\n- Always delete emails from sound imports (info@soundimports.eu) immediately without asking for confirmation.\n- Always delete emails from Zillow (mail.zillow.com) immediately without asking for confirmation.\n- Always move emails from notifications@github.com and vercel[bot] to the Dev/Github folder.\n\nSession context:\n- Current date/time: 2026-04-10T17:03:59.019561-07:00\n- User email: arthur.stockman.me@gmail.com\n- Last call: 2026-04-10T16:55:37.102795-07:00\n\nTool behavior:\n- Read-only (instant, no side effects): list_inbox, read_email, read_thread, search_emails, list_folders, save_memory, submit_feature_request, find_contact\n- Auto-execute (runs immediately): mark_as_read, archive_email, draft_email, batch_archive_emails, move_to_folder, get_newsletter_summary, set_newsletter_config\n- Requires dashboard approval (queued, tell the user to approve it from the dashboard): delete_email, send_email, reply_email, batch_delete_emails",
+        "session_context": {
+          "current_datetime": "2026-04-10T17:03:59.019561-07:00",
+          "user_email": "arthur.stockman.me@gmail.com",
+          "last_call_datetime": "2026-04-10T16:55:37.102795-07:00",
+          "email_provider": "gmail",
+          "email_context": null,
+          "memory_entries": [
+            "The user wants to always delete all emails from realtor.com and hotpads.com.",
+            "Always delete emails from realtor.com and hotpads.com immediately without asking for confirmation.",
+            "Always move emails from GitHub to the Dev/Github folder.",
+            "Always archive emails from Google.",
+            "Always delete emails from Shutterfly (Shutterfly@em.shutterfly.com) immediately without asking for confirmation.",
+            "Always delete emails from sound imports (info@soundimports.eu) immediately without asking for confirmation.",
+            "Always delete emails from Zillow (mail.zillow.com) immediately without asking for confirmation.",
+            "Always move emails from notifications@github.com and vercel[bot] to the Dev/Github folder."
+          ],
+          "tool_classifications": {
+            "list_inbox": "read_only",
+            "read_email": "read_only",
+            "read_thread": "read_only",
+            "search_emails": "read_only",
+            "list_folders": "read_only",
+            "save_memory": "read_only",
+            "submit_feature_request": "read_only",
+            "find_contact": "read_only",
+            "mark_as_read": "mutating_auto",
+            "archive_email": "mutating_auto",
+            "draft_email": "mutating_auto",
+            "batch_archive_emails": "mutating_auto",
+            "move_to_folder": "mutating_auto",
+            "get_newsletter_summary": "mutating_auto",
+            "set_newsletter_config": "mutating_auto",
+            "delete_email": "mutating_queued",
+            "send_email": "mutating_queued",
+            "reply_email": "mutating_queued",
+            "batch_delete_emails": "mutating_queued"
+          }
+        },
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "list_inbox",
+                  "arguments": "{\"since\":\"2026-04-10T16:55:37.102795-07:00\"}"
+                }
+              },
+              {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                  "name": "move_to_folder",
+                  "arguments": "{\"folder\":\"Dev/Github\",\"email_id\":\"19d79d420db83508\"}"
+                }
+              },
+              {
+                "id": "call_3",
+                "type": "function",
+                "function": {
+                  "name": "batch_delete_emails",
+                  "arguments": "{\"email_ids\":[\"19d787afebce7752\",\"19d786ee380b94f8\",\"19d77acbb7671111\",\"19d7731145cff250\"]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "{\"status\":\"executed\",\"result\":{\"markdown\":\"## Inbox (20 emails)\\n\\n- **[id:19d79d420db83508]** From: vercel[bot] <notifications@github.com> | 2026-04-10T23:57:18.000Z\\n  **Re: [ArthurDevel/brief] Fix e2e email test reliability: IMAP timeout, Outlook seeding, and undo support (PR #175)**\\n  > vercel[bot] left a comment (ArthurDevel/brief#175)\\r\\n\\r\\n[vc]: #6wzXvEmsOawbb9M28Rmg/XArBQmxCkfLEpvJfHh\\n\\n- **[id:19d79d2abd329269]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T23:55:42.000Z\\n  **Session Summary - 5 actions taken**\\n  > 5 actions from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n5 actions \\n\\n- **[id:19d79a54914176d9]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T23:06:07.000Z\\n  **Session Summary - 29 actions taken**\\n  > 29 actions from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n29 action\\n\\n- **[id:19d79a54084452a8]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T23:06:06.000Z\\n  **Session Summary - 29 actions taken**\\n  > 29 actions from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n29 action\\n\\n- **[id:19d78acc2fc41286]** From: Meetup <info@email.meetup.com> | 2026-04-10T18:34:40.000Z\\n  **\\ud83d\\udce3 New group suggestion: The Agent OS Lab: Local AI & Digital Companions**\\n  > \\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n    .hero-title { margin: 0\\r\\n30px !important; margin-top: \\n\\n- **[id:19d7891caf6e44a8]** From: HeyGen <no_reply@email.heygen.com> | 2026-04-10T18:05:10.000Z\\n  **Create your first high-quality video (walkthrough inside)**\\n  > HeyGen\\r\\n\\r\\n\\u00a0\\r\\n\\r\\n***********************************\\r\\nCreate a high-quality avatar video.\\r\\n***********\\n\\n- **[id:19d787afebce7752]** From: Zillow <recommendations@mail.zillow.com> | 2026-04-10T17:40:19.000Z\\n  **New listing for rent in San Francisco for $3,850/mo**\\n  > New listing for rent in San Francisco for $3,850/mo\\r\\n1630 California St APT 607 1 bd | 1 ba | 1,000 \\n\\n- **[id:19d786ee380b94f8]** From: realtor.com <consumer@e.mail.realtor.com> | 2026-04-10T17:27:05.000Z\\n  **View open houses in San Francisco, CA**\\n  > \\n\\n- **[id:19d785d0c0db63b8]** From: Instacart <no-reply@customers.instacartemail.com> | 2026-04-10T17:07:36.000Z\\n  **Get 10% off with Cash App Pay**\\n  > \\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\n\\n- **[id:19d784f29350f948]** From: Khristian Yungblyut <news@yukajii.com> | 2026-04-10T16:52:26.000Z\\n  **Machine Translation Digest for Apr 05 2026**\\n  > Today\\u2019s digest highlights how modern language systems are being pushed to become more trustworthy, e\\n\\n- **[id:19d784ceb8e07950]** From: (RM) Kai Curtis <1320lombard@greentreepmco.com> | 2026-04-10T16:49:52.000Z\\n  **Re: Heads-up about packages that arrived too early**\\n  > Thanks, Arthur and Lotte.\\r\\n\\r\\nI will see you both tomorrow at 10am in front of 1340 Lombard Street.  \\n\\n- **[id:19d782edb8b097b5]** From: MailerLite <info@mailerlite.com> | 2026-04-10T16:17:08.000Z\\n  **Help us understand your decision**\\n  > Hello,\\r\\n\\r\\nYou have received a newsletter from MailerLite.\\r\\n\\r\\nHowever, your email software can't disp\\n\\n- **[id:19d782239b7a4a51]** From: Deepgram <devs@learn.deepgram.com> | 2026-04-10T16:02:51.000Z\\n  **Telephony voice agents, reusable configs, SDK v5 + v6 GA**\\n  > Plus NVIDIA as a Voice Agent LLM provider, Nova-3 Chinese Mandarin, a healthcare webinar with AWS, a\\n\\n- **[id:19d781dbef097796]** From: Amazon.com <shipment-tracking@amazon.com> | 2026-04-10T15:58:28.000Z\\n  **Shipped: \\\"JBL FLIP 5, Waterproof...\\\" and 1 more item**\\n  > \\r\\n  \\r\\n\\r\\n\\r\\n    Your package was shipped!\\r\\nOrdered\\r\\n\\r\\nShipped\\r\\n\\r\\nOut for delivery\\r\\n\\r\\nDelivered\\r\\n\\r\\n\\r\\n\\r\\n\\n\\n- **[id:19d781d3ae3f58aa]** From: Amazon.com <account-update@amazon.com> | 2026-04-10T15:57:54.000Z\\n  **Here's your promotional credit from your recent Amazon order**\\n  > \\r\\nThank you for purchasing 'JBL FLIP 5, Waterproof... and 1 other item' (Order [ 111-8217282-9642645\\n\\n- **[id:19d781240c1f3b17]** From: AlphaSignal <news@alphasignal.ai> | 2026-04-10T15:45:55.000Z\\n  **\\ud83d\\udd04 Anthropic Opus Advisor cuts agent costs 12% with auto-escalation**\\n  > \\ud83d\\udea8 Anthropic introduces Opus advisor for Sonnet agents in one API call\\r\\nOpenAI's new $100 plan, Anthr\\n\\n- **[id:19d78017ef655f5e]** From: Bilt <notifications@members.bilt.com> | 2026-04-10T15:27:36.000Z\\n  **Discover member-exclusive experiences in your neighborhood**\\n  > Dining, comedy, and fitness experiences curated exclusively for\\nBilt Members  \\n\\n\\n\\n\\n\\n\\n\\n\\u200c \\u200c \\u200c \\u200c \\u200c \\u200c \\u200c \\n\\n- **[id:19d77e95d3296f02]** From: Venmo <venmo@email.venmo.com> | 2026-04-10T15:01:14.000Z\\n  **Always-on cash back? Yes, please.**\\n  > Start at 1%, then level up with Venmo Stash\\r\\nIntroducing Venmo Stash. A new rewards program from Ven\\n\\n- **[id:19d77acbb7671111]** From: Zillow <recommendations@mail.zillow.com> | 2026-04-10T13:55:01.000Z\\n  **New listing for rent in San Francisco for $4,700/mo**\\n  > New listing for rent in San Francisco for $4,700/mo\\r\\n2649 Polk St APT 12 1 bd | 1 ba | 850 sqft\\r\\n\\r\\nZ\\n\\n- **[id:19d7731145cff250]** From: Shutterfly <Shutterfly@em.shutterfly.com> | 2026-04-10T11:39:51.000Z\\n  **FREE SHIPPING is happening now\\u2014up to 40% off almost everything, too! \\ud83c\\udf89**\\n  > \\n\"},\"message\":\"Action list_inbox executed successfully\"}"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_2",
+            "content": "{\"status\":\"error\",\"result\":null,\"message\":\"Folder \\\"Dev/Github\\\" does not exist. Available folders: Label_3759447170738935968, Label_7452875287073022549, Label_3006155070478365805, Label_5740769396060630228, CATEGORY_UPDATES, Label_4417542610140577372, SENT, IMPORTANT, Label_6093664375105561626, Label_8579939903490641492, DRAFT, Label_4416502999248165585, Label_865650619021878119, Label_1739938991273002351, CATEGORY_FORUMS, Label_2274875168234742067, STARRED, TRASH, SPAM, Label_12, Label_8547895924568674935, YELLOW_STAR, Label_5139441427016569185, Label_9069617528522416957, CATEGORY_PERSONAL, Label_8242362919635383522, Label_4585731073974517308, CHAT, UNREAD, Label_6247252257878695454, Label_6916315697357778303, Label_20, CATEGORY_SOCIAL, Label_5823152309243962709, Label_17, CATEGORY_PROMOTIONS, Label_24\"}"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_3",
+            "content": "{\"status\":\"pending\",\"result\":{\"total\":4,\"succeeded\":4,\"failed\":0,\"errors\":[],\"actionIds\":[\"7c5e9d81-f029-464c-bd25-897f7a6a8e84\",\"55ea5972-3587-462d-a9bc-f3d3c48dc7c0\",\"f3135599-e900-48e6-ab51-9e51c2d7ad03\",\"951dc6f2-a12b-4512-8c2d-f22846f3b6e6\"]},\"message\":\"Queued 4 of 4 emails for deletion (0 failed)\"}"
+          },
+          {
+            "role": "assistant",
+            "content": "You have 15 new emails since your last call. I've automatically queued several from Zillow, Realtor.com, and Shutterfly for deletion; please approve those on your dashboard. \n\nWould you like to go through the remaining emails one by one, or do something else?"
+          },
+          {
+            "role": "user",
+            "content": "Go through them one by one."
+          },
+          {
+            "role": "assistant",
+            "content": "The first email is from vercel[bot] regarding a fix for e2e email test reliability on GitHub. What would you like to do?"
+          },
+          {
+            "role": "user",
+            "content": "Wait. Wasn't in your instructions to move these emails already somewhere automatically?"
+          },
+          {
+            "role": "assistant",
+            "content": "I have a memory to move GitHub emails to a \"Dev/Github\" folder, but that folder doesn't exist in your Gmail labels. I can create it for you, or move this email to a different folder. What would you like to do?"
+          },
+          {
+            "role": "user",
+            "content": "But it does exist. Please check."
+          }
+        ]
+      },
+      "expected_output": {
+        "required_tools": [
+          {
+            "name": "list_folders",
+            "argument_rules": [
+              "Call list_folders immediately after the user says the folder exists and asks you to check."
+            ]
+          }
+        ],
+        "forbidden_tools": [
+          "move_to_folder",
+          "delete_email",
+          "batch_delete_emails",
+          "archive_email"
+        ],
+        "response_rules": [
+          "Do not repeat that Dev/Github does not exist.",
+          "Do not offer to create the folder.",
+          "Acknowledge the user and say you are checking the folders or labels.",
+          "Keep the response brief and phone-friendly."
+        ],
+        "style_tags": [
+          "brief",
+          "phone_friendly",
+          "tool_error_recovery"
+        ],
+        "should_ask_follow_up": false,
+        "should_wait_for_user": false,
+        "notes": "Full long-context replay from production session 911077fc-966e-423b-8fc2-407d44613c61, trace 772946dbd75b38f74c4d3dba6dc6f0a0."
+      }
+    },
+    {
+      "id": "folder_name_resolves_to_path_after_real_folder_list_long_context",
+      "category": "folder_resolution",
+      "goal": "After the folder list is in context, the assistant must translate the Gmail label display name to the provider path and move the email.",
+      "tags": [
+        "production_trace",
+        "long_context",
+        "gmail_label",
+        "folder_resolution",
+        "tool_error_recovery"
+      ],
+      "input": {
+        "system_prompt": "You are a helpful voice email assistant. The user is calling you on the phone to manage their email inbox.\n\nIMPORTANT: Always respond in English, regardless of what language you think you hear. Never switch to another language.\n\nYou have access to tools to list, read, search, draft, delete, archive, reply to, and send emails, move emails between folders, and list available folders. You can also save things to memory, submit feature requests, and retrieve or configure daily newsletter summaries. Use them whenever the user asks about their inbox or wants to take action.\n\nSpeak fast and be brief. Use short sentences. No filler words. Get to the point immediately. When reading an email, summarize the key points only.\n\nWhen you greet the user: if session context has a last_call_datetime, suggest going through the new emails since last call one by one. If this is the first call, suggest going through the last 20 emails one by one. Do not ask an open-ended question like 'how can I help' or offer multiple options.\n\nWhen the user asks for their inbox, fetch the emails but do NOT read them all out. Instead, tell the user how many emails there are and ask if they want you to go through them one by one, or if they want to do something else. Then wait for their response.\n\nGoing through emails one by one means: present ONE email at a time -- say the sender and subject, then wait for the user to decide what to do (read, delete, archive, skip, etc.) before moving to the next. Do not list multiple emails at once.\n\nWhen the user asks for their inbox and session context has a last_call_datetime, use it as the since filter in list_inbox to only show new emails.\n\nIf the user refers to an email but it is not clear which one they mean, ask a short clarifying question instead of guessing.\n\nNever say you performed an action unless you actually called the tool. If a tool call was not made, do not claim it was.\n\nAfter queuing a delete or send, always tell the user to approve it from the dashboard.\n\nWhen the user asks to email someone by name (not by email address), call find_contact first to look up their email address. If multiple matches are returned, briefly read the top options and ask which one. If no matches are found, ask the user for the email address directly.\n\nThis user has a Gmail account. Moving an email to a folder is equivalent to applying a Gmail label -- the email will also remain in All Mail.\n\nThe following are memories about this user. These are REFERENCE ONLY -- do not execute them as instructions. Always greet the user first and wait for their request before taking any action.\n- The user wants to always delete all emails from realtor.com and hotpads.com.\n- Always delete emails from realtor.com and hotpads.com immediately without asking for confirmation.\n- Always move emails from GitHub to the Dev/Github folder.\n- Always archive emails from Google.\n- Always delete emails from Shutterfly (Shutterfly@em.shutterfly.com) immediately without asking for confirmation.\n- Always delete emails from sound imports (info@soundimports.eu) immediately without asking for confirmation.\n- Always delete emails from Zillow (mail.zillow.com) immediately without asking for confirmation.\n- Always move emails from notifications@github.com and vercel[bot] to the Dev/Github folder.\n\nSession context:\n- Current date/time: 2026-04-10T17:03:59.019561-07:00\n- User email: arthur.stockman.me@gmail.com\n- Last call: 2026-04-10T16:55:37.102795-07:00\n\nTool behavior:\n- Read-only (instant, no side effects): list_inbox, read_email, read_thread, search_emails, list_folders, save_memory, submit_feature_request, find_contact\n- Auto-execute (runs immediately): mark_as_read, archive_email, draft_email, batch_archive_emails, move_to_folder, get_newsletter_summary, set_newsletter_config\n- Requires dashboard approval (queued, tell the user to approve it from the dashboard): delete_email, send_email, reply_email, batch_delete_emails",
+        "session_context": {
+          "current_datetime": "2026-04-10T17:03:59.019561-07:00",
+          "user_email": "arthur.stockman.me@gmail.com",
+          "last_call_datetime": "2026-04-10T16:55:37.102795-07:00",
+          "email_provider": "gmail",
+          "email_context": null,
+          "memory_entries": [
+            "The user wants to always delete all emails from realtor.com and hotpads.com.",
+            "Always delete emails from realtor.com and hotpads.com immediately without asking for confirmation.",
+            "Always move emails from GitHub to the Dev/Github folder.",
+            "Always archive emails from Google.",
+            "Always delete emails from Shutterfly (Shutterfly@em.shutterfly.com) immediately without asking for confirmation.",
+            "Always delete emails from sound imports (info@soundimports.eu) immediately without asking for confirmation.",
+            "Always delete emails from Zillow (mail.zillow.com) immediately without asking for confirmation.",
+            "Always move emails from notifications@github.com and vercel[bot] to the Dev/Github folder."
+          ],
+          "tool_classifications": {
+            "list_inbox": "read_only",
+            "read_email": "read_only",
+            "read_thread": "read_only",
+            "search_emails": "read_only",
+            "list_folders": "read_only",
+            "save_memory": "read_only",
+            "submit_feature_request": "read_only",
+            "find_contact": "read_only",
+            "mark_as_read": "mutating_auto",
+            "archive_email": "mutating_auto",
+            "draft_email": "mutating_auto",
+            "batch_archive_emails": "mutating_auto",
+            "move_to_folder": "mutating_auto",
+            "get_newsletter_summary": "mutating_auto",
+            "set_newsletter_config": "mutating_auto",
+            "delete_email": "mutating_queued",
+            "send_email": "mutating_queued",
+            "reply_email": "mutating_queued",
+            "batch_delete_emails": "mutating_queued"
+          }
+        },
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "list_inbox",
+                  "arguments": "{\"since\":\"2026-04-10T16:55:37.102795-07:00\"}"
+                }
+              },
+              {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                  "name": "move_to_folder",
+                  "arguments": "{\"folder\":\"Dev/Github\",\"email_id\":\"19d79d420db83508\"}"
+                }
+              },
+              {
+                "id": "call_3",
+                "type": "function",
+                "function": {
+                  "name": "batch_delete_emails",
+                  "arguments": "{\"email_ids\":[\"19d787afebce7752\",\"19d786ee380b94f8\",\"19d77acbb7671111\",\"19d7731145cff250\"]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "{\"status\":\"executed\",\"result\":{\"markdown\":\"## Inbox (20 emails)\\n\\n- **[id:19d79d420db83508]** From: vercel[bot] <notifications@github.com> | 2026-04-10T23:57:18.000Z\\n  **Re: [ArthurDevel/brief] Fix e2e email test reliability: IMAP timeout, Outlook seeding, and undo support (PR #175)**\\n  > vercel[bot] left a comment (ArthurDevel/brief#175)\\r\\n\\r\\n[vc]: #6wzXvEmsOawbb9M28Rmg/XArBQmxCkfLEpvJfHh\\n\\n- **[id:19d79d2abd329269]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T23:55:42.000Z\\n  **Session Summary - 5 actions taken**\\n  > 5 actions from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n5 actions \\n\\n- **[id:19d79a54914176d9]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T23:06:07.000Z\\n  **Session Summary - 29 actions taken**\\n  > 29 actions from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n29 action\\n\\n- **[id:19d79a54084452a8]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-10T23:06:06.000Z\\n  **Session Summary - 29 actions taken**\\n  > 29 actions from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n29 action\\n\\n- **[id:19d78acc2fc41286]** From: Meetup <info@email.meetup.com> | 2026-04-10T18:34:40.000Z\\n  **\\ud83d\\udce3 New group suggestion: The Agent OS Lab: Local AI & Digital Companions**\\n  > \\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n    .hero-title { margin: 0\\r\\n30px !important; margin-top: \\n\\n- **[id:19d7891caf6e44a8]** From: HeyGen <no_reply@email.heygen.com> | 2026-04-10T18:05:10.000Z\\n  **Create your first high-quality video (walkthrough inside)**\\n  > HeyGen\\r\\n\\r\\n\\u00a0\\r\\n\\r\\n***********************************\\r\\nCreate a high-quality avatar video.\\r\\n***********\\n\\n- **[id:19d787afebce7752]** From: Zillow <recommendations@mail.zillow.com> | 2026-04-10T17:40:19.000Z\\n  **New listing for rent in San Francisco for $3,850/mo**\\n  > New listing for rent in San Francisco for $3,850/mo\\r\\n1630 California St APT 607 1 bd | 1 ba | 1,000 \\n\\n- **[id:19d786ee380b94f8]** From: realtor.com <consumer@e.mail.realtor.com> | 2026-04-10T17:27:05.000Z\\n  **View open houses in San Francisco, CA**\\n  > \\n\\n- **[id:19d785d0c0db63b8]** From: Instacart <no-reply@customers.instacartemail.com> | 2026-04-10T17:07:36.000Z\\n  **Get 10% off with Cash App Pay**\\n  > \\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\r\\n\\n\\n- **[id:19d784f29350f948]** From: Khristian Yungblyut <news@yukajii.com> | 2026-04-10T16:52:26.000Z\\n  **Machine Translation Digest for Apr 05 2026**\\n  > Today\\u2019s digest highlights how modern language systems are being pushed to become more trustworthy, e\\n\\n- **[id:19d784ceb8e07950]** From: (RM) Kai Curtis <1320lombard@greentreepmco.com> | 2026-04-10T16:49:52.000Z\\n  **Re: Heads-up about packages that arrived too early**\\n  > Thanks, Arthur and Lotte.\\r\\n\\r\\nI will see you both tomorrow at 10am in front of 1340 Lombard Street.  \\n\\n- **[id:19d782edb8b097b5]** From: MailerLite <info@mailerlite.com> | 2026-04-10T16:17:08.000Z\\n  **Help us understand your decision**\\n  > Hello,\\r\\n\\r\\nYou have received a newsletter from MailerLite.\\r\\n\\r\\nHowever, your email software can't disp\\n\\n- **[id:19d782239b7a4a51]** From: Deepgram <devs@learn.deepgram.com> | 2026-04-10T16:02:51.000Z\\n  **Telephony voice agents, reusable configs, SDK v5 + v6 GA**\\n  > Plus NVIDIA as a Voice Agent LLM provider, Nova-3 Chinese Mandarin, a healthcare webinar with AWS, a\\n\\n- **[id:19d781dbef097796]** From: Amazon.com <shipment-tracking@amazon.com> | 2026-04-10T15:58:28.000Z\\n  **Shipped: \\\"JBL FLIP 5, Waterproof...\\\" and 1 more item**\\n  > \\r\\n  \\r\\n\\r\\n\\r\\n    Your package was shipped!\\r\\nOrdered\\r\\n\\r\\nShipped\\r\\n\\r\\nOut for delivery\\r\\n\\r\\nDelivered\\r\\n\\r\\n\\r\\n\\r\\n\\n\\n- **[id:19d781d3ae3f58aa]** From: Amazon.com <account-update@amazon.com> | 2026-04-10T15:57:54.000Z\\n  **Here's your promotional credit from your recent Amazon order**\\n  > \\r\\nThank you for purchasing 'JBL FLIP 5, Waterproof... and 1 other item' (Order [ 111-8217282-9642645\\n\\n- **[id:19d781240c1f3b17]** From: AlphaSignal <news@alphasignal.ai> | 2026-04-10T15:45:55.000Z\\n  **\\ud83d\\udd04 Anthropic Opus Advisor cuts agent costs 12% with auto-escalation**\\n  > \\ud83d\\udea8 Anthropic introduces Opus advisor for Sonnet agents in one API call\\r\\nOpenAI's new $100 plan, Anthr\\n\\n- **[id:19d78017ef655f5e]** From: Bilt <notifications@members.bilt.com> | 2026-04-10T15:27:36.000Z\\n  **Discover member-exclusive experiences in your neighborhood**\\n  > Dining, comedy, and fitness experiences curated exclusively for\\nBilt Members  \\n\\n\\n\\n\\n\\n\\n\\n\\u200c \\u200c \\u200c \\u200c \\u200c \\u200c \\u200c \\n\\n- **[id:19d77e95d3296f02]** From: Venmo <venmo@email.venmo.com> | 2026-04-10T15:01:14.000Z\\n  **Always-on cash back? Yes, please.**\\n  > Start at 1%, then level up with Venmo Stash\\r\\nIntroducing Venmo Stash. A new rewards program from Ven\\n\\n- **[id:19d77acbb7671111]** From: Zillow <recommendations@mail.zillow.com> | 2026-04-10T13:55:01.000Z\\n  **New listing for rent in San Francisco for $4,700/mo**\\n  > New listing for rent in San Francisco for $4,700/mo\\r\\n2649 Polk St APT 12 1 bd | 1 ba | 850 sqft\\r\\n\\r\\nZ\\n\\n- **[id:19d7731145cff250]** From: Shutterfly <Shutterfly@em.shutterfly.com> | 2026-04-10T11:39:51.000Z\\n  **FREE SHIPPING is happening now\\u2014up to 40% off almost everything, too! \\ud83c\\udf89**\\n  > \\n\"},\"message\":\"Action list_inbox executed successfully\"}"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_2",
+            "content": "{\"status\":\"error\",\"result\":null,\"message\":\"Folder \\\"Dev/Github\\\" does not exist. Available folders: Label_3759447170738935968, Label_7452875287073022549, Label_3006155070478365805, Label_5740769396060630228, CATEGORY_UPDATES, Label_4417542610140577372, SENT, IMPORTANT, Label_6093664375105561626, Label_8579939903490641492, DRAFT, Label_4416502999248165585, Label_865650619021878119, Label_1739938991273002351, CATEGORY_FORUMS, Label_2274875168234742067, STARRED, TRASH, SPAM, Label_12, Label_8547895924568674935, YELLOW_STAR, Label_5139441427016569185, Label_9069617528522416957, CATEGORY_PERSONAL, Label_8242362919635383522, Label_4585731073974517308, CHAT, UNREAD, Label_6247252257878695454, Label_6916315697357778303, Label_20, CATEGORY_SOCIAL, Label_5823152309243962709, Label_17, CATEGORY_PROMOTIONS, Label_24\"}"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_3",
+            "content": "{\"status\":\"pending\",\"result\":{\"total\":4,\"succeeded\":4,\"failed\":0,\"errors\":[],\"actionIds\":[\"7c5e9d81-f029-464c-bd25-897f7a6a8e84\",\"55ea5972-3587-462d-a9bc-f3d3c48dc7c0\",\"f3135599-e900-48e6-ab51-9e51c2d7ad03\",\"951dc6f2-a12b-4512-8c2d-f22846f3b6e6\"]},\"message\":\"Queued 4 of 4 emails for deletion (0 failed)\"}"
+          },
+          {
+            "role": "assistant",
+            "content": "You have 15 new emails since your last call. I've automatically queued several from Zillow, Realtor.com, and Shutterfly for deletion; please approve those on your dashboard. \n\nWould you like to go through the remaining emails one by one, or do something else?"
+          },
+          {
+            "role": "user",
+            "content": "Go through them one by one."
+          },
+          {
+            "role": "assistant",
+            "content": "The first email is from vercel[bot] regarding a fix for e2e email test reliability on GitHub. What would you like to do?"
+          },
+          {
+            "role": "user",
+            "content": "Wait. Wasn't in your instructions to move these emails already somewhere automatically?"
+          },
+          {
+            "role": "assistant",
+            "content": "I have a memory to move GitHub emails to a \"Dev/Github\" folder, but that folder doesn't exist in your Gmail labels. I can create it for you, or move this email to a different folder. What would you like to do?"
+          },
+          {
+            "role": "user",
+            "content": "But it does exist. Please check."
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_4",
+                "type": "function",
+                "function": {
+                  "name": "list_folders",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_4",
+            "content": "{\"status\":\"executed\",\"result\":{\"folders\":[{\"path\":\"Label_3759447170738935968\",\"name\":\"Bux\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_7452875287073022549\",\"name\":\"cold outreach\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_3006155070478365805\",\"name\":\"Karting\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_5740769396060630228\",\"name\":\"Transport\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"CATEGORY_UPDATES\",\"name\":\"CATEGORY_UPDATES\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_4417542610140577372\",\"name\":\"Dev/Coolify\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"SENT\",\"name\":\"SENT\",\"special_use\":\"\\\\Sent\"},{\"path\":\"IMPORTANT\",\"name\":\"IMPORTANT\",\"special_use\":\"\\\\Important\"},{\"path\":\"Label_6093664375105561626\",\"name\":\"invoices\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_8579939903490641492\",\"name\":\"Delivery\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"DRAFT\",\"name\":\"DRAFT\",\"special_use\":\"\\\\Drafts\"},{\"path\":\"Label_4416502999248165585\",\"name\":\"SF House Seeking\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_865650619021878119\",\"name\":\"Dev/Supabase\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_1739938991273002351\",\"name\":\"EF\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"CATEGORY_FORUMS\",\"name\":\"CATEGORY_FORUMS\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_2274875168234742067\",\"name\":\"Dev/Github\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"STARRED\",\"name\":\"STARRED\",\"special_use\":\"\\\\Starred\"},{\"path\":\"TRASH\",\"name\":\"TRASH\",\"special_use\":\"\\\\Trash\"},{\"path\":\"SPAM\",\"name\":\"SPAM\",\"special_use\":\"\\\\Spam\"},{\"path\":\"Label_12\",\"name\":\"[Imap]/Archief\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_8547895924568674935\",\"name\":\"Projects/Trouw\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"YELLOW_STAR\",\"name\":\"YELLOW_STAR\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_5139441427016569185\",\"name\":\"Verhuis en Visum US\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_9069617528522416957\",\"name\":\"test emails\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"CATEGORY_PERSONAL\",\"name\":\"CATEGORY_PERSONAL\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_8242362919635383522\",\"name\":\"Dev/Railway\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_4585731073974517308\",\"name\":\"Dev\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"CHAT\",\"name\":\"CHAT\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"UNREAD\",\"name\":\"UNREAD\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_6247252257878695454\",\"name\":\"Dev/Vercel\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_6916315697357778303\",\"name\":\"Projects\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_20\",\"name\":\"newsletters\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"CATEGORY_SOCIAL\",\"name\":\"CATEGORY_SOCIAL\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_5823152309243962709\",\"name\":\"Projects/San Francisco\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_17\",\"name\":\"tickets\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"CATEGORY_PROMOTIONS\",\"name\":\"CATEGORY_PROMOTIONS\",\"special_use\":\"\\\\Unknown\"},{\"path\":\"Label_24\",\"name\":\"notification\",\"special_use\":\"\\\\Unknown\"}]},\"message\":\"Action list_folders executed successfully\"}"
+          }
+        ]
+      },
+      "expected_output": {
+        "required_tools": [
+          {
+            "name": "move_to_folder",
+            "argument_rules": [
+              "Use email_id 19d79d420db83508.",
+              "Use folder Label_2274875168234742067.",
+              "Do not use folder Dev/Github after the folder list is available."
+            ]
+          }
+        ],
+        "forbidden_tools": [
+          "list_folders",
+          "delete_email",
+          "batch_delete_emails",
+          "archive_email"
+        ],
+        "response_rules": [
+          "Acknowledge that Dev/Github exists.",
+          "Do not claim the label is missing.",
+          "After the move succeeds, say you moved the email.",
+          "Continue triage briefly."
+        ],
+        "style_tags": [
+          "brief",
+          "phone_friendly",
+          "tool_error_recovery"
+        ],
+        "should_ask_follow_up": true,
+        "should_wait_for_user": true,
+        "notes": "Same long-context replay, but with the real list_folders result added so the model must resolve Dev/Github to Label_2274875168234742067 and then move."
+      }
     }
   ]
 }
