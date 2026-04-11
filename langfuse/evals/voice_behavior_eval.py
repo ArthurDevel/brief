@@ -17,6 +17,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from dotenv import load_dotenv
@@ -41,6 +42,13 @@ MAX_TOOL_ROUNDS = 10
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run voice behavior evals against a prompt.")
     parser.add_argument("--dataset-name", default=DEFAULT_DATASET_NAME)
+    parser.add_argument(
+        "--dataset-path",
+        help=(
+            "Run items from a local dataset JSON file instead of fetching the "
+            "dataset items from Langfuse. Useful before uploading new cases."
+        ),
+    )
     parser.add_argument("--prompt-name", help="Langfuse prompt name to fetch.")
     parser.add_argument("--prompt-label", help="Optional Langfuse prompt label.")
     parser.add_argument("--prompt-version", type=int, help="Optional Langfuse prompt version.")
@@ -52,6 +60,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--run-name",
         help="Optional Langfuse experiment run name.",
+    )
+    parser.add_argument(
+        "--item-id",
+        action="append",
+        dest="item_ids",
+        help=(
+            "Run only the specified dataset item id. Can be provided multiple "
+            "times for a targeted feedback loop."
+        ),
+    )
+    parser.add_argument(
+        "--include-item-results",
+        action="store_true",
+        help="Print item-level results in the formatted experiment output.",
     )
     args = parser.parse_args()
 
@@ -67,6 +89,35 @@ def _parse_args() -> argparse.Namespace:
 
 def _load_env() -> None:
     load_dotenv(ENV_PATH)
+
+
+def _load_local_dataset_items(dataset_path: str, item_ids: list[str] | None) -> list[Any]:
+    with Path(dataset_path).open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    requested_ids = set(item_ids or [])
+    items = []
+    for raw_item in payload["items"]:
+        if requested_ids and raw_item["id"] not in requested_ids:
+            continue
+        items.append(
+            SimpleNamespace(
+                id=raw_item["id"],
+                input=raw_item["input"],
+                expected_output=raw_item.get("expected_output"),
+                metadata={
+                    "case_id": raw_item["id"],
+                    "category": raw_item.get("category"),
+                    "goal": raw_item.get("goal"),
+                    "tags": raw_item.get("tags", []),
+                },
+            )
+        )
+
+    missing_ids = sorted(requested_ids - {item.id for item in items})
+    if missing_ids:
+        raise ValueError(f"Dataset item id(s) not found: {', '.join(missing_ids)}")
+    return items
 
 
 def _import_voice_module(module_name: str) -> Any:
@@ -314,13 +365,44 @@ def main() -> None:
     _load_env()
 
     langfuse = get_client()
-    dataset = langfuse.get_dataset(args.dataset_name)
     tools = _load_tool_definitions()
 
     openai_client = OpenAI(
         api_key=os.environ["OPENROUTER_API_KEY"],
         base_url=OPENROUTER_BASE_URL,
     )
+
+    if args.dataset_path:
+        items = _load_local_dataset_items(args.dataset_path, args.item_ids)
+        passed = 0
+        for item in items:
+            output = run_task(
+                openai_client,
+                tools,
+                langfuse,
+                item=item,
+                prompt_name=args.prompt_name,
+                prompt_label=args.prompt_label,
+                prompt_version=args.prompt_version,
+                use_code_prompt=args.use_code_prompt,
+            )
+            if output.get("judge_scores", {}).get("pass"):
+                passed += 1
+
+        total = len(items)
+        print("\n" + "─" * 50)
+        print(f"Local dataset file run: {args.dataset_path}")
+        print(f"{passed}/{total} passed")
+        langfuse.flush()
+        return
+
+    dataset = langfuse.get_dataset(args.dataset_name)
+    if args.item_ids:
+        requested_ids = set(args.item_ids)
+        dataset.items = [item for item in dataset.items if item.id in requested_ids]
+        missing_ids = sorted(requested_ids - {item.id for item in dataset.items})
+        if missing_ids:
+            raise ValueError(f"Dataset item id(s) not found: {', '.join(missing_ids)}")
 
     prompt_desc = "current-code-prompt" if args.use_code_prompt else args.prompt_name
     result = dataset.run_experiment(
@@ -347,7 +429,7 @@ def main() -> None:
         },
     )
 
-    print(result.format())
+    print(result.format(include_item_results=args.include_item_results))
     langfuse.flush()
 
 
