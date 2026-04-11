@@ -230,19 +230,30 @@ def run_task(
     prompt_version: int | None,
     use_code_prompt: bool,
 ) -> dict[str, Any]:
-    session_context = cast(dict[str, Any], item.input["session_context"])
-    prompt_info = _get_system_prompt(
-        langfuse_client,
-        session_context,
-        prompt_name=prompt_name,
-        prompt_label=prompt_label,
-        prompt_version=prompt_version,
-        use_code_prompt=use_code_prompt,
-    )
+    item_input = cast(dict[str, Any], item.input)
+    session_context = cast(dict[str, Any], item_input["session_context"])
+    dataset_system_prompt = item_input.get("system_prompt")
+    if dataset_system_prompt:
+        prompt_info = {
+            "system_prompt": dataset_system_prompt,
+            "prompt_source": "dataset",
+            "prompt_name": None,
+            "prompt_version": None,
+            "prompt_label": None,
+        }
+    else:
+        prompt_info = _get_system_prompt(
+            langfuse_client,
+            session_context,
+            prompt_name=prompt_name,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+            use_code_prompt=use_code_prompt,
+        )
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": prompt_info["system_prompt"]},
-        *list(item.input["messages"]),
+        *list(item_input["messages"]),
     ]
     all_tool_calls: list[dict[str, Any]] = []
     final_content = ""
