@@ -17,7 +17,16 @@ import { getCookieOptions } from "./lib/supabase/client";
 // ============================================================================
 
 /** Routes that do not require authentication. */
-const PUBLIC_ROUTES = ["/login", "/api/auth", "/ingest", "/api/trigger-call", "/api/user/email-accounts/notify", "/api/cron/engagement-emails"];
+const PUBLIC_ROUTES = [
+  "/login",
+  "/api/auth",
+  "/ingest",
+  "/api/trigger-call",
+  "/api/user/email-accounts/notify",
+  "/api/cron/engagement-emails",
+  "/review/session",
+  "/api/session-review",
+];
 
 /** User IDs allowed to access /admin/* routes. */
 const ADMIN_USER_IDS = (process.env.ADMIN_USER_IDS || "").split(",").filter(Boolean);
