@@ -71,12 +71,14 @@ function getResendClient(): Resend {
  * @param to - Recipient email address
  * @param sessionId - The session ID (used in subject line)
  * @param actions - List of actions taken during the session
+ * @param reviewUrl - Short-lived review URL for the recap email
  * @returns Promise that resolves when the email is sent
  */
 export async function sendSessionSummary(
   to: string,
   sessionId: string,
-  actions: ActionRow[]
+  actions: ActionRow[],
+  reviewUrl: string
 ): Promise<void> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrl) {
@@ -84,7 +86,7 @@ export async function sendSessionSummary(
   }
 
   const client = getResendClient();
-  const html = buildSessionSummaryHtml(actions, sessionId, appUrl);
+  const html = buildSessionSummaryHtml(actions, sessionId, appUrl, reviewUrl);
 
   const { data, error } = await client.emails.send({
     from: getFromField(),
