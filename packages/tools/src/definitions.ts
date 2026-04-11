@@ -5,11 +5,11 @@
  * (no handlers) -- handlers live in action-queue.ts and the email package.
  *
  * Responsibilities:
- * - Define all 18 tool schemas (list_inbox, read_email, read_thread,
+ * - Define all 19 tool schemas (list_inbox, read_email, read_thread,
  *   search_emails, mark_as_read, draft_email, delete_email, archive_email,
  *   send_email, reply_email, batch_archive_emails, batch_delete_emails,
- *   list_folders, move_to_folder, save_memory, submit_feature_request,
- *   get_newsletter_summary, set_newsletter_config)
+ *   batch_move_to_folder, list_folders, move_to_folder, save_memory,
+ *   submit_feature_request, get_newsletter_summary, set_newsletter_config)
  * - Export them as an array for session.update
  */
 
@@ -269,6 +269,33 @@ export const toolDefinitions: ToolDefinition[] = [
         },
       },
       required: ["email_ids"],
+    },
+  },
+
+  {
+    type: "function",
+    name: "batch_move_to_folder",
+    label: "Move Multiple Emails to Folder",
+    description:
+      "Move multiple emails at once to a specified folder. On Gmail, this is equivalent to applying a label to each email.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of email IDs to move.",
+        },
+        folder: {
+          type: "string",
+          description: "The target folder to move the emails to.",
+        },
+        source_folder: {
+          type: "string",
+          description: "The folder the emails are currently in. Defaults to INBOX.",
+        },
+      },
+      required: ["email_ids", "folder"],
     },
   },
 

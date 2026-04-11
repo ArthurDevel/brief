@@ -107,3 +107,40 @@ Do not create a case from the middle of a conversation while:
 - reducing the memory entries
 
 That changes model behavior and makes the eval less trustworthy.
+
+## Provider-Specific Fidelity
+
+Keep the eval faithful to the provider-specific shape.
+
+- For Gmail label bugs, keep both `name` and `path` exactly as returned.
+- If the bug is about display name versus provider path, the eval must include the real folder list output.
+- Preserve the exact sequence of state changes:
+  - include the failed tool call before the corrective step
+  - include the user correction that challenges the assistant
+  - include the follow-up tool result that makes the right action possible
+
+## Example To Preserve
+
+For the `Dev/Github` label regression:
+
+- do not write a compact example that starts only at `"But it does exist. Please check."`
+- do not omit the greeting, inbox listing, auto-delete action, failed `move_to_folder`, or exact error text
+- do not shorten the `list_inbox` or `list_folders` outputs
+
+The correct eval should include:
+
+- the full conversation from the start of the session
+- the full `list_inbox` output
+- the full failed `move_to_folder` output
+- the full `list_folders` output
+- the final successful `move_to_folder` step if the eval covers the recovery
+
+## Practical Standard
+
+If you are copying a case from Langfuse observations:
+
+- copy each assistant and user turn verbatim
+- copy each tool input verbatim
+- copy each tool output verbatim
+
+Default to fidelity over brevity.

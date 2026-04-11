@@ -175,7 +175,8 @@ export interface EmailAccountClient {
   archiveEmail(emailId: string, sourceFolder?: string): Promise<UndoRecipe | null>;
   deleteEmail(emailId: string, sourceFolder?: string): Promise<UndoRecipe | null>;
   moveToFolder(emailId: string, folder: string, sourceFolder?: string): Promise<UndoRecipe | null>;
-  moveEmail(identifier: string, destFolder: string, sourceFolder?: string): Promise<void>;
+  batchMoveToFolder(emailIds: string[], folder: string, sourceFolder?: string): Promise<{ emailId: string; undoRecipe: UndoRecipe | null }[]>;
+  moveEmail(identifier: string, destFolder: string, sourceFolder?: string, rfcMessageId?: string): Promise<void>;
   listFolders(): Promise<FolderInfo[]>;
   resolveSpecialUseFolder(flag: string): Promise<string | null>;
   saveDraft(input: { to: string; subject: string; body: string; cc?: string; inReplyTo?: string; references?: string }): Promise<UndoRecipe | null>;

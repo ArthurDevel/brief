@@ -31,6 +31,7 @@ DEFAULT_CLASSIFICATIONS: dict[str, str] = {
     "draft_email": "mutating_auto",
     "batch_archive_emails": "mutating_auto",
     "batch_delete_emails": "mutating_queued",
+    "batch_move_to_folder": "mutating_auto",
     "delete_email": "mutating_queued",
     "send_email": "mutating_queued",
     "reply_email": "mutating_queued",

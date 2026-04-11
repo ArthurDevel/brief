@@ -152,19 +152,24 @@ def create_pipeline(
     num_channels = audio_config.get("num_channels", 1)
 
     # -- STT (Deepgram Flux -- handles turn detection natively) --
+    logger.info("[startup] Initializing Deepgram Flux STT service")
     stt = DeepgramFluxSTTService(
         api_key=settings.deepgram_api_key,
     )
+    logger.info("[startup] Deepgram Flux STT service initialized")
 
     # -- LLM (OpenRouter, OpenAI-compatible) --
+    logger.info("[startup] Initializing OpenRouter LLM service: model=%s", LLM_MODEL)
     llm = TrackedOpenAILLMService(
         usage_tracker=usage_tracker,
         api_key=settings.openrouter_api_key,
         model=LLM_MODEL,
         base_url="https://openrouter.ai/api/v1",
     )
+    logger.info("[startup] OpenRouter LLM service initialized")
 
     # -- TTS (Deepgram with markdown filtering) --
+    logger.info("[startup] Initializing Deepgram TTS service: voice=%s sample_rate=%s", user_context.voice_preference, sample_rate)
     tts = TrackedDeepgramTTSService(
         usage_tracker=usage_tracker,
         api_key=settings.deepgram_api_key,
@@ -172,8 +177,10 @@ def create_pipeline(
         sample_rate=sample_rate,
         text_filter=MarkdownTextFilter(),
     )
+    logger.info("[startup] Deepgram TTS service initialized")
 
     # -- Speed processor (WSOLA) --
+    logger.info("[startup] Initializing audio processors: speed=%s", user_context.voice_speed)
     speed_config = {"speed": user_context.voice_speed}
     speed_processor = AudioSpeedProcessor(
         config=speed_config,
@@ -187,19 +194,24 @@ def create_pipeline(
         config=normalizer_config,
         sample_rate=sample_rate,
     )
+    logger.info("[startup] Audio processors initialized")
 
     # -- Fetch email count for greeting --
     email_context: str | None = None
     last_ended_at: datetime | None = None
     try:
+        logger.info("[startup] Loading last completed session end time")
         last_ended_at = get_last_session_end_time(session.user_id, supabase)
+        logger.info("[startup] Last completed session end time loaded: present=%s", last_ended_at is not None)
 
         # Email count for greeting is only available for custom IMAP accounts.
         # Unipile accounts skip this -- the greeting will not mention email counts.
         if email_ctx.connection_type == "imap_smtp" and email_ctx.imap_holder is not None:
             imap_client_for_count = email_ctx.imap_holder["client"]
             if last_ended_at is None:
+                logger.info("[startup] Counting unread emails for first-call greeting")
                 count = count_unread_emails(imap_client_for_count)
+                logger.info("[startup] Unread email count complete: count=%d", count)
                 if count > 0:
                     email_context = f"This is the user's first call. They have {count} unread emails in their inbox."
                 else:
@@ -212,7 +224,9 @@ def create_pipeline(
                 since_for_count = last_ended_at
                 if user_context.timezone is not None:
                     since_for_count = last_ended_at.astimezone(ZoneInfo(user_context.timezone))
+                logger.info("[startup] Counting emails since last call for greeting")
                 count = count_emails_since(imap_client_for_count, since_for_count)
+                logger.info("[startup] New email count complete: count=%d", count)
                 if count > 0:
                     email_context = f"You have {count} new emails since the last call."
                 else:
@@ -228,6 +242,7 @@ def create_pipeline(
 
     # -- Check for unlistened newsletter summary --
     try:
+        logger.info("[startup] Checking newsletter summary state")
         if user_context.timezone is not None:
             nl_tz = ZoneInfo(user_context.timezone)
         else:
@@ -248,6 +263,7 @@ def create_pipeline(
                 email_context += f" {nl_line}"
             else:
                 email_context = nl_line
+        logger.info("[startup] Newsletter summary check complete: present=%s", bool(nl_response.data))
     except Exception:
         logger.warning("[pipeline] Failed to check newsletter summary, skipping")
 
@@ -267,6 +283,7 @@ def create_pipeline(
         last_call_datetime=last_call_dt_str,
     )
 
+    logger.info("[startup] Building system prompt")
     system_prompt = build_system_prompt(
         user_context.memory_entries,
         user_context.tool_approval_config,
@@ -275,8 +292,11 @@ def create_pipeline(
         session_metadata=session_metadata,
     )
     langfuse_observer.set_system_prompt(system_prompt)
+    logger.info("[startup] System prompt built: chars=%d", len(system_prompt))
 
+    logger.info("[startup] Loading tool definitions")
     tools = get_tool_definitions()
+    logger.info("[startup] Tool definitions loaded: count=%d", len(tools))
 
     messages: list[Any] = [{"role": "system", "content": system_prompt}]
     # Convert OpenAI-format tool dicts to FunctionSchema objects.
@@ -325,6 +345,7 @@ def create_pipeline(
             narration_http_session=narration_http_session,
             openrouter_api_key=settings.openrouter_api_key,
         )
+    logger.info("[startup] Function handlers registered: count=%d", len(tool_names))
 
     # -- Audio idle watchdog (cancels pipeline if audio frames stop arriving) --
     async def _on_audio_idle(processor: IdleFrameProcessor) -> None:
@@ -391,6 +412,7 @@ def create_pipeline(
     pipeline_chain.append(assistant_aggregator)
 
     pipeline = Pipeline(pipeline_chain)
+    logger.info("[startup] Pipeline chain assembled: processors=%d", len(pipeline_chain))
 
     task = PipelineTask(
         pipeline,
@@ -402,6 +424,7 @@ def create_pipeline(
             observers=[cost_tracker, langfuse_observer],
         ),
     )
+    logger.info("[startup] Pipeline task created")
 
     return PipelineResult(
         task=task,

@@ -183,12 +183,14 @@ class EmailClientContext:
 
     Attributes:
         connection_type: "unipile" or "imap_smtp".
+        provider: Email provider ("gmail", "outlook", or "custom").
         imap_holder: Mutable IMAP client holder (only for imap_smtp).
         smtp_config: SMTP config (only for imap_smtp).
         unipile_account_id: Unipile account ID (only for unipile).
     """
 
     connection_type: str  # "unipile" | "imap_smtp"
+    provider: str  # "gmail" | "outlook" | "custom"
     imap_holder: dict[str, Any] | None = None
     smtp_config: SmtpConfig | None = None
     unipile_account_id: str | None = None
@@ -219,6 +221,7 @@ def create_email_client_context(
             raise RuntimeError("imap_holder is required for imap_smtp accounts")
         return EmailClientContext(
             connection_type="imap_smtp",
+            provider=account.provider,
             imap_holder=imap_holder,
             smtp_config=account.smtp_config,
         )
@@ -228,6 +231,7 @@ def create_email_client_context(
         raise RuntimeError("unipile_account_id is required for unipile accounts")
     return EmailClientContext(
         connection_type="unipile",
+        provider=account.provider,
         unipile_account_id=account.unipile_account_id,
     )
 

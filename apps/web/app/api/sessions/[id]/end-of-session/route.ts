@@ -19,6 +19,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/client";
 import { sendSessionSummary } from "@/lib/resend/client";
 import { getActiveEmailAccountRecord } from "@/lib/email-accounts";
+import { createSessionReviewToken } from "@/lib/session-review-tokens";
 import { createEmailAccountClient } from "@dublin/email";
 import type { EmailMetaRequest, EmailAccountClient } from "@dublin/email";
 import type { ActionRow } from "@dublin/tools";
@@ -182,8 +183,14 @@ export async function POST(
   }
 
   // Send the summary email
+  const reviewToken = await createSessionReviewToken(supabase, {
+    userId: session.user_id,
+    sessionId,
+  });
+  const reviewUrl = buildSessionReviewUrl(reviewToken.token);
+
   const sendStart = Date.now();
-  await sendSessionSummary(recipientEmail, sessionId, visibleActions);
+  await sendSessionSummary(recipientEmail, sessionId, visibleActions, reviewUrl);
   log(`Summary email sent to ${recipientEmail} in ${Date.now() - sendStart}ms`);
 
   log(`Total processing time: ${Date.now() - totalStart}ms`);
@@ -193,6 +200,22 @@ export async function POST(
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+/**
+ * Builds the short-lived public review URL for a session recap email.
+ * @param token - Raw session review token
+ * @returns Absolute URL to the minimal review page
+ */
+function buildSessionReviewUrl(token: string): string {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!appUrl) {
+    throw new Error("NEXT_PUBLIC_APP_URL is not set");
+  }
+
+  const url = new URL("/review/session", appUrl);
+  url.searchParams.set("token", token);
+  return url.toString();
+}
 
 /**
  * Enriches actions that reference an email with subject/from metadata.

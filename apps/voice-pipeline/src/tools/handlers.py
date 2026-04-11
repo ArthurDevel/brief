@@ -116,6 +116,8 @@ def handle_tool_call(
         return _handle_batch_archive(input, email_ctx, supabase)
     if input.tool_name == "batch_delete_emails":
         return _handle_batch_delete(input, supabase)
+    if input.tool_name == "batch_move_to_folder":
+        return _handle_batch_move(input, email_ctx, supabase)
 
     classification = classify_action(input.tool_name, user_config)
     requires_approval = classification == "mutating_queued"
@@ -390,6 +392,62 @@ def _handle_batch_delete(
         status="pending",
         result={"total": total, "succeeded": succeeded, "failed": failed, "errors": errors, "actionIds": action_ids},
         message=f"Queued {succeeded} of {total} emails for deletion ({failed} failed)",
+    )
+
+
+def _handle_batch_move(
+    input: ActionInput,
+    email_ctx: EmailClientContext,
+    supabase: Client,
+) -> ActionResult:
+    """Fan out a batch move request into individual move_to_folder actions.
+
+    Loops sequentially over each email_id, calling _execute_and_store for each.
+    Each iteration constructs a fresh ActionInput with a fresh arguments dict
+    because _execute_and_store mutates input.arguments in-place (adds message_id).
+
+    Args:
+        input: The batch action input containing email_ids, folder, and optional source_folder.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
+        supabase: Supabase client for DB operations.
+
+    Returns:
+        ActionResult with summary counts and all created action IDs.
+    """
+    email_ids: list[str] = input.arguments.get("email_ids", [])
+    folder: str = input.arguments["folder"]
+    source_folder: str = input.arguments.get("source_folder", "INBOX")
+
+    total = len(email_ids)
+    succeeded = 0
+    failed = 0
+    errors: list[str] = []
+    action_ids: list[str] = []
+    first_action_id = ""
+
+    for email_id in email_ids:
+        individual_input = ActionInput(
+            user_id=input.user_id,
+            session_id=input.session_id,
+            tool_name="move_to_folder",
+            arguments={"email_id": email_id, "folder": folder, "source_folder": source_folder},
+        )
+        try:
+            result = _execute_and_store(individual_input, email_ctx, supabase)
+            action_ids.append(result.action_id)
+            if not first_action_id:
+                first_action_id = result.action_id
+            succeeded += 1
+        except Exception as e:
+            failed += 1
+            errors.append(f"email_id={email_id}: {e}")
+            logger.warning("Batch move failed for email_id=%s: %s", email_id, e)
+
+    return ActionResult(
+        action_id=first_action_id or "",
+        status="executed",
+        result={"total": total, "succeeded": succeeded, "failed": failed, "errors": errors, "actionIds": action_ids},
+        message=f"Moved {succeeded} of {total} emails to {folder} ({failed} failed)",
     )
 
 
@@ -689,9 +747,22 @@ def _dispatch_tool(
 
     if tool_name == "move_to_folder":
         source_folder = args.get("source_folder", "INBOX")
+        target_folder = args["folder"]
+
+        # Validate folder exists before attempting move (both Gmail and IMAP silently accept invalid folders)
+        folders = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.list_folders(c),
+        )
+        folder_paths = [f.path for f in folders]
+        if not any(p.lower() == target_folder.lower() for p in folder_paths):
+            raise ValueError(
+                f'Folder "{target_folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+            )
+
         recipe_data, message_id = email_client.with_reconnect(
             imap_holder, config,
-            lambda c: email_client.move_email_to_folder(c, args["email_id"], args["folder"], source_folder),
+            lambda c: email_client.move_email_to_folder(c, args["email_id"], target_folder, source_folder),
         )
         return {"moved": True}, UndoRecipe(**recipe_data), message_id
 
@@ -778,7 +849,7 @@ def _dispatch_tool_unipile(
         if tool_name == "archive_email":
             source_folder = args.get("source_folder", "INBOX")
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.archive_email(account_id, args["email_id"], source_folder)
+                unipile_client.archive_email(account_id, args["email_id"], source_folder, email_ctx.provider)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"archived": True}, recipe, message_id
@@ -786,7 +857,7 @@ def _dispatch_tool_unipile(
         if tool_name == "delete_email":
             source_folder = args.get("source_folder", "INBOX")
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.delete_email(account_id, args["email_id"], source_folder)
+                unipile_client.delete_email(account_id, args["email_id"], source_folder, email_ctx.provider)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"deleted": True}, recipe, message_id
@@ -815,8 +886,18 @@ def _dispatch_tool_unipile(
 
         if tool_name == "move_to_folder":
             source_folder = args.get("source_folder", "INBOX")
+            target_folder = args["folder"]
+
+            # Validate folder exists before attempting move (Unipile silently accepts invalid folders)
+            folders = loop.run_until_complete(unipile_client.list_folders(account_id))
+            folder_paths = [f.path for f in folders]
+            if not any(p.lower() == target_folder.lower() for p in folder_paths):
+                raise ValueError(
+                    f'Folder "{target_folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+                )
+
             undo_recipe_data, message_id = loop.run_until_complete(
-                unipile_client.move_to_folder(account_id, args["email_id"], args["folder"], source_folder)
+                unipile_client.move_to_folder(account_id, args["email_id"], target_folder, source_folder, email_ctx.provider)
             )
             recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
             return {"moved": True}, recipe, message_id
@@ -907,10 +988,13 @@ def _dispatch_undo(
     if recipe.operation == "unipile_move_email":
         loop = asyncio.new_event_loop()
         try:
-            account_id = recipe.params["account_id"]
-            body = {"folder": recipe.params["to_folder"]}
             loop.run_until_complete(
-                unipile_client._request("PUT", f"/api/v1/emails/{recipe.params['email_id']}", params={"account_id": account_id}, json_body=body)
+                unipile_client.undo_move_email(
+                    account_id=recipe.params["account_id"],
+                    email_id=recipe.params["email_id"],
+                    to_folders=recipe.params["to_folders"],
+                    rfc_message_id=recipe.params.get("rfc_message_id"),
+                )
             )
         finally:
             loop.close()

@@ -62,10 +62,11 @@ async def list_inbox(account_id: str, limit: int) -> list[EmailSummary]:
     Returns:
         List of EmailSummary in reverse chronological order.
     """
+    inbox_id = await _resolve_inbox_folder_provider_id(account_id)
     params: dict[str, Any] = {
         "account_id": account_id,
         "limit": limit,
-        "folder": "INBOX",
+        "folder": inbox_id,
     }
 
     data = await _request("GET", "/api/v1/emails", params=params)
@@ -120,6 +121,7 @@ async def archive_email(
     account_id: str,
     email_id: str,
     source_folder: str | None,
+    provider: str,
 ) -> tuple[UndoRecipe | None, str | None]:
     """Archive an email through Unipile.
 
@@ -127,21 +129,39 @@ async def archive_email(
         account_id: The Unipile account ID.
         email_id: The Unipile email ID.
         source_folder: The folder the email is currently in (for undo).
+        provider: Email provider ("gmail" or "outlook").
 
     Returns:
         Tuple of (undo recipe dict, message_id or None).
     """
-    # Unipile folders is an array of label strings. Empty array removes from inbox.
-    body: dict[str, Any] = {"folders": []}
+    # For Outlook: fetch the stable RFC Message-ID BEFORE moving
+    rfc_message_id: str | None = None
+    if provider == "outlook":
+        rfc_message_id = await _get_rfc_message_id(account_id, email_id)
+
+    # Outlook has role "archive"; Gmail does not -- use folders: [] to remove from inbox
+    try:
+        archive_folder_id = await _resolve_folder_by_role(account_id, "archive")
+        folders = [archive_folder_id]
+    except RuntimeError:
+        archive_folder_id = None
+        folders = []
+
+    body: dict[str, Any] = {"folders": folders}
     await _request("PUT", f"/api/v1/emails/{email_id}", params={"account_id": account_id}, json_body=body)
+
+    inbox_folder_id = await _resolve_folder_by_role(account_id, "inbox")
+    undo_params: dict[str, Any] = {
+        "account_id": account_id,
+        "email_id": email_id,
+        "to_folders": [inbox_folder_id],
+    }
+    if rfc_message_id is not None:
+        undo_params["rfc_message_id"] = rfc_message_id
 
     undo_recipe: UndoRecipe = {
         "operation": "unipile_move_email",
-        "params": {
-            "account_id": account_id,
-            "email_id": email_id,
-            "to_folders": [source_folder or "INBOX"],
-        },
+        "params": undo_params,
     }
     return undo_recipe, None
 
@@ -150,26 +170,43 @@ async def delete_email(
     account_id: str,
     email_id: str,
     source_folder: str | None,
+    provider: str,
 ) -> tuple[UndoRecipe | None, str | None]:
-    """Delete an email through Unipile (moves to Trash).
+    """Delete an email through Unipile (moves to Trash via PUT).
+
+    Uses PUT with folders=[trash_folder_id] instead of DELETE, because
+    DELETE permanently removes the email and makes undo impossible.
 
     Args:
         account_id: The Unipile account ID.
         email_id: The Unipile email ID.
         source_folder: The folder the email is currently in (for undo).
+        provider: Email provider ("gmail" or "outlook").
 
     Returns:
         Tuple of (undo recipe dict, message_id or None).
     """
-    await _request("DELETE", f"/api/v1/emails/{email_id}", params={"account_id": account_id})
+    # For Outlook: fetch the stable RFC Message-ID BEFORE moving
+    rfc_message_id: str | None = None
+    if provider == "outlook":
+        rfc_message_id = await _get_rfc_message_id(account_id, email_id)
+
+    trash_folder_id = await _resolve_folder_by_role(account_id, "trash")
+    body: dict[str, Any] = {"folders": [trash_folder_id]}
+    await _request("PUT", f"/api/v1/emails/{email_id}", params={"account_id": account_id}, json_body=body)
+
+    inbox_folder_id = await _resolve_folder_by_role(account_id, "inbox")
+    undo_params: dict[str, Any] = {
+        "account_id": account_id,
+        "email_id": email_id,
+        "to_folders": [inbox_folder_id],
+    }
+    if rfc_message_id is not None:
+        undo_params["rfc_message_id"] = rfc_message_id
 
     undo_recipe: UndoRecipe = {
         "operation": "unipile_move_email",
-        "params": {
-            "account_id": account_id,
-            "email_id": email_id,
-            "to_folders": [source_folder or "INBOX"],
-        },
+        "params": undo_params,
     }
     return undo_recipe, None
 
@@ -245,13 +282,13 @@ async def list_folders(account_id: str) -> list[FolderInfo]:
     results: list[FolderInfo] = []
     for f in items:
         name = f.get("name", "")
-        if name == "INBOX":
+        if (f.get("role") or "").lower() == "inbox":
             continue
         # Unipile returns role for special-use (e.g. "TRASH", "DRAFTS", "SENT")
         role = f.get("role")
         special_use = f"\\{role.capitalize()}" if role else None
         results.append(FolderInfo(
-            path=f.get("id", name),
+            path=f.get("provider_id", f.get("id", name)),
             name=name,
             special_use=special_use,
         ))
@@ -263,7 +300,8 @@ async def move_to_folder(
     account_id: str,
     email_id: str,
     target_folder: str,
-    source_folder: str = "INBOX",
+    source_folder: str,
+    provider: str,
 ) -> tuple[UndoRecipe | None, str | None]:
     """Move an email to a target folder through Unipile.
 
@@ -272,20 +310,35 @@ async def move_to_folder(
         email_id: The Unipile email ID.
         target_folder: Destination folder name.
         source_folder: The folder the email is currently in (for undo).
+        provider: Email provider ("gmail" or "outlook").
 
     Returns:
         Tuple of (undo recipe dict, message_id or None).
     """
+    # For Outlook: fetch the stable RFC Message-ID BEFORE moving
+    rfc_message_id: str | None = None
+    if provider == "outlook":
+        rfc_message_id = await _get_rfc_message_id(account_id, email_id)
+
     body: dict[str, Any] = {"folders": [target_folder]}
     await _request("PUT", f"/api/v1/emails/{email_id}", params={"account_id": account_id}, json_body=body)
 
+    # Resolve source folder for undo -- "INBOX" needs to be resolved to actual folder ID
+    resolved_source = source_folder
+    if source_folder == "INBOX":
+        resolved_source = await _resolve_folder_by_role(account_id, "inbox")
+
+    undo_params: dict[str, Any] = {
+        "account_id": account_id,
+        "email_id": email_id,
+        "to_folders": [resolved_source],
+    }
+    if rfc_message_id is not None:
+        undo_params["rfc_message_id"] = rfc_message_id
+
     undo_recipe: UndoRecipe = {
         "operation": "unipile_move_email",
-        "params": {
-            "account_id": account_id,
-            "email_id": email_id,
-            "to_folders": [source_folder],
-        },
+        "params": undo_params,
     }
     return undo_recipe, None
 
@@ -293,6 +346,142 @@ async def move_to_folder(
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+async def _get_rfc_message_id(account_id: str, email_id: str) -> str:
+    """Fetch the RFC 2822 Message-ID header for an email.
+
+    Must be called BEFORE moving the email, because Outlook invalidates
+    the old ID after a move.
+
+    Args:
+        account_id: The Unipile account ID.
+        email_id: The email's provider_id.
+
+    Returns:
+        The Message-ID header value (e.g. "<abc@example.com>").
+
+    Raises:
+        RuntimeError: If the Message-ID header is not found.
+    """
+    data = await _request(
+        "GET",
+        f"/api/v1/emails/{email_id}",
+        params={"account_id": account_id, "include_headers": "true"},
+    )
+
+    headers = data.get("headers", [])
+    for header in headers:
+        if header.get("name", "").lower() == "message-id":
+            return header["value"]
+
+    raise RuntimeError(
+        f"Message-ID header not found for email {email_id} "
+        f"(account {account_id})"
+    )
+
+
+async def _refind_email_by_message_id(account_id: str, rfc_message_id: str) -> str:
+    """Re-find an email by its RFC Message-ID after a move.
+
+    Outlook changes the Unipile id and provider_id when an email is moved.
+    This function uses the stable RFC Message-ID to locate the email under
+    its new Unipile internal ID.
+
+    Args:
+        account_id: The Unipile account ID.
+        rfc_message_id: The RFC 2822 Message-ID header value.
+
+    Returns:
+        The Unipile internal ID (not provider_id) of the re-found email.
+
+    Raises:
+        RuntimeError: If no email is found with the given Message-ID.
+    """
+    data = await _request(
+        "GET",
+        "/api/v1/emails",
+        params={"account_id": account_id, "message_id": rfc_message_id},
+    )
+
+    items = data.get("items", [])
+    if not items:
+        raise RuntimeError(
+            f"No email found with Message-ID {rfc_message_id} "
+            f"(account {account_id})"
+        )
+
+    return items[0]["id"]
+
+
+async def undo_move_email(
+    account_id: str,
+    email_id: str,
+    to_folders: list[str],
+    rfc_message_id: str | None,
+) -> None:
+    """Undo a move by putting the email back into the original folders.
+
+    For Outlook (rfc_message_id provided): re-finds the email by its
+    stable RFC Message-ID first, since the original ID is stale after a move.
+    For Gmail (rfc_message_id is None): uses the original email_id directly.
+
+    Args:
+        account_id: The Unipile account ID.
+        email_id: The original email ID (provider_id) from the undo recipe.
+        to_folders: Target folder IDs to move the email back to.
+        rfc_message_id: RFC Message-ID for Outlook re-find, or None for Gmail.
+    """
+    # Outlook path: re-find the email under its new ID
+    target_id = email_id
+    if rfc_message_id is not None:
+        target_id = await _refind_email_by_message_id(account_id, rfc_message_id)
+
+    body: dict[str, Any] = {"folders": to_folders}
+    await _request(
+        "PUT",
+        f"/api/v1/emails/{target_id}",
+        params={"account_id": account_id},
+        json_body=body,
+    )
+
+
+async def _resolve_folder_by_role(account_id: str, role: str) -> str:
+    """Resolve a folder's provider_id by its role (e.g. 'inbox', 'trash', 'archive').
+
+    The PUT /emails endpoint needs the provider_id (not the Unipile internal id)
+    for the move to actually happen on the Exchange/Gmail side.
+
+    Args:
+        account_id: The Unipile account ID.
+        role: The folder role to find.
+
+    Returns:
+        The folder's provider_id.
+    """
+    data = await _request("GET", "/api/v1/folders", params={"account_id": account_id})
+    items = data.get("items", data if isinstance(data, list) else [])
+    for f in items:
+        if (f.get("role") or "").lower() == role.lower():
+            return f["provider_id"]
+    raise RuntimeError(f"No folder with role '{role}' found for Unipile account {account_id}")
+
+
+async def _resolve_inbox_folder_provider_id(account_id: str) -> str:
+    """Resolve the inbox folder provider_id for a Unipile account by looking up the folder with role 'inbox'.
+
+    Args:
+        account_id: The Unipile account ID.
+
+    Returns:
+        The provider_id for the inbox folder.
+    """
+    data = await _request("GET", "/api/v1/folders", params={"account_id": account_id})
+    items = data.get("items", data if isinstance(data, list) else [])
+    for f in items:
+        if (f.get("role") or "").lower() == "inbox":
+            return f["provider_id"]
+    raise RuntimeError(f"No inbox folder found for Unipile account {account_id}")
+
 
 async def _request(
     method: str,
