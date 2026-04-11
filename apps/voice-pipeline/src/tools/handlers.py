@@ -400,11 +400,11 @@ def _handle_batch_move(
     email_ctx: EmailClientContext,
     supabase: Client,
 ) -> ActionResult:
-    """Fan out a batch move request into individual move_to_folder actions.
+    """Move multiple emails to a folder in a single batch.
 
-    Loops sequentially over each email_id, calling _execute_and_store for each.
-    Each iteration constructs a fresh ActionInput with a fresh arguments dict
-    because _execute_and_store mutates input.arguments in-place (adds message_id).
+    For Unipile accounts: resolves the source folder once, then makes one PUT
+    call per email (no per-email folder validation or re-dispatching).
+    For IMAP accounts: falls back to individual _execute_and_store calls.
 
     Args:
         input: The batch action input containing email_ids, folder, and optional source_folder.
@@ -419,10 +419,83 @@ def _handle_batch_move(
     source_folder: str = input.arguments.get("source_folder", "INBOX")
 
     total = len(email_ids)
+    if total == 0:
+        return ActionResult(
+            action_id="",
+            status="executed",
+            result={"total": 0, "succeeded": 0, "failed": 0, "errors": [], "actionIds": []},
+            message=f"Moved 0 of 0 emails to {folder} (0 failed)",
+        )
+
+    # Validate folder exists once before the loop
+    loop = asyncio.get_event_loop()
+    if email_ctx.connection_type == "unipile":
+        account_id = email_ctx.unipile_account_id
+        if not account_id:
+            raise RuntimeError("Unipile account has no account_id")
+
+        folders = loop.run_until_complete(unipile_client.list_folders(account_id))
+        folder_paths = [f.path for f in folders]
+        if not any(p.lower() == folder.lower() for p in folder_paths):
+            raise ValueError(
+                f'Folder "{folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+            )
+
+        # Batch move via Unipile -- resolves source folder once, one PUT per email
+        move_results = loop.run_until_complete(
+            unipile_client.batch_move_to_folder(account_id, email_ids, folder, source_folder, email_ctx.provider)
+        )
+
+        # Store each result as an individual action row in the DB
+        succeeded = 0
+        failed = 0
+        errors: list[str] = []
+        action_ids: list[str] = []
+        first_action_id = ""
+
+        for item in move_results:
+            if item["succeeded"]:
+                undo_recipe_data = item["undo_recipe"]
+                response = (
+                    supabase.table("actions")
+                    .insert({
+                        "user_id": input.user_id,
+                        "session_id": input.session_id,
+                        "tool_name": "move_to_folder",
+                        "arguments": {"email_id": item["email_id"], "folder": folder, "source_folder": source_folder},
+                        "result": {"moved": True},
+                        "status": "executed",
+                        "requires_approval": False,
+                        "undo_recipe": undo_recipe_data,
+                        "undo_deadline": None,
+                        "executed_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    .execute()
+                )
+                if response.data:
+                    data = cast(list[dict[str, Any]], response.data)
+                    action_id = data[0]["id"]
+                    action_ids.append(action_id)
+                    if not first_action_id:
+                        first_action_id = action_id
+                succeeded += 1
+            else:
+                failed += 1
+                errors.append(f"email_id={item['email_id']}: {item.get('error', 'unknown')}")
+                logger.warning("Batch move failed for email_id=%s: %s", item["email_id"], item.get("error"))
+
+        return ActionResult(
+            action_id=first_action_id or "",
+            status="executed",
+            result={"total": total, "succeeded": succeeded, "failed": failed, "errors": errors, "actionIds": action_ids},
+            message=f"Moved {succeeded} of {total} emails to {folder} ({failed} failed)",
+        )
+
+    # IMAP fallback: fan out into individual _execute_and_store calls
     succeeded = 0
     failed = 0
-    errors: list[str] = []
-    action_ids: list[str] = []
+    errors = []
+    action_ids = []
     first_action_id = ""
 
     for email_id in email_ids:

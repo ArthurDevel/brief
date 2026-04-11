@@ -597,8 +597,9 @@ async function handleBatchDelete(
 }
 
 /**
- * Fans out a batch_move_to_folder call into individual move_to_folder actions.
- * Processes emails sequentially. Each email gets its own action row with an individual undo recipe.
+ * Moves multiple emails to a folder in a single batch.
+ * Creates one email client, validates the folder once, then loops over emails
+ * making one move call per email. Stores each result as an individual action row.
  * @param input - The batch action input containing email_ids, folder, and optional source_folder
  * @param emailAccount - The user's active email account record
  * @param supabase - Supabase client for DB operations
@@ -614,31 +615,63 @@ async function handleBatchMove(
   const sourceFolder = (input.arguments.source_folder as string) ?? "INBOX";
 
   const total = emailIds.length;
+  if (total === 0) {
+    return {
+      actionId: "",
+      status: "executed",
+      result: { total: 0, succeeded: 0, failed: 0, errors: [], actionIds: [] },
+      message: `Moved 0 of 0 emails to ${folder} (0 failed)`,
+    };
+  }
+
+  // Create one client for the entire batch
+  const { createEmailAccountClient } = await import("@dublin/email");
+  const emailClient = await createEmailAccountClient(emailAccount);
+
+  // Call batchMoveToFolder -- validates folder once, then moves each email
+  const moveResults = await emailClient.batchMoveToFolder(emailIds, folder, sourceFolder);
+
+  // Store each result as an individual action row in the DB
   let succeeded = 0;
   let failed = 0;
   const errors: string[] = [];
   const actionIds: string[] = [];
   let firstSuccessfulActionId = "";
 
-  for (const emailId of emailIds) {
-    try {
-      const individualInput: ActionInput = {
-        userId: input.userId,
-        sessionId: input.sessionId,
-        toolName: "move_to_folder",
-        arguments: { email_id: emailId, folder, source_folder: sourceFolder },
-      };
+  for (const item of moveResults) {
+    if (item.undoRecipe) {
+      const { data, error } = await supabase
+        .from("actions")
+        .insert({
+          user_id: input.userId,
+          session_id: input.sessionId,
+          tool_name: "move_to_folder",
+          arguments: { email_id: item.emailId, folder, source_folder: sourceFolder },
+          result: { moved: true },
+          status: "executed",
+          requires_approval: false,
+          undo_recipe: item.undoRecipe,
+          undo_deadline: null,
+          executed_at: new Date().toISOString(),
+        })
+        .select("id")
+        .single();
 
-      const result = await executeAndStore(individualInput, emailAccount, supabase);
-      actionIds.push(result.actionId);
+      if (error || !data) {
+        errors.push(`email ${item.emailId}: DB insert failed`);
+        failed++;
+        continue;
+      }
 
+      actionIds.push(data.id);
       if (!firstSuccessfulActionId) {
-        firstSuccessfulActionId = result.actionId;
+        firstSuccessfulActionId = data.id;
       }
       succeeded++;
-    } catch (err) {
+    } else {
+      // moveToFolder returned null undo recipe -- treat as failure
+      errors.push(`email ${item.emailId}: move returned no undo recipe`);
       failed++;
-      errors.push(`email ${emailId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

@@ -14,6 +14,7 @@ used by email_client.py so tool handlers are provider-agnostic.
 - save_draft: create a draft email
 - list_folders: list account folders
 - move_to_folder: move an email to a folder
+- batch_move_to_folder: move multiple emails to a folder in one call
 """
 
 from __future__ import annotations
@@ -341,6 +342,68 @@ async def move_to_folder(
         "params": undo_params,
     }
     return undo_recipe, None
+
+
+async def batch_move_to_folder(
+    account_id: str,
+    email_ids: list[str],
+    target_folder: str,
+    source_folder: str,
+    provider: str,
+) -> list[dict[str, Any]]:
+    """Move multiple emails to a target folder through Unipile.
+
+    Resolves the source folder once, then loops over email IDs making one
+    PUT call per email. Returns a result per email with undo recipe and
+    success/failure status.
+
+    Args:
+        account_id: The Unipile account ID.
+        email_ids: List of Unipile email IDs to move.
+        target_folder: Destination folder name.
+        source_folder: The folder the emails are currently in (for undo).
+        provider: Email provider ("gmail" or "outlook").
+
+    Returns:
+        List of dicts, one per email_id, each containing:
+        - email_id, succeeded, undo_recipe (or error on failure).
+    """
+    # Resolve source folder once for all undo recipes
+    resolved_source = source_folder
+    if source_folder == "INBOX":
+        resolved_source = await _resolve_folder_by_role(account_id, "inbox")
+
+    results: list[dict[str, Any]] = []
+    for email_id in email_ids:
+        try:
+            # For Outlook: fetch stable RFC Message-ID BEFORE moving
+            rfc_message_id: str | None = None
+            if provider == "outlook":
+                rfc_message_id = await _get_rfc_message_id(account_id, email_id)
+
+            await _request("PUT", f"/api/v1/emails/{email_id}", params={"account_id": account_id}, json_body={"folders": [target_folder]})
+
+            undo_params: dict[str, Any] = {
+                "account_id": account_id,
+                "email_id": email_id,
+                "to_folders": [resolved_source],
+            }
+            if rfc_message_id is not None:
+                undo_params["rfc_message_id"] = rfc_message_id
+
+            results.append({
+                "email_id": email_id,
+                "succeeded": True,
+                "undo_recipe": {"operation": "unipile_move_email", "params": undo_params},
+            })
+        except Exception as e:
+            results.append({
+                "email_id": email_id,
+                "succeeded": False,
+                "error": str(e),
+            })
+
+    return results
 
 
 # ============================================================================
