@@ -322,6 +322,35 @@ def get_tool_definitions() -> list[dict]:
         {
             "type": "function",
             "function": {
+                "name": "batch_move_to_folder",
+                "description": (
+                    "Move multiple emails at once to a specified folder. "
+                    "On Gmail, this is equivalent to applying a label to each email."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "email_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Array of email IDs to move.",
+                        },
+                        "folder": {
+                            "type": "string",
+                            "description": "The target folder to move the emails to.",
+                        },
+                        "source_folder": {
+                            "type": "string",
+                            "description": "The folder the emails are currently in. Defaults to INBOX.",
+                        },
+                    },
+                    "required": ["email_ids", "folder"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "save_memory",
                 "description": (
                     "Save a memory entry about the user. Use this to remember preferences, "

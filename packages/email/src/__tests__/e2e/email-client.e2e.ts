@@ -42,6 +42,8 @@ const POOL_KEYS = [
   "deleteForward", "deleteUndo",
   "moveForward", "moveUndo", "moveNonexistent",
   "moveUserFolder", "moveUserFolderUndo",
+  "batchMoveForward1", "batchMoveForward2",
+  "batchMoveUndo1", "batchMoveUndo2",
 ] as const;
 
 type PoolKey = typeof POOL_KEYS[number];
@@ -52,6 +54,8 @@ const MUTATION_POOL_KEYS: PoolKey[] = [
   "deleteForward", "deleteUndo",
   "moveForward", "moveUndo", "moveNonexistent",
   "moveUserFolder", "moveUserFolderUndo",
+  "batchMoveForward1", "batchMoveForward2",
+  "batchMoveUndo1", "batchMoveUndo2",
 ];
 
 /** Returns the stable subject for a pool email */
@@ -589,6 +593,73 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
 
     if (isGmailUnipile(record)) {
       await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
+    }
+  });
+
+  // ------------------------------------------------------------------
+  // BATCH MOVE TO FOLDER
+  // ------------------------------------------------------------------
+
+  it("batchMoveToFolder moves multiple emails out of inbox", async () => {
+    assertSetupSucceeded();
+    const emailId1 = pool.batchMoveForward1;
+    const emailId2 = pool.batchMoveForward2;
+    const trash = await client.resolveSpecialUseFolder("\\Trash");
+    expect(trash).toBeTruthy();
+
+    const results = await client.batchMoveToFolder(
+      [emailId1, emailId2],
+      trash!,
+      "INBOX"
+    );
+
+    expect(results).toHaveLength(2);
+    expect(results[0].undoRecipe).toBeTruthy();
+    expect(results[1].undoRecipe).toBeTruthy();
+
+    // Both emails should be gone from inbox
+    for (const emailId of [emailId1, emailId2]) {
+      if (isGmailUnipile(record)) {
+        await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+      } else {
+        await waitUntilGoneFromInbox(client, emailId);
+      }
+    }
+  });
+
+  it("batchMoveToFolder undo restores all emails to inbox", async () => {
+    assertSetupSucceeded();
+    const emailId1 = pool.batchMoveUndo1;
+    const emailId2 = pool.batchMoveUndo2;
+    const trash = await client.resolveSpecialUseFolder("\\Trash");
+    expect(trash).toBeTruthy();
+
+    const results = await client.batchMoveToFolder(
+      [emailId1, emailId2],
+      trash!,
+      "INBOX"
+    );
+
+    // Wait until both are gone
+    for (const emailId of [emailId1, emailId2]) {
+      if (isGmailUnipile(record)) {
+        await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
+      } else {
+        await waitUntilGoneFromInbox(client, emailId);
+      }
+    }
+
+    // Undo both
+    for (const { undoRecipe } of results) {
+      expect(undoRecipe).toBeTruthy();
+      await restoreToInbox(client, record, undoRecipe!);
+    }
+
+    // Both should be back in inbox
+    for (const emailId of [emailId1, emailId2]) {
+      if (isGmailUnipile(record)) {
+        await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
+      }
     }
   });
 });

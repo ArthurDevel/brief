@@ -30,6 +30,7 @@ const DEFAULT_CLASSIFICATIONS: Record<ToolName, ActionClassification> = {
   list_folders: "read_only",
   move_to_folder: "mutating_auto",
   batch_delete_emails: "mutating_queued",
+  batch_move_to_folder: "mutating_auto",
   delete_email: "mutating_queued",
   send_email: "mutating_queued",
   reply_email: "mutating_queued",

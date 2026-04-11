@@ -92,6 +92,15 @@ async function createUnipileClient(account: EmailAccountRecord): Promise<EmailAc
       await validateFolderExists(folder, () => unipile.listFolders(accountId));
       return unipile.moveToFolder(accountId, emailId, folder, sourceFolder ?? "INBOX", account.provider);
     },
+    batchMoveToFolder: async (emailIds: string[], folder: string, sourceFolder?: string) => {
+      await validateFolderExists(folder, () => unipile.listFolders(accountId));
+      const results: { emailId: string; undoRecipe: import("./types").UndoRecipe | null }[] = [];
+      for (const emailId of emailIds) {
+        const undoRecipe = await unipile.moveToFolder(accountId, emailId, folder, sourceFolder ?? "INBOX", account.provider);
+        results.push({ emailId, undoRecipe });
+      }
+      return results;
+    },
     moveEmail: (emailId: string, destFolder: string, sourceFolder?: string, rfcMessageId?: string) =>
       unipile.moveEmail(accountId, emailId, sourceFolder ?? "INBOX", destFolder, rfcMessageId),
     listFolders: () => unipile.listFolders(accountId),
@@ -142,6 +151,15 @@ async function createCustomClient(account: EmailAccountRecord): Promise<EmailAcc
     moveToFolder: async (emailId: string, folder: string, sourceFolder?: string) => {
       await validateFolderExists(folder, () => imapClient.listFolders(client));
       return imapClient.moveEmailToFolder(client, emailId, folder, sourceFolder ?? "INBOX");
+    },
+    batchMoveToFolder: async (emailIds: string[], folder: string, sourceFolder?: string) => {
+      await validateFolderExists(folder, () => imapClient.listFolders(client));
+      const results: { emailId: string; undoRecipe: import("./types").UndoRecipe | null }[] = [];
+      for (const emailId of emailIds) {
+        const undoRecipe = await imapClient.moveEmailToFolder(client, emailId, folder, sourceFolder ?? "INBOX");
+        results.push({ emailId, undoRecipe });
+      }
+      return results;
     },
     moveEmail: (messageId: string, destFolder: string, sourceFolder?: string, _rfcMessageId?: string) =>
       imapClient.moveEmail(client, messageId, sourceFolder ?? "INBOX", destFolder),

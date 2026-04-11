@@ -116,6 +116,8 @@ def handle_tool_call(
         return _handle_batch_archive(input, email_ctx, supabase)
     if input.tool_name == "batch_delete_emails":
         return _handle_batch_delete(input, supabase)
+    if input.tool_name == "batch_move_to_folder":
+        return _handle_batch_move(input, email_ctx, supabase)
 
     classification = classify_action(input.tool_name, user_config)
     requires_approval = classification == "mutating_queued"
@@ -390,6 +392,62 @@ def _handle_batch_delete(
         status="pending",
         result={"total": total, "succeeded": succeeded, "failed": failed, "errors": errors, "actionIds": action_ids},
         message=f"Queued {succeeded} of {total} emails for deletion ({failed} failed)",
+    )
+
+
+def _handle_batch_move(
+    input: ActionInput,
+    email_ctx: EmailClientContext,
+    supabase: Client,
+) -> ActionResult:
+    """Fan out a batch move request into individual move_to_folder actions.
+
+    Loops sequentially over each email_id, calling _execute_and_store for each.
+    Each iteration constructs a fresh ActionInput with a fresh arguments dict
+    because _execute_and_store mutates input.arguments in-place (adds message_id).
+
+    Args:
+        input: The batch action input containing email_ids, folder, and optional source_folder.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
+        supabase: Supabase client for DB operations.
+
+    Returns:
+        ActionResult with summary counts and all created action IDs.
+    """
+    email_ids: list[str] = input.arguments.get("email_ids", [])
+    folder: str = input.arguments["folder"]
+    source_folder: str = input.arguments.get("source_folder", "INBOX")
+
+    total = len(email_ids)
+    succeeded = 0
+    failed = 0
+    errors: list[str] = []
+    action_ids: list[str] = []
+    first_action_id = ""
+
+    for email_id in email_ids:
+        individual_input = ActionInput(
+            user_id=input.user_id,
+            session_id=input.session_id,
+            tool_name="move_to_folder",
+            arguments={"email_id": email_id, "folder": folder, "source_folder": source_folder},
+        )
+        try:
+            result = _execute_and_store(individual_input, email_ctx, supabase)
+            action_ids.append(result.action_id)
+            if not first_action_id:
+                first_action_id = result.action_id
+            succeeded += 1
+        except Exception as e:
+            failed += 1
+            errors.append(f"email_id={email_id}: {e}")
+            logger.warning("Batch move failed for email_id=%s: %s", email_id, e)
+
+    return ActionResult(
+        action_id=first_action_id or "",
+        status="executed",
+        result={"total": total, "succeeded": succeeded, "failed": failed, "errors": errors, "actionIds": action_ids},
+        message=f"Moved {succeeded} of {total} emails to {folder} ({failed} failed)",
     )
 
 
