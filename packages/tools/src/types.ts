@@ -33,6 +33,7 @@ export type ToolName =
   | "reply_email"
   | "batch_archive_emails"
   | "batch_delete_emails"
+  | "batch_move_to_folder"
   | "list_folders"
   | "move_to_folder"
   | "save_memory"

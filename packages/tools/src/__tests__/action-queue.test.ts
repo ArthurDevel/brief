@@ -467,6 +467,10 @@ describe("Batch tool classification", () => {
   it("classifies batch_delete_emails as mutating_queued", () => {
     expect(classifyAction("batch_delete_emails", {})).toBe("mutating_queued");
   });
+
+  it("classifies batch_move_to_folder as mutating_auto", () => {
+    expect(classifyAction("batch_move_to_folder", {})).toBe("mutating_auto");
+  });
 });
 
 // ============================================================================
@@ -705,6 +709,225 @@ describe("Batch email actions (Hoodiecrow integration)", () => {
     } finally {
       await closeImapConnection(client);
     }
+  });
+});
+
+// ============================================================================
+// BATCH MOVE TO FOLDER (INTEGRATION)
+// ============================================================================
+
+const BATCH_MOVE_IMAP_PORT = 14_248;
+
+const BATCH_MOVE_SEED_MESSAGES = [
+  {
+    raw: [
+      "From: Alice <alice@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch move email 1",
+      "Date: Mon, 10 Mar 2026 09:00:00 +0000",
+      "Message-Id: <batch-move-001@example.com>",
+      "",
+      "Body of batch move email 1.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Bob <bob@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch move email 2",
+      "Date: Tue, 11 Mar 2026 10:00:00 +0000",
+      "Message-Id: <batch-move-002@example.com>",
+      "",
+      "Body of batch move email 2.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Carol <carol@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch move email 3",
+      "Date: Wed, 12 Mar 2026 11:00:00 +0000",
+      "Message-Id: <batch-move-003@example.com>",
+      "",
+      "Body of batch move email 3.",
+    ].join("\r\n"),
+  },
+];
+
+function createBatchMoveTestServer() {
+  return hoodiecrow({
+    plugins: [
+      "ID", "SASL-IR", "AUTH-PLAIN", "NAMESPACE", "IDLE",
+      "ENABLE", "CONDSTORE", "LITERALPLUS", "UNSELECT",
+      "SPECIAL-USE", "CREATE-SPECIAL-USE",
+    ],
+    storage: {
+      INBOX: {
+        messages: [...BATCH_MOVE_SEED_MESSAGES],
+      },
+      "": {
+        separator: "/",
+        folders: {
+          "[Google Mail]": {
+            flags: ["\\Noselect"],
+            folders: {
+              "All Mail": {
+                "special-use": "\\All",
+                messages: [...BATCH_MOVE_SEED_MESSAGES],
+              },
+              Drafts: { "special-use": "\\Drafts" },
+              "Sent Mail": { "special-use": "\\Sent" },
+              Trash: { "special-use": "\\Trash" },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+const batchMoveImapConfig: ImapConfig = {
+  host: "127.0.0.1",
+  port: BATCH_MOVE_IMAP_PORT,
+  user: TEST_USER,
+  password: TEST_PASS,
+  secure: false,
+};
+
+describe("Batch move to folder (Hoodiecrow integration)", () => {
+  let server: ReturnType<typeof hoodiecrow>;
+
+  beforeAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server = createBatchMoveTestServer();
+        server.listen(BATCH_MOVE_IMAP_PORT, () => resolve());
+      }),
+  );
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        setTimeout(resolve, 2000);
+      }),
+  );
+
+  // --------------------------------------------------------------------------
+  // Happy path: batch move moves emails to target folder
+  // --------------------------------------------------------------------------
+
+  it("batch move moves multiple emails to Trash and creates action rows with undo recipes", async () => {
+    let client = await createImapConnection(batchMoveImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const target1 = emails.find((e) => e.subject === "Batch move email 1")!;
+      const target2 = emails.find((e) => e.subject === "Batch move email 2")!;
+      expect(target1).toBeDefined();
+      expect(target2).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "batch_move_to_folder",
+        arguments: {
+          email_ids: [target1.id, target2.id],
+          folder: "[Google Mail]/Trash",
+          source_folder: "INBOX",
+        },
+      };
+
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(batchMoveImapConfig), supabase);
+
+      // Result summary shows both succeeded
+      const summary = result.result as Record<string, unknown>;
+      expect(summary.total).toBe(2);
+      expect(summary.succeeded).toBe(2);
+      expect(summary.failed).toBe(0);
+
+      // Action rows should have undo recipes
+      const actionRows = Object.values(store.actions);
+      const moveRows = actionRows.filter((r) => r.tool_name === "move_to_folder");
+      expect(moveRows).toHaveLength(2);
+      for (const row of moveRows) {
+        expect(row.status).toBe("executed");
+        expect(row.undo_recipe).toBeTruthy();
+      }
+
+      // Reconnect to see updated mailbox state (handleToolCall uses its own connection)
+      await closeImapConnection(client);
+      client = await createImapConnection(batchMoveImapConfig);
+      const after = await listInbox(client, 10);
+      expect(after.find((e) => e.id === target1.id)).toBeUndefined();
+      expect(after.find((e) => e.id === target2.id)).toBeUndefined();
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Partial failure: one valid ID, one invalid ID
+  // --------------------------------------------------------------------------
+
+  it("partial failure: valid email moves, invalid email fails", async () => {
+    const client = await createImapConnection(batchMoveImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const validTarget = emails[0]!;
+      expect(validTarget).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "batch_move_to_folder",
+        arguments: {
+          email_ids: [validTarget.id, "99999"],
+          folder: "[Google Mail]/Trash",
+          source_folder: "INBOX",
+        },
+      };
+
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(batchMoveImapConfig), supabase);
+
+      const summary = result.result as Record<string, unknown>;
+      expect(summary.succeeded).toBe(1);
+      expect(summary.failed).toBe(1);
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Empty email_ids
+  // --------------------------------------------------------------------------
+
+  it("empty email_ids returns zero counts with no side effects", async () => {
+    const store: Record<string, Record<string, Row>> = { actions: {} };
+    const supabase = createFakeSupabase(store);
+
+    const input: ActionInput = {
+      userId: "user-1",
+      sessionId: "session-1",
+      toolName: "batch_move_to_folder",
+      arguments: {
+        email_ids: [],
+        folder: "[Google Mail]/Trash",
+      },
+    };
+
+    const result = await handleToolCall(input, {}, buildTestEmailAccount(batchMoveImapConfig), supabase);
+
+    const summary = result.result as Record<string, unknown>;
+    expect(summary.total).toBe(0);
+    expect(summary.succeeded).toBe(0);
+    expect(summary.failed).toBe(0);
+    expect(Object.keys(store.actions)).toHaveLength(0);
   });
 });
 

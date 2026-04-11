@@ -78,6 +78,9 @@ export async function handleToolCall(
   if (input.toolName === "batch_delete_emails") {
     return await handleBatchDelete(input, supabase);
   }
+  if (input.toolName === "batch_move_to_folder") {
+    return await handleBatchMove(input, emailAccount, supabase);
+  }
 
   const classification = classifyAction(input.toolName, userConfig);
   const requiresApproval = classification === "mutating_queued";
@@ -590,6 +593,60 @@ async function handleBatchDelete(
     status: "pending",
     result: { total, succeeded, failed, errors, actionIds },
     message: `Queued ${succeeded} of ${total} emails for deletion (${failed} failed)`,
+  };
+}
+
+/**
+ * Fans out a batch_move_to_folder call into individual move_to_folder actions.
+ * Processes emails sequentially. Each email gets its own action row with an individual undo recipe.
+ * @param input - The batch action input containing email_ids, folder, and optional source_folder
+ * @param emailAccount - The user's active email account record
+ * @param supabase - Supabase client for DB operations
+ * @returns ActionResult with summary counts and all created actionIds
+ */
+async function handleBatchMove(
+  input: ActionInput,
+  emailAccount: EmailAccountRecord,
+  supabase: SupabaseClient
+): Promise<ActionResult> {
+  const emailIds = (input.arguments.email_ids as string[]) ?? [];
+  const folder = input.arguments.folder as string;
+  const sourceFolder = (input.arguments.source_folder as string) ?? "INBOX";
+
+  const total = emailIds.length;
+  let succeeded = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  const actionIds: string[] = [];
+  let firstSuccessfulActionId = "";
+
+  for (const emailId of emailIds) {
+    try {
+      const individualInput: ActionInput = {
+        userId: input.userId,
+        sessionId: input.sessionId,
+        toolName: "move_to_folder",
+        arguments: { email_id: emailId, folder, source_folder: sourceFolder },
+      };
+
+      const result = await executeAndStore(individualInput, emailAccount, supabase);
+      actionIds.push(result.actionId);
+
+      if (!firstSuccessfulActionId) {
+        firstSuccessfulActionId = result.actionId;
+      }
+      succeeded++;
+    } catch (err) {
+      failed++;
+      errors.push(`email ${emailId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return {
+    actionId: firstSuccessfulActionId || "",
+    status: "executed",
+    result: { total, succeeded, failed, errors, actionIds },
+    message: `Moved ${succeeded} of ${total} emails to ${folder} (${failed} failed)`,
   };
 }
 
