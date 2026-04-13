@@ -4,3 +4,5 @@ uvicorn
 aiohttp
 numpy
 python-dotenv
+python-multipart
+twilio

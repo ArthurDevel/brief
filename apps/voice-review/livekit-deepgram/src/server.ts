@@ -12,6 +12,7 @@ import { int16PcmToWavBuffer } from "./lib/wav.js";
 import {
   AGENT_NAME,
   AVAILABLE_VOICES,
+  ConversationMode,
   DEFAULT_SPEED,
   DEFAULT_VOICE,
   NUM_CHANNELS,
@@ -28,12 +29,23 @@ interface GenerateRequest {
 interface LiveKitSessionRequest {
   voice?: string;
   speed?: number;
+  mode?: ConversationMode;
+  demoBrief?: string;
 }
 
+const MAX_DEMO_BRIEF_CHARS = 2000;
+
 function validateSessionConfig(input: LiveKitSessionRequest): SessionConfig {
+  const mode: ConversationMode = input.mode === "demo" ? "demo" : "chat";
+  const demoBrief =
+    typeof input.demoBrief === "string"
+      ? input.demoBrief.trim().slice(0, MAX_DEMO_BRIEF_CHARS)
+      : "";
   return {
     voice: typeof input.voice === "string" && input.voice ? input.voice : DEFAULT_VOICE,
-    speed: typeof input.speed === "number" ? input.speed : DEFAULT_SPEED
+    speed: typeof input.speed === "number" ? input.speed : DEFAULT_SPEED,
+    mode,
+    demoBrief: demoBrief || undefined
   };
 }
 

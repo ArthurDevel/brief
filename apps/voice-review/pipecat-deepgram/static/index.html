@@ -142,6 +142,22 @@
       border-color: #4f8ff7;
     }
 
+    select {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      background: #1a1a22;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 0.9rem;
+    }
+
+    select:focus {
+      outline: none;
+      border-color: #4f8ff7;
+    }
+
     /* -- Buttons -- */
     .btn {
       display: inline-flex;
@@ -190,6 +206,7 @@
       display: flex;
       align-items: center;
       gap: 1rem;
+      flex-wrap: wrap;
     }
 
     .call-status {
@@ -215,6 +232,34 @@
       background: #1a1a22;
       font-size: 0.8rem;
       color: #777;
+    }
+
+    .phone-row {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      align-items: end;
+    }
+
+    .phone-row .field {
+      flex: 1;
+      min-width: 240px;
+    }
+
+    input[type="tel"] {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      background: #1a1a22;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 0.9rem;
+    }
+
+    input[type="tel"]:focus {
+      outline: none;
+      border-color: #4f8ff7;
     }
   </style>
 </head>
@@ -266,6 +311,19 @@
   <!-- Tab: Live Call -->
   <div class="tab-content" id="tab-call">
     <div class="section">
+      <label>Call Mode</label>
+      <select id="modeSelect">
+        <option value="chat">Open Conversation</option>
+        <option value="demo">Demo Mode</option>
+      </select>
+    </div>
+
+    <div class="section" id="demoBriefSection" style="display:none">
+      <label>Demo Brief</label>
+      <textarea id="demoBrief" placeholder="Example: Sound like a polished inbox assistant. Mention a few new emails, one calendar reminder, and ask one crisp follow-up question. Keep it warm and product-demo ready."></textarea>
+    </div>
+
+    <div class="section">
       <div class="call-controls">
         <button class="btn btn-primary" id="startCallBtn" onclick="startCall()">Start Call</button>
         <button class="btn btn-danger" id="endCallBtn" onclick="endCall()" style="display:none">End Call</button>
@@ -274,7 +332,23 @@
       </div>
       <div class="call-info">
         Starts a WebRTC call with an LLM using the selected voice and speed.
-        The full pipeline runs: your mic -> Deepgram STT -> Gemini Flash -> Deepgram TTS -> WSOLA speed -> normalizer -> your speakers.
+        Open Conversation keeps the call free-form. Demo Mode steers the LLM with a short brief so you can record more qualitative, product-style samples without any tool calls.
+        Separate `user` and `bot` WAV files are saved to your Downloads folder when the call ends.
+      </div>
+    </div>
+
+    <div class="section">
+      <label>Call My Phone</label>
+      <div class="phone-row">
+        <div class="field">
+          <input type="tel" id="phoneNumber" placeholder="+14155550123" />
+        </div>
+        <button class="btn btn-primary" id="callPhoneBtn" onclick="callPhone()">Call My Phone</button>
+        <span class="status" id="phoneCallStatus"></span>
+      </div>
+      <div class="call-info">
+        Uses Twilio outbound calling and Twilio Media Streams. This requires `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, and an HTTPS `PUBLIC_URL` reachable by Twilio.
+        The same call also writes separate `user` and `bot` WAV files to your Downloads folder.
       </div>
     </div>
   </div>
@@ -286,6 +360,15 @@
 
     let selectedVoice = "aura-2-andromeda-en";
     let voices = [];
+
+    function getConversationMode() {
+      return document.getElementById("modeSelect").value === "demo" ? "demo" : "chat";
+    }
+
+    function updateModeUi() {
+      document.getElementById("demoBriefSection").style.display =
+        getConversationMode() === "demo" ? "block" : "none";
+    }
 
     // Call state
     let peerConnection = null;
@@ -315,6 +398,10 @@
         tab.classList.add("active");
         document.getElementById("tab-" + tab.dataset.tab).classList.add("active");
       });
+    });
+
+    document.getElementById("modeSelect").addEventListener("change", () => {
+      updateModeUi();
     });
 
     // ========================================================================
@@ -420,7 +507,12 @@
         const startRes = await fetch("/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ voice: selectedVoice, speed }),
+          body: JSON.stringify({
+            voice: selectedVoice,
+            speed,
+            mode: getConversationMode(),
+            demoBrief: document.getElementById("demoBrief").value.trim(),
+          }),
         });
 
         if (!startRes.ok) throw new Error("Failed to create session");
@@ -510,6 +602,50 @@
       }
     }
 
+    async function callPhone() {
+      const phoneNumber = document.getElementById("phoneNumber").value.trim();
+      const status = document.getElementById("phoneCallStatus");
+      const button = document.getElementById("callPhoneBtn");
+
+      if (!phoneNumber) {
+        status.textContent = "Enter a phone number in E.164 format.";
+        status.className = "status error";
+        return;
+      }
+
+      button.disabled = true;
+      status.textContent = "Calling...";
+      status.className = "status";
+
+      try {
+        const speed = parseFloat(document.getElementById("speedSlider").value);
+        const resp = await fetch("/api/twilio/call", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            phoneNumber,
+            voice: selectedVoice,
+            speed,
+            mode: getConversationMode(),
+            demoBrief: document.getElementById("demoBrief").value.trim(),
+          }),
+        });
+
+        const body = await resp.json();
+        if (!resp.ok) {
+          throw new Error(body.error || "Failed to start phone call");
+        }
+
+        status.textContent = "Call started. Your phone should ring shortly.";
+        status.className = "status";
+      } catch (err) {
+        status.textContent = "Error: " + err.message;
+        status.className = "status error";
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     function endCall() {
       cleanupCall();
 
@@ -579,6 +715,7 @@
     }
 
     init();
+    updateModeUi();
   </script>
 </body>
 </html>

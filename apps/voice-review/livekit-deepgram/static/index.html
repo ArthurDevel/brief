@@ -137,6 +137,22 @@
       border-color: #4f8ff7;
     }
 
+    select {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      background: #1a1a22;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 0.9rem;
+    }
+
+    select:focus {
+      outline: none;
+      border-color: #4f8ff7;
+    }
+
     .btn {
       display: inline-flex;
       align-items: center;
@@ -261,6 +277,19 @@
 
   <div class="tab-content" id="tab-call">
     <div class="section">
+      <label>Call Mode</label>
+      <select id="modeSelect">
+        <option value="chat">Open Conversation</option>
+        <option value="demo">Demo Mode</option>
+      </select>
+    </div>
+
+    <div class="section" id="demoBriefSection" style="display:none">
+      <label>Demo Brief</label>
+      <textarea id="demoBrief" placeholder="Example: Sound like a polished inbox assistant. Mention a few new emails, one calendar reminder, and ask one crisp follow-up question. Keep it warm and product-demo ready."></textarea>
+    </div>
+
+    <div class="section">
       <div class="call-controls">
         <button class="btn btn-primary" id="startCallBtn">Start Call</button>
         <button class="btn btn-danger" id="endCallBtn" style="display:none">End Call</button>
@@ -269,7 +298,7 @@
       </div>
       <div class="call-info">
         Starts a LiveKit room with an LLM using the selected voice and speed.
-        The pipeline runs: your mic -> Deepgram STT -> OpenRouter LLM -> Deepgram TTS -> WSOLA speed -> normalizer -> your speakers.
+        Open Conversation keeps the call free-form. Demo Mode steers the LLM with a short brief so you can record more qualitative, product-style samples without any tool calls.
       </div>
     </div>
   </div>
