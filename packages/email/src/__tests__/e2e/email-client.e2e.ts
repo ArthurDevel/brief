@@ -617,13 +617,13 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     expect(results[0].undoRecipe).toBeTruthy();
     expect(results[1].undoRecipe).toBeTruthy();
 
-    // Both emails should be gone from inbox
-    for (const emailId of [emailId1, emailId2]) {
-      if (isGmailUnipile(record)) {
+    // Both emails should be gone from inbox (checked in a single poll loop)
+    if (isGmailUnipile(record)) {
+      for (const emailId of [emailId1, emailId2]) {
         await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
-      } else {
-        await waitUntilGoneFromInbox(client, emailId);
       }
+    } else {
+      await waitUntilAllGoneFromInbox(client, [emailId1, emailId2]);
     }
   });
 
@@ -640,13 +640,13 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
       "INBOX"
     );
 
-    // Wait until both are gone
-    for (const emailId of [emailId1, emailId2]) {
-      if (isGmailUnipile(record)) {
+    // Wait until both are gone (single poll loop)
+    if (isGmailUnipile(record)) {
+      for (const emailId of [emailId1, emailId2]) {
         await waitUntilGoneFromInboxUnipile(emailId, record.unipileAccountId!);
-      } else {
-        await waitUntilGoneFromInbox(client, emailId);
       }
+    } else {
+      await waitUntilAllGoneFromInbox(client, [emailId1, emailId2]);
     }
 
     // Undo both
@@ -656,8 +656,8 @@ describe.each(accounts)("EmailAccountClient -- $label", ({ record, emailAddress 
     }
 
     // Both should be back in inbox
-    for (const emailId of [emailId1, emailId2]) {
-      if (isGmailUnipile(record)) {
+    if (isGmailUnipile(record)) {
+      for (const emailId of [emailId1, emailId2]) {
         await verifyUndoRestoredToInbox(emailId, record.unipileAccountId!);
       }
     }
@@ -794,6 +794,29 @@ async function waitUntilGoneFromInbox(client: EmailAccountClient, emailId: strin
   }
 
   throw new Error(`Email ${emailId} still in inbox after ${MAX_RETRIES} attempts`);
+}
+
+/**
+ * Waits until ALL given emails are no longer in the inbox.
+ * Checks all IDs in a single listInbox call per retry, avoiding sequential polling.
+ * @param client - The email client
+ * @param emailIds - The email IDs to check for
+ */
+async function waitUntilAllGoneFromInbox(client: EmailAccountClient, emailIds: string[]): Promise<void> {
+  const MAX_RETRIES = 6;
+  const RETRY_WAIT_MS = 5_000;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const emails = await client.listInbox(50);
+    const remaining = emailIds.filter((id) => emails.some((e) => e.id === id));
+    if (remaining.length === 0) return;
+
+    if (attempt < MAX_RETRIES - 1) {
+      await wait(RETRY_WAIT_MS);
+    }
+  }
+
+  throw new Error(`Emails still in inbox after ${MAX_RETRIES} attempts: ${emailIds.join(", ")}`);
 }
 
 
