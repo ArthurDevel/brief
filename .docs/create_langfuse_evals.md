@@ -1,46 +1,134 @@
 # Creating Langfuse Evals
 
-When creating Langfuse eval cases from real traces, preserve the real context. Do not compress the setup into a smaller synthetic example unless the point of the eval is specifically a minimal case.
+This repo keeps the local JSON dataset as the source of truth for Langfuse eval cases.
 
-## Rules
+Relevant files:
 
-1. Include the full start of the conversation.
-   - Include the initial system prompt or equivalent prompt context.
-   - Include the greeting and all prior turns that anchor the behavior being tested.
-   - If the failure happens late in the turn, keep the earlier tool calls and assistant replies that establish state.
+- `langfuse/datasets/voice-behavior.json`
+- `langfuse/evals/upload_dataset.py`
+- `langfuse/evals/voice_behavior_eval.py`
+- `langfuse/judges/voice_behavior_judge.py`
 
-2. Do not shorten tool outputs.
-   - Copy the full tool response into the eval fixture.
-   - Do not replace large `markdown` payloads with summaries.
-   - Do not trim folder lists, search results, inbox results, or error messages.
-   - Do not use placeholders like `...`, `truncated`, `omitted`, or "same as above".
+## Important Rule
 
-3. Prefer real production payloads when the bug is context-sensitive.
-   - This is especially important for long-context regressions.
-   - Performance can degrade with larger context windows, so the eval should reflect the real size and shape of the conversation.
-   - If the bug depends on a long inbox listing, a long folder list, or prior auto-actions, keep those exact payloads.
+Do not over-trim conversation context when adding eval cases.
 
-4. Preserve the exact sequence of state changes.
-   - Include the failed tool call before the corrective step.
-   - Include the user correction that challenges the assistant.
-   - Include the follow-up tool result that makes the right action possible.
+This has caused repeated mistakes.
 
-5. Keep the eval faithful to the provider-specific shape.
-   - For Gmail label bugs, keep both `name` and `path` exactly as returned.
-   - If the bug is about display name vs provider path, the eval must include the real folder list output.
+## System Prompt
 
-## Specific Repeated Mistake To Avoid
+Do not store the system prompt inside each dataset item.
+
+The eval runner injects the system prompt automatically at runtime from either:
+
+- the code prompt via `--use-code-prompt`, or
+- a Langfuse-managed prompt via `--prompt-name`
+
+That means the dataset item should contain the conversation and tool context that the assistant saw after the system prompt, not a duplicated system prompt blob.
+
+## Conversation Context Requirements
+
+When a case is derived from a real production conversation:
+
+- include the start of the relevant conversation segment, not just the final turn
+- include the assistant turn that set up the user expectation
+- include prior tool calls and tool outputs that materially shaped the next response
+- include prior user turns that anchor the assistant's behavior
+
+For one-by-one inbox cases, this usually means:
+
+- greeting or first user utterance
+- the initial `list_inbox`
+- any auto-actions triggered from memory before the assistant speaks
+- the assistant's first spoken summary
+- the user confirmation to continue
+
+Do not jump straight to the last user turn unless the earlier turns are genuinely irrelevant.
+
+## Tool Output Requirements
+
+Use the real tool output.
+
+In particular:
+
+- do not shorten `list_inbox` returns by default
+- do not reduce search results to a hand-picked subset unless the truncation is itself intentional and documented
+- preserve real email IDs, senders, subjects, snippets, and action IDs
+
+Cheap models are sensitive to missing anchor context. Full tool outputs help preserve realistic behavior.
+
+If a tool output is extremely large and must be trimmed, document why in the case notes and keep all rows that affect the target behavior.
+
+## Memory And Session Context
+
+If the real interaction depended on user memories or tool classifications, include the full relevant block in `input.session_context`.
+
+Do not silently reduce the memory list to only one or two items if the production behavior was conditioned by a larger memory set.
+
+## Authoring Checklist
+
+Before considering a new eval case done:
+
+1. Confirm the system prompt is runtime-injected and not duplicated into the item.
+2. Confirm the conversation starts early enough to anchor the behavior.
+3. Confirm the full relevant tool output is present.
+4. Confirm real IDs and metadata are preserved.
+5. Validate JSON:
+
+```bash
+python3 -m json.tool langfuse/datasets/voice-behavior.json >/tmp/voice-behavior.validated.json
+```
+
+6. Run a targeted local eval before upload:
+
+```bash
+python3 langfuse/evals/voice_behavior_eval.py \
+  --use-code-prompt \
+  --dataset-path langfuse/datasets/voice-behavior.json \
+  --item-id <case-id>
+```
+
+7. Upload and rerun the targeted remote eval:
+
+```bash
+python3 langfuse/evals/upload_dataset.py langfuse/datasets/voice-behavior.json
+
+python3 langfuse/evals/voice_behavior_eval.py \
+  --use-code-prompt \
+  --item-id <case-id>
+```
+
+## Specific Past Mistake To Avoid
+
+Do not create a case from the middle of a conversation while:
+
+- omitting the opening assistant setup turns
+- shortening the `list_inbox` output
+- reducing the memory entries
+
+That changes model behavior and makes the eval less trustworthy.
+
+## Provider-Specific Fidelity
+
+Keep the eval faithful to the provider-specific shape.
+
+- For Gmail label bugs, keep both `name` and `path` exactly as returned.
+- If the bug is about display name versus provider path, the eval must include the real folder list output.
+- Preserve the exact sequence of state changes:
+  - include the failed tool call before the corrective step
+  - include the user correction that challenges the assistant
+  - include the follow-up tool result that makes the right action possible
+
+## Example To Preserve
 
 For the `Dev/Github` label regression:
 
-- Do not write a compact example that starts only at `"But it does exist. Please check."`
-- Do not omit the original system prompt.
-- Do not omit the initial greeting, inbox listing, auto-delete action, failed `move_to_folder`, or the exact error text.
-- Do not shorten the `list_inbox` or `list_folders` outputs.
+- do not write a compact example that starts only at `"But it does exist. Please check."`
+- do not omit the greeting, inbox listing, auto-delete action, failed `move_to_folder`, or exact error text
+- do not shorten the `list_inbox` or `list_folders` outputs
 
 The correct eval should include:
 
-- the full prompt context
 - the full conversation from the start of the session
 - the full `list_inbox` output
 - the full failed `move_to_folder` output
@@ -51,8 +139,7 @@ The correct eval should include:
 
 If you are copying a case from Langfuse observations:
 
-- copy the prompt verbatim
-- copy each assistant/user turn verbatim
+- copy each assistant and user turn verbatim
 - copy each tool input verbatim
 - copy each tool output verbatim
 

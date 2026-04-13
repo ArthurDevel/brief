@@ -51,11 +51,12 @@ Decide whether the assistant's response passes or fails. It passes only if ALL o
 - All response rules were followed
 - The response fits the style tags (brief, phone-friendly, etc.)
 
-IMPORTANT -- these are NEVER failures, do NOT override this:
-- Follow-up questions after completing a task are ALWAYS acceptable. This is a voice assistant -- it must suggest what to do next. Examples: "want to reply?", "should I archive this?", "want me to read it?", "move on?", "go back to your other emails?". The ONLY invalid follow-up is asking the user to repeat something they already said.
-- Asking a short confirmation like "should we start?" or "want to begin?" after proposing an action
-- Minor wording differences that preserve the same intent
-- Referencing facts (like email counts) that were established in earlier conversation turns -- the assistant may know things from prior messages that are not shown here as tool calls
+IMPORTANT:
+- The Expected Behavior section is authoritative. If a response rule forbids suggested actions, category guesses, extra tools, or a type of follow-up, fail outputs that violate that rule.
+- Follow-up questions after completing a task are generally acceptable for a voice assistant, but only when they do not conflict with the explicit response rules for the dataset item.
+- Asking a short confirmation like "should we start?" or "want to begin?" after proposing an action is acceptable unless the response rules say not to ask it.
+- Minor wording differences that preserve the same intent are acceptable.
+- Referencing facts (like email counts) that were established in earlier conversation turns is acceptable. The assistant may know things from prior messages that are not shown here as tool calls.
 
 ## Examples
 
@@ -84,6 +85,11 @@ PASS example 4 -- mentioning dashboard approval after queuing a delete:
   Required tools: [delete_email]
   Reason: The delete tool was called and the response correctly tells the user to approve from the dashboard.
 
+PASS example 6 -- similar email after delete:
+  Response: "Queued. Next is also from HeyGen Notifications, subject Your Video is Ready. Delete this one too?"
+  Response rules: ["The previous action deleted a near-identical email.", "A focused delete-this-one-too question is allowed."]
+  Reason: The dataset explicitly allows this suggested action because it follows a delete of a near-identical email.
+
 FAIL example 1 -- calling a forbidden tool:
   Response: "That email from Vercel is about your deployment."
   Required tools: [], Forbidden tools: [read_email], Tool calls made: [read_email]
@@ -104,7 +110,17 @@ FAIL example 4 -- open-ended question instead of suggesting triage:
   Required tools: [], Response rules: ["suggest going through emails one by one"]
   Reason: The greeting uses an open-ended question instead of suggesting the triage flow.
 
-Respond with ONLY a JSON object. Keep the reason under 30 words:
+FAIL example 5 -- suggested action when neutral question is required:
+  Response: "First one is from HeyGen Notifications. Subject: Your Video is Ready. Delete it?"
+  Response rules: ["Ask neutrally what the user wants to do.", "Do not suggest delete, archive, read, or skip."]
+  Reason: The dataset requires a neutral question, so suggesting delete violates the explicit response rules.
+
+FAIL example 6 -- guessing folder/category:
+  Response: "That email is in Promotions."
+  Response rules: ["Do not mention a folder or category unless specific email metadata proves it."]
+  Reason: The assistant guessed category membership not established by the provided context.
+
+Respond with ONLY a JSON object. Do not include analysis before or after it. The first character must be `{{` and the last character must be `}}`. Keep the reason under 30 words:
 {{"pass": true or false, "reason": "short explanation"}}"""
 
 
