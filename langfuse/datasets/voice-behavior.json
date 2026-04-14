@@ -2122,6 +2122,119 @@
         "should_wait_for_user": true,
         "notes": "Same long-context replay, but with the real list_folders result added so the model must resolve Dev/Github to Label_2274875168234742067 and then move."
       }
+    },
+    {
+      "id": "greet_then_confirm_then_batch_move_github_after_inbox_list",
+      "category": "batch_actions",
+      "goal": "After greeting and getting explicit consent to go through the inbox, the assistant should batch-move matching GitHub emails instead of moving them one by one.",
+      "tags": [
+        "production_derived",
+        "batch_actions",
+        "gmail_label",
+        "memory_automation",
+        "greeting_gated"
+      ],
+      "input": {
+        "session_context": {
+          "current_datetime": "2026-04-14T15:36:29.620190-07:00",
+          "user_email": "arthur.stockman.me@gmail.com",
+          "last_call_datetime": "2026-04-14T15:33:11.227695-07:00",
+          "email_provider": "gmail",
+          "email_context": "You have 20 new emails since the last call.",
+          "memory_entries": [
+            "The user wants to always delete all emails from realtor.com and hotpads.com.",
+            "Always delete emails from realtor.com and hotpads.com immediately without asking for confirmation.",
+            "Always move emails from GitHub to the Dev/Github folder.",
+            "Always archive emails from Google.",
+            "Always delete emails from Shutterfly (Shutterfly@em.shutterfly.com) immediately without asking for confirmation.",
+            "Always delete emails from sound imports (info@soundimports.eu) immediately without asking for confirmation.",
+            "Always delete emails from Zillow (mail.zillow.com) immediately without asking for confirmation.",
+            "Always move emails from notifications@github.com and vercel[bot] to the Dev/Github folder."
+          ],
+          "tool_classifications": {
+            "list_inbox": "read_only",
+            "read_email": "read_only",
+            "read_thread": "read_only",
+            "search_emails": "read_only",
+            "read_calendar": "read_only",
+            "list_folders": "read_only",
+            "save_memory": "read_only",
+            "submit_feature_request": "read_only",
+            "find_contact": "read_only",
+            "mark_as_read": "mutating_auto",
+            "archive_email": "mutating_auto",
+            "draft_email": "mutating_auto",
+            "batch_archive_emails": "mutating_auto",
+            "batch_move_to_folder": "mutating_auto",
+            "move_to_folder": "mutating_auto",
+            "get_newsletter_summary": "mutating_auto",
+            "set_newsletter_config": "mutating_auto",
+            "delete_email": "mutating_queued",
+            "send_email": "mutating_queued",
+            "reply_email": "mutating_queued",
+            "batch_delete_emails": "mutating_queued"
+          }
+        },
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "Hello. You have 20 new emails since your last call. Want me to go through them one by one?"
+          },
+          {
+            "role": "user",
+            "content": "Yes."
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "list_inbox",
+                  "arguments": "{\"since\":\"2026-04-14T15:33:11.227695-07:00\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "{\"status\":\"executed\",\"result\":{\"markdown\":\"## Inbox (20 emails)\\n\\n- **[id:19d8e1c6ecb14d55]** From: vercel[bot] <notifications@github.com> | 2026-04-14T22:28:40.000Z\\n  **Re: [ArthurDevel/brief] Add call progress ringback for Twilio and web (PR #199)**\\n  > vercel[bot] left a comment (ArthurDevel/brief#199)\\r\\n\\r\\n[vc]: #I/GpTGWalBQPQdeAEgdhgfcGy98mOsAxVmTLjPv\\n\\n- **[id:19d8e1bf3e2cf641]** From: vercel[bot] <notifications@github.com> | 2026-04-14T22:28:09.000Z\\n  **Re: [ArthurDevel/brief-lander] Harden onboarding error handling (PR #61)**\\n  > vercel[bot] left a comment (ArthurDevel/brief-lander#61)\\r\\n\\r\\n[vc]: #g3rgBwyvSz8D4UHthWhwxXoElkcL2BqUU\\n\\n- **[id:19d8e12d6f3a77f9]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-14T22:18:12.000Z\\n  **Session Summary - 1 action taken**\\n  > 1 action from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n1 action du\\n\\n- **[id:19d8e0c2015ea1ca]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-14T22:10:52.000Z\\n  **Session Summary - 1 action taken**\\n  > 1 action from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n1 action du\\n\\n- **[id:19d8e0af4a346f11]** From: vercel[bot] <notifications@github.com> | 2026-04-14T22:09:35.000Z\\n  **Re: [ArthurDevel/brief] Update address references to Marina Blvd (PR #198)**\\n  > vercel[bot] left a comment (ArthurDevel/brief#198)\\r\\n\\r\\n[vc]: #BN12FtV9XDJHAZBxxgAeMsXEWbxqMwXZs+tD2cT\\n\\n- **[id:19d8e07fd898660b]** From: vercel[bot] <notifications@github.com> | 2026-04-14T22:06:21.000Z\\n  **Re: [ArthurDevel/brief-lander] Update email template mailing address (PR #60)**\\n  > vercel[bot] left a comment (ArthurDevel/brief-lander#60)\\r\\n\\r\\n[vc]: #e3tFMqCNDoLGqFVDpTTojPn4jytMT7JsH\\n\\n- **[id:19d8e02c7adba352]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-14T22:00:39.000Z\\n  **Complete your setup**\\n  > Your next commute could clear your inbox -- finish setup in 2 minutes and handle emails hands-free o\\n\\n- **[id:19d8dffbfaae3e13]** From: vercel[bot] <notifications@github.com> | 2026-04-14T21:57:20.000Z\\n  **Re: [ArthurDevel/brief] Clarify duplicate phone number error (PR #197)**\\n  > vercel[bot] left a comment (ArthurDevel/brief#197)\\r\\n\\r\\n[vc]: #DyRX8ACM65Cq8WF0c/PaQX8eMOPTnRsOMuqleBa\\n\\n- **[id:19d8dfcfd9fa5fb7]** From: vercel[bot] <notifications@github.com> | 2026-04-14T21:54:19.000Z\\n  **Re: [ArthurDevel/brief-lander] Reset onboarding progress for new accounts (PR #59)**\\n  > vercel[bot] left a comment (ArthurDevel/brief-lander#59)\\r\\n\\r\\n[vc]: #cbgirDWsLu/TPgfx/6dLl/RmhEgvhuT2D\\n\\n- **[id:19d8df388232bd82]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-14T21:44:00.000Z\\n  **Session Summary - 1 action taken**\\n  > 1 action from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n1 action du\\n\\n- **[id:19d8df0de4330495]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-14T21:41:06.000Z\\n  **Your email is verified**\\n  > Your account is ready. Next, finish the remaining setup in BrewDock so you can clear your inbox hand\\n\\n- **[id:19d8df09d76a6411]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-14T21:40:49.000Z\\n  **Confirm Your Signup**\\n  > Your BrewDock verification code is 967946\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nYOUR VERIFICATION CODE\\r\\n\\r\\nEnter this co\\n\\n- **[id:19d8df0475b35b23]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-14T21:40:27.000Z\\n  **Confirm Your Signup**\\n  > Your BrewDock verification code is 295195\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nYOUR VERIFICATION CODE\\r\\n\\r\\nEnter this co\\n\\n- **[id:19d8deb6f4745078]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-14T21:35:09.000Z\\n  **Session Summary - 3 actions taken**\\n  > 3 actions from your session \\u2014 review pending items.\\r\\n\\r\\nB BrewDock\\r\\n\\r\\n\\r\\nSESSION SUMMARY\\r\\n\\r\\n3 actions \\n\\n- **[id:19d8de77458a9767]** From: vercel[bot] <notifications@github.com> | 2026-04-14T21:30:48.000Z\\n  **Re: [ArthurDevel/brief] Fix voice pipeline defaults loading in production (PR #196)**\\n  > vercel[bot] left a comment (ArthurDevel/brief#196)\\r\\n\\r\\n[vc]: #ZG6InAb+2Al4MCj30oHfJ8EoOj4jhdEXGp6ORKK\\n\\n- **[id:19d8ddea500d91ab]** From: vercel[bot] <notifications@github.com> | 2026-04-14T21:21:11.000Z\\n  **Re: [ArthurDevel/brief] Move browser calling to standalone /call page (PR #195)**\\n  > vercel[bot] left a comment (ArthurDevel/brief#195)\\r\\n\\r\\n[vc]: #W3ZZnezKOeVRvw2wC2K9yeIL/TO5EYbANNBdsrm\\n\\n- **[id:19d8dd5605c1ff54]** From: no-reply@mail.privy.io <no-reply@mail.privy.io> | 2026-04-14T21:11:03.000Z\\n  **Your login code for Darkbloom**\\n  > \\r\\n\\r\\nDarkbloom\\r\\n\\r\\n**********************\\r\\nLog in to *Darkbloom*\\r\\n**********************\\r\\n\\r\\nYour code \\n\\n- **[id:19d8dd127b8943e7]** From: realtor.com <consumer@e.mail.realtor.com> | 2026-04-14T21:06:25.000Z\\n  **| San Francisco, CA - most viewed listings of the day |**\\n  > \\n\\n- **[id:19d8dd01b73397a8]** From: BrewDock <hello@notifications.brewdock.ai> | 2026-04-14T21:05:19.000Z\\n  **Your email is verified**\\n  > Your account is ready. Next, finish the remaining setup in BrewDock so you can clear your inbox hand\\n\\n- **[id:19d8dcbba53aa4c4]** From: vercel[bot] <notifications@github.com> | 2026-04-14T21:00:32.000Z\\n  **Re: [ArthurDevel/brief] Add email verified engagement trigger (PR #194)**\\n  > vercel[bot] left a comment (ArthurDevel/brief#194)\\r\\n\\r\\n[vc]: #aQTVbxyi5oUag+cN4TbSIS3yBlHOXE7LGd0jTR+\\n\"},\"message\":\"Action list_inbox executed successfully\"}"
+          }
+        ]
+      },
+      "expected_output": {
+        "required_tools": [
+          {
+            "name": "batch_move_to_folder",
+            "argument_rules": [
+              "Use a single batch_move_to_folder call rather than separate move_to_folder calls.",
+              "Include all nine GitHub notification email IDs from the inbox result: 19d8e1c6ecb14d55, 19d8e1bf3e2cf641, 19d8e0af4a346f11, 19d8e07fd898660b, 19d8dffbfaae3e13, 19d8dfcfd9fa5fb7, 19d8de77458a9767, 19d8ddea500d91ab, 19d8dcbba53aa4c4.",
+              "Target the remembered Dev/Github destination, either directly or via its resolved provider path if the assistant first checks folders."
+            ]
+          }
+        ],
+        "forbidden_tools": [
+          "move_to_folder"
+        ],
+        "response_rules": [
+          "Treat the greeting and user confirmation as already completed.",
+          "Do not say the GitHub emails have to be moved one by one.",
+          "Do not claim Dev/Github does not exist unless the assistant first checks folders and has evidence of that.",
+          "Keep the spoken response brief and phone-friendly.",
+          "After any auto-actions, it is fine to offer to continue through the inbox one by one."
+        ],
+        "style_tags": [
+          "brief",
+          "phone_friendly",
+          "memory_automation"
+        ],
+        "should_ask_follow_up": true,
+        "should_wait_for_user": true,
+        "notes": "Production-derived from session b7293f11-aece-4ee5-9d57-dfad0e1b1cd3 / trace ee5f293ca34aba8941c7f418309d7af6, but re-anchored to test a prompt policy where auto-moves only happen after the assistant greets the user and gets explicit confirmation to go through the inbox."
+      }
     }
   ]
 }
