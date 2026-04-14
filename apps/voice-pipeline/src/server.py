@@ -60,6 +60,7 @@ from src.auth.twilio_auth import (
     lookup_user_by_phone,
     verify_pin,
 )
+from src.audio.thinking_indicator import ThinkingIndicatorMixer
 from src.config import load_settings
 from src.cost_tracker import CostTracker
 from src.langfuse_client import shutdown_langfuse_client
@@ -561,6 +562,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         params=TransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            audio_out_mixer=ThinkingIndicatorMixer(),
         ),
     )
     _mark_startup_event(pre_session_log_lines, "[startup] WebRTC transport created")
@@ -1255,6 +1257,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            audio_out_mixer=ThinkingIndicatorMixer(),
             serializer=serializer,
         ),
     )
