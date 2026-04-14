@@ -15,21 +15,11 @@
 
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
+import { getEngagementEmailContent } from "@/lib/engagement/catalog";
 import { createServiceRoleClient } from "@/lib/supabase/client";
 import { getCookieOptions } from "@/lib/supabase/client";
 import { buildEngagementEmailHtml } from "@/lib/resend/client";
-import type { EmailType, EngagementEmailContent } from "@/lib/engagement/types";
-
-import { getContent as onboardingIncomplete1h } from "@/lib/resend/templates/onboarding-incomplete-1h";
-import { getContent as onboardingIncomplete24h } from "@/lib/resend/templates/onboarding-incomplete-24h";
-import { getContent as onboardingIncomplete72h } from "@/lib/resend/templates/onboarding-incomplete-72h";
-import { getContent as welcome } from "@/lib/resend/templates/welcome";
-import { getContent as noCallNudge24h } from "@/lib/resend/templates/no-call-nudge-24h";
-import { getContent as noCallNudge72h } from "@/lib/resend/templates/no-call-nudge-72h";
-import { getContent as firstCallFollowup } from "@/lib/resend/templates/first-call-followup";
-import { getContent as scheduleNudge } from "@/lib/resend/templates/schedule-nudge";
-import { getContent as reengagement3d } from "@/lib/resend/templates/reengagement-3d";
-import { getContent as upgradeNudge } from "@/lib/resend/templates/upgrade-nudge";
+import type { EmailType } from "@/lib/engagement/types";
 
 // ============================================================================
 // TYPES
@@ -268,23 +258,6 @@ export async function fetchEmailStats(): Promise<EmailStats> {
 // PREVIEW
 // ============================================================================
 
-/** Maps each email type to its template getContent function. */
-const TEMPLATE_MAP: Record<
-  EmailType,
-  (landerUrl: string, appUrl: string) => EngagementEmailContent
-> = {
-  onboarding_incomplete_1h: onboardingIncomplete1h,
-  onboarding_incomplete_24h: onboardingIncomplete24h,
-  onboarding_incomplete_72h: onboardingIncomplete72h,
-  welcome: welcome,
-  no_call_nudge_24h: noCallNudge24h,
-  no_call_nudge_72h: noCallNudge72h,
-  first_call_followup: firstCallFollowup,
-  schedule_nudge: scheduleNudge,
-  reengagement_3d: reengagement3d,
-  upgrade_nudge: upgradeNudge,
-};
-
 /**
  * Returns the rendered HTML for a given email type, for preview purposes.
  * @param emailType - Which engagement email to preview
@@ -299,11 +272,6 @@ export async function previewEmailHtml(emailType: EmailType): Promise<string> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrl) throw new Error("NEXT_PUBLIC_APP_URL is not set");
 
-  const getContent = TEMPLATE_MAP[emailType];
-  if (!getContent) {
-    throw new Error(`Unknown email type: ${emailType}`);
-  }
-
-  const content = getContent(landerUrl, appUrl);
+  const content = getEngagementEmailContent(emailType, landerUrl, appUrl);
   return buildEngagementEmailHtml(content);
 }

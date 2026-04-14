@@ -14,6 +14,11 @@
 
 import { useEffect, useState, useCallback } from "react";
 import {
+  EMAIL_TYPE_OPTIONS,
+  getEmailPathLabel,
+  getEmailTypeLabel,
+} from "@/lib/engagement/catalog";
+import {
   fetchEmailEvents,
   fetchEmailStats,
   type EmailEventItem,
@@ -28,16 +33,7 @@ const PAGE_SIZE = 50;
 
 const EMAIL_TYPES = [
   { value: "", label: "All types" },
-  { value: "onboarding_incomplete_1h", label: "Onboarding incomplete (1h)" },
-  { value: "onboarding_incomplete_24h", label: "Onboarding incomplete (24h)" },
-  { value: "onboarding_incomplete_72h", label: "Onboarding incomplete (72h)" },
-  { value: "welcome", label: "Welcome" },
-  { value: "no_call_nudge_24h", label: "No call nudge (24h)" },
-  { value: "no_call_nudge_72h", label: "No call nudge (72h)" },
-  { value: "first_call_followup", label: "First call followup" },
-  { value: "schedule_nudge", label: "Schedule nudge" },
-  { value: "reengagement_3d", label: "Re-engagement (3d)" },
-  { value: "upgrade_nudge", label: "Upgrade nudge" },
+  ...EMAIL_TYPE_OPTIONS,
 ] as const;
 
 const DATE_FORMAT: Intl.DateTimeFormatOptions = {
@@ -46,39 +42,6 @@ const DATE_FORMAT: Intl.DateTimeFormatOptions = {
   hour: "2-digit",
   minute: "2-digit",
 };
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/**
- * Returns a human-readable label for an email type key.
- * @param emailType - The email_type string from the database
- * @returns Readable label
- */
-function emailTypeLabel(emailType: string): string {
-  const match = EMAIL_TYPES.find((t) => t.value === emailType);
-  return match ? match.label : emailType;
-}
-
-/**
- * Returns a short path label for grouping (P1, P2, P3, P4).
- * @param emailType - The email_type string
- * @returns Path label string
- */
-function pathLabel(emailType: string): string {
-  if (emailType.startsWith("onboarding_incomplete")) return "P1";
-  if (
-    emailType === "welcome" ||
-    emailType.startsWith("no_call_nudge") ||
-    emailType === "first_call_followup" ||
-    emailType === "schedule_nudge"
-  )
-    return "P2";
-  if (emailType === "reengagement_3d") return "P3";
-  if (emailType === "upgrade_nudge") return "P4";
-  return "?";
-}
 
 // ============================================================================
 // RENDER
@@ -160,7 +123,7 @@ export default function TransactionalEmailsPage() {
             {Object.entries(stats.byType)
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([type, count]) => (
-                <StatCard key={type} label={emailTypeLabel(type)} value={count} small />
+                <StatCard key={type} label={getEmailTypeLabel(type)} value={count} small />
               ))}
           </div>
         )}
@@ -257,10 +220,10 @@ export default function TransactionalEmailsPage() {
                         background: "var(--bg-hover)",
                         color: "var(--text-secondary)",
                       }}>
-                        {pathLabel(event.emailType)}
+                        {getEmailPathLabel(event.emailType)}
                       </span>
                     </Td>
-                    <Td>{emailTypeLabel(event.emailType)}</Td>
+                    <Td>{getEmailTypeLabel(event.emailType)}</Td>
                     <Td>
                       <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--text-secondary)" }}>
                         {event.resendEmailId || "--"}
