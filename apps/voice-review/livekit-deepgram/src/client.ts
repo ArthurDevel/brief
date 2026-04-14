@@ -18,6 +18,8 @@ interface LiveKitSessionResponse {
   url: string;
 }
 
+type ConversationMode = "chat" | "demo";
+
 const voiceGrid = document.getElementById("voiceGrid") as HTMLDivElement;
 const speedSlider = document.getElementById("speedSlider") as HTMLInputElement;
 const speedValue = document.getElementById("speedValue") as HTMLSpanElement;
@@ -31,12 +33,23 @@ const endCallButton = document.getElementById("endCallBtn") as HTMLButtonElement
 const callStatus = document.getElementById("callStatus") as HTMLSpanElement;
 const callTimer = document.getElementById("callTimer") as HTMLSpanElement;
 const remoteAudioContainer = document.getElementById("remoteAudioContainer") as HTMLDivElement;
+const modeSelect = document.getElementById("modeSelect") as HTMLSelectElement;
+const demoBriefSection = document.getElementById("demoBriefSection") as HTMLDivElement;
+const demoBriefInput = document.getElementById("demoBrief") as HTMLTextAreaElement;
 
 let selectedVoice = "aura-2-andromeda-en";
 let voices: VoiceOption[] = [];
 let room: Room | null = null;
 let callTimerInterval: number | null = null;
 let callStartTime = 0;
+
+function getConversationMode(): ConversationMode {
+  return modeSelect.value === "demo" ? "demo" : "chat";
+}
+
+function updateModeUi(): void {
+  demoBriefSection.style.display = getConversationMode() === "demo" ? "block" : "none";
+}
 
 async function loadVoices(): Promise<void> {
   const response = await fetch("/api/voices");
@@ -180,7 +193,9 @@ async function startCall(): Promise<void> {
       },
       body: JSON.stringify({
         voice: selectedVoice,
-        speed: getSpeed()
+        speed: getSpeed(),
+        mode: getConversationMode(),
+        demoBrief: demoBriefInput.value.trim()
       })
     });
 
@@ -250,6 +265,10 @@ speedSlider.addEventListener("input", () => {
   speedValue.textContent = `${getSpeed().toFixed(2)}x`;
 });
 
+modeSelect.addEventListener("change", () => {
+  updateModeUi();
+});
+
 generateButton.addEventListener("click", () => {
   void generatePreview();
 });
@@ -257,6 +276,8 @@ generateButton.addEventListener("click", () => {
 startCallButton.addEventListener("click", () => {
   void startCall();
 });
+
+updateModeUi();
 
 endCallButton.addEventListener("click", () => {
   void endCall();
