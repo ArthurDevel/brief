@@ -20,6 +20,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
 import { createHostedAuthLink } from "@/lib/unipile/client";
 import { getActiveEmailAccount } from "@/lib/email-accounts";
+import {
+  getDashboardErrorMessage,
+  type DashboardErrorCode,
+} from "@/lib/errors/dashboardErrors";
+import { mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -45,80 +50,84 @@ const PROVIDER_MAP: Record<string, "GOOGLE" | "OUTLOOK"> = {
  */
 export async function POST(
   request: NextRequest
-): Promise<NextResponse<{ url: string } | { error: string }>> {
-  const cookieStore = await cookies();
-  const supabase = createServerSupabaseClient(cookieStore);
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+): Promise<NextResponse<{ url: string } | { code: DashboardErrorCode; error: string }>> {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createServerSupabaseClient(cookieStore);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+    if (!user) {
+      return errorResponse("UNAUTHORIZED", 401);
+    }
 
-  const body = await request.json();
-  const provider = body.provider as string;
+    const body = await request.json();
+    const provider = body.provider as string;
 
-  if (!provider || !PROVIDER_MAP[provider]) {
-    return NextResponse.json(
-      { error: "Invalid provider. Must be 'gmail' or 'outlook'." },
-      { status: 400 }
+    if (!provider || !PROVIDER_MAP[provider]) {
+      return errorResponse("EMAIL_CONNECT_FAILED", 400);
+    }
+
+    const notifySecret = process.env.UNIPILE_NOTIFY_SECRET;
+    if (!notifySecret) {
+      throw new Error("UNIPILE_NOTIFY_SECRET environment variable is not set");
+    }
+
+    const timestamp = Date.now().toString();
+    const correlationToken = signCorrelationToken(user.id, timestamp, notifySecret);
+
+    const notifyUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/user/email-accounts/notify`;
+    const expiresOn = new Date(Date.now() + LINK_EXPIRY_MS).toISOString();
+
+    const existingAccount = await getActiveEmailAccount(supabase, user.id);
+    const isReconnect =
+      existingAccount &&
+      existingAccount.connectionType === "unipile" &&
+      existingAccount.provider === provider;
+
+    let reconnectAccountId: string | undefined;
+    if (isReconnect) {
+      const { data: row } = await supabase
+        .from("user_email_accounts")
+        .select("unipile_account_id")
+        .eq("id", existingAccount.id)
+        .single();
+      reconnectAccountId = row?.unipile_account_id ?? undefined;
+    }
+
+    console.log("[email-accounts/connect] Building hosted auth link:", {
+      provider: PROVIDER_MAP[provider],
+      type: isReconnect ? "reconnect" : "create",
+      notifyUrl,
+      expiresOn,
+      reconnectAccountId,
+    });
+
+    const successRedirectUrl = `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/settings`;
+
+    const link = await createHostedAuthLink({
+      type: isReconnect ? "reconnect" : "create",
+      provider: PROVIDER_MAP[provider],
+      expiresOn,
+      notifyUrl,
+      successRedirectUrl,
+      name: correlationToken,
+      reconnectAccountId,
+    });
+
+    console.log("[email-accounts/connect] Got hosted auth link:", link.url);
+
+    return NextResponse.json({ url: link.url });
+  } catch (err) {
+    console.error("[email-accounts/connect]", err);
+    const { code, message } = mapDashboardErrorDetails(
+      err,
+      "settings-email",
+      "EMAIL_CONNECT_FAILED"
     );
+    return NextResponse.json({ code, error: message }, { status: 500 });
   }
-
-  const notifySecret = process.env.UNIPILE_NOTIFY_SECRET;
-  if (!notifySecret) {
-    throw new Error("UNIPILE_NOTIFY_SECRET environment variable is not set");
-  }
-
-  // Generate HMAC-signed correlation token
-  const timestamp = Date.now().toString();
-  const correlationToken = signCorrelationToken(user.id, timestamp, notifySecret);
-
-  const notifyUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/user/email-accounts/notify`;
-  const expiresOn = new Date(Date.now() + LINK_EXPIRY_MS).toISOString();
-
-  // Check if this is a reconnect (user has an existing Unipile account for this provider)
-  const existingAccount = await getActiveEmailAccount(supabase, user.id);
-  const isReconnect =
-    existingAccount &&
-    existingAccount.connectionType === "unipile" &&
-    existingAccount.provider === provider;
-
-  // If reconnecting, we need the unipile_account_id from the database
-  let reconnectAccountId: string | undefined;
-  if (isReconnect) {
-    const { data: row } = await supabase
-      .from("user_email_accounts")
-      .select("unipile_account_id")
-      .eq("id", existingAccount.id)
-      .single();
-    reconnectAccountId = row?.unipile_account_id ?? undefined;
-  }
-
-  console.log("[email-accounts/connect] Building hosted auth link:", {
-    provider: PROVIDER_MAP[provider],
-    type: isReconnect ? "reconnect" : "create",
-    notifyUrl,
-    expiresOn,
-    reconnectAccountId,
-  });
-
-  const successRedirectUrl = `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/settings`;
-
-  const link = await createHostedAuthLink({
-    type: isReconnect ? "reconnect" : "create",
-    provider: PROVIDER_MAP[provider],
-    expiresOn,
-    notifyUrl,
-    successRedirectUrl,
-    name: correlationToken,
-    reconnectAccountId,
-  });
-
-  console.log("[email-accounts/connect] Got hosted auth link:", link.url);
-
-  return NextResponse.json({ url: link.url });
 }
 
 // ============================================================================
@@ -143,4 +152,14 @@ function signCorrelationToken(
     .update(payload)
     .digest("hex");
   return `${payload}:${signature}`;
+}
+
+function errorResponse(
+  code: DashboardErrorCode,
+  status: number
+): NextResponse<{ code: DashboardErrorCode; error: string }> {
+  return NextResponse.json(
+    { code, error: getDashboardErrorMessage(code) },
+    { status }
+  );
 }

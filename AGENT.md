@@ -1,3 +1,6 @@
+# Important Docs
+- .docs/error-messages.md -> this repo's system to handle errors
+
 # Guide on How to interact with the user
 - before implementing code, always first propose a plan to the user and ask for feedback. You are free to read whichever files you need without asking for permission.
 - when giving options, FIRST give all the options, do not execute them

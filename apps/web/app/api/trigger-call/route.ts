@@ -14,6 +14,11 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
+import {
+  getDashboardErrorMessage,
+  type DashboardErrorCode,
+} from "@/lib/errors/dashboardErrors";
+import { mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -83,6 +88,7 @@ function getUserIdFromOnboardingToken(token: string): string | null {
 
 interface TriggerCallResponse {
   success: boolean;
+  code?: DashboardErrorCode;
   error?: string;
 }
 
@@ -94,50 +100,80 @@ interface TriggerCallResponse {
 export async function POST(request: NextRequest): Promise<NextResponse<TriggerCallResponse>> {
   const corsHeaders = getCorsHeaders();
 
-  if (!VOICE_PIPELINE_URL) {
-    throw new Error("NEXT_PUBLIC_VOICE_PIPELINE_URL is not set");
-  }
-  if (!INTERNAL_API_KEY) {
-    throw new Error("INTERNAL_API_KEY is not set");
-  }
-
-  // Resolve userId: try Supabase session first, fall back to onboarding token
-  const cookieStore = await cookies();
-  let userId: string | null = null;
-
-  // Try Supabase session
-  const supabase = createServerSupabaseClient(cookieStore);
-  const { data: { user } } = await supabase.auth.getUser();
-  if (user) {
-    userId = user.id;
-  }
-
-  // Fall back to onboarding_token cookie (pre-email-confirmation flow)
-  if (!userId) {
-    const onboardingToken = cookieStore.get("brewdock_onboarding")?.value;
-    if (onboardingToken) {
-      userId = getUserIdFromOnboardingToken(onboardingToken);
+  try {
+    if (!VOICE_PIPELINE_URL) {
+      throw new Error("NEXT_PUBLIC_VOICE_PIPELINE_URL is not set");
     }
-  }
+    if (!INTERNAL_API_KEY) {
+      throw new Error("INTERNAL_API_KEY is not set");
+    }
 
-  if (!userId) {
+    const cookieStore = await cookies();
+    let userId: string | null = null;
+
+    const supabase = createServerSupabaseClient(cookieStore);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      userId = user.id;
+    }
+
+    if (!userId) {
+      const onboardingToken = cookieStore.get("brewdock_onboarding")?.value;
+      if (onboardingToken) {
+        userId = getUserIdFromOnboardingToken(onboardingToken);
+      }
+    }
+
+    if (!userId) {
+      return errorResponse("UNAUTHORIZED", 401, corsHeaders);
+    }
+
+    const response = await fetch(`${VOICE_PIPELINE_URL}/trigger-call`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${INTERNAL_API_KEY}`,
+      },
+      body: JSON.stringify({ user_id: userId }),
+    });
+
+    const result = await response.json().catch(() => null);
+
+    if (!response.ok || !result?.success) {
+      console.error("[trigger-call]", { status: response.status, result });
+      const { code, message } = mapDashboardErrorDetails(
+        result,
+        "call-trigger",
+        "CALL_TRIGGER_FAILED"
+      );
+      return NextResponse.json(
+        { success: false, code, error: message },
+        { status: response.status || 500, headers: corsHeaders }
+      );
+    }
+
+    return NextResponse.json(result, { headers: corsHeaders });
+  } catch (err) {
+    console.error("[trigger-call]", err);
+    const { code, message } = mapDashboardErrorDetails(
+      err,
+      "call-trigger",
+      "CALL_TRIGGER_FAILED"
+    );
     return NextResponse.json(
-      { success: false, error: "unauthorized" },
-      { status: 401, headers: corsHeaders }
+      { success: false, code, error: message },
+      { status: 500, headers: corsHeaders }
     );
   }
+}
 
-  // Forward to voice pipeline
-  const response = await fetch(`${VOICE_PIPELINE_URL}/trigger-call`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${INTERNAL_API_KEY}`,
-    },
-    body: JSON.stringify({ user_id: userId }),
-  });
-
-  const result = await response.json();
-
-  return NextResponse.json(result, { headers: corsHeaders });
+function errorResponse(
+  code: DashboardErrorCode,
+  status: number,
+  headers: Record<string, string>
+): NextResponse<TriggerCallResponse> {
+  return NextResponse.json(
+    { success: false, code, error: getDashboardErrorMessage(code) },
+    { status, headers }
+  );
 }

@@ -24,6 +24,10 @@ import {
   type ReactNode,
 } from "react";
 import { createBrowserClient } from "@/lib/supabase/client";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -102,11 +106,10 @@ async function startWebRTCSession(
   });
 
   if (!startRes.ok) {
-    const body = await startRes.json().catch(() => null);
-    if (body?.code === "LIMIT_REACHED") {
-      throw new Error("You've reached your monthly call limit. Please upgrade your plan.");
-    }
-    throw new Error(body?.error ?? `${startRes.status} ${startRes.statusText}`);
+    throw await buildDashboardErrorFromResponse(startRes, {
+      code: "CALL_START_FAILED",
+      error: `${startRes.status} ${startRes.statusText}`,
+    });
   }
 
   const startData: StartResponse = await startRes.json();
@@ -173,7 +176,10 @@ async function startWebRTCSession(
 
   if (!offerRes.ok) {
     peerConnection.close();
-    throw new Error(`Failed to send SDP offer: ${offerRes.status} ${offerRes.statusText}`);
+    throw await buildDashboardErrorFromResponse(offerRes, {
+      code: "CALL_CONNECT_FAILED",
+      error: `Failed to send SDP offer: ${offerRes.status} ${offerRes.statusText}`,
+    });
   }
 
   const answerData: OfferResponse = await offerRes.json();
@@ -233,7 +239,7 @@ export function CallProvider({ children }: { children: ReactNode }): React.React
       const supabase = createBrowserClient();
       const { data: sessionData, error: authError } = await supabase.auth.getSession();
       if (authError || !sessionData.session) {
-        throw new Error("Not authenticated. Please sign in first.");
+        throw { code: "UNAUTHORIZED", error: "Not authenticated. Please sign in first." };
       }
       const token = sessionData.session.access_token;
 
@@ -260,8 +266,7 @@ export function CallProvider({ children }: { children: ReactNode }): React.React
       setCallActive(true);
       setStatus("Call active");
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to start call";
-      setError(msg);
+      setError(logAndMapDashboardError(err, "call", "CALL_START_FAILED"));
       setStatus("Ready");
       if (pipelineSessionRef.current) {
         cleanupSession();

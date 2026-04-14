@@ -22,6 +22,12 @@ import type { SessionDetail, TranscriptEntry } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 import SendEmailModal from "@/app/dashboard/components/SendEmailModal";
+import { getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+  mapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -132,6 +138,32 @@ function Spinner() {
   return (
     <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
   );
+}
+
+function getActionContext(endpoint: string) {
+  switch (endpoint) {
+    case "approve":
+      return "action-approve" as const;
+    case "reject":
+      return "action-reject" as const;
+    case "undo":
+      return "action-undo" as const;
+    default:
+      return "action-approve" as const;
+  }
+}
+
+function getActionFallbackCode(endpoint: string) {
+  switch (endpoint) {
+    case "approve":
+      return "ACTION_APPROVE_FAILED" as const;
+    case "reject":
+      return "ACTION_REJECT_FAILED" as const;
+    case "undo":
+      return "ACTION_UNDO_FAILED" as const;
+    default:
+      return "ACTION_APPROVE_FAILED" as const;
+  }
 }
 
 // ============================================================================
@@ -322,7 +354,15 @@ function ActionsSummary({
                       className={`px-2 py-0.5 text-xs font-bold ${
                         STATUS_STYLES[action.status] ?? "bg-gray-100 text-gray-600"
                       }`}
-                      title={action.status === "failed" ? (action.result?.error as string) : undefined}
+                      title={
+                        action.status === "failed"
+                          ? mapDashboardError(
+                            action.result?.error,
+                            "action-approve",
+                            "ACTION_EXECUTION_FAILED"
+                          )
+                          : undefined
+                      }
                     >
                       {action.status}
                     </span>
@@ -383,7 +423,8 @@ export default function SessionDetailPage() {
   const router = useRouter();
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [selectedAction, setSelectedAction] = useState<ActionRow | null>(null);
   const [isConverting, setIsConverting] = useState(false);
@@ -412,12 +453,17 @@ export default function SessionDetailPage() {
   const loadSession = useCallback(async () => {
     try {
       const res = await fetch(`/api/sessions/${params.sessionId}`);
-      if (!res.ok) throw new Error("Failed to fetch session");
+      if (!res.ok) {
+        throw await buildDashboardErrorFromResponse(res, {
+          code: res.status === 404 ? "SESSION_NOT_FOUND" : "SESSION_LOAD_FAILED",
+          error: "Failed to fetch session",
+        });
+      }
       const data: SessionDetail = await res.json();
       setSession(data);
-      setError(null);
-    } catch {
-      setError("Failed to load session");
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(logAndMapDashboardError(err, "session", "SESSION_LOAD_FAILED"));
     } finally {
       setLoading(false);
     }
@@ -454,11 +500,19 @@ export default function SessionDetailPage() {
    */
   const handleAction = async (actionId: string, endpoint: string) => {
     addProcessing(actionId);
+    setActionError(null);
     try {
       const res = await postActionRequest(actionId, endpoint);
       if (!res.ok) {
-        const body = await res.json();
-        const errorMessage = body.error ?? `Failed to ${endpoint} action`;
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: getActionFallbackCode(endpoint),
+          error: `Failed to ${endpoint} action`,
+        });
+        const errorMessage = logAndMapDashboardError(
+          apiError,
+          getActionContext(endpoint),
+          getActionFallbackCode(endpoint)
+        );
 
         // Update the action in local state to show failed status inline
         setSession((prev) => {
@@ -472,11 +526,14 @@ export default function SessionDetailPage() {
             ),
           };
         });
+        setActionError(errorMessage);
         return;
       }
       await loadSession();
-    } catch {
-      setError(`Failed to ${endpoint} action`);
+    } catch (err) {
+      setActionError(
+        logAndMapDashboardError(err, getActionContext(endpoint), getActionFallbackCode(endpoint))
+      );
     } finally {
       removeProcessing(actionId);
     }
@@ -493,6 +550,7 @@ export default function SessionDetailPage() {
     if (pending.length === 0) return;
 
     addProcessing(BULK_KEY);
+    setActionError(null);
     try {
       const res = await fetch("/api/actions/bulk", {
         method: "POST",
@@ -501,19 +559,26 @@ export default function SessionDetailPage() {
       });
 
       if (!res.ok) {
-        const body = await res.json();
-        setError(body.error ?? `Failed to ${operation} actions`);
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "BULK_ACTION_FAILED",
+          error: `Failed to ${operation} actions`,
+        });
+        setActionError(logAndMapDashboardError(apiError, "action-bulk", "BULK_ACTION_FAILED"));
         return;
       }
 
       const result = await res.json();
       if (result.failed > 0) {
-        setError(`${result.failed} of ${result.total} actions failed to ${operation}`);
+        console.error("[dashboard-error]", {
+          context: "action-bulk",
+          error: { operation, result },
+        });
+        setActionError(getDashboardErrorMessage("BULK_ACTION_PARTIAL_FAILURE"));
       }
 
       await loadSession();
-    } catch {
-      setError(`Failed to ${operation} actions`);
+    } catch (err) {
+      setActionError(logAndMapDashboardError(err, "action-bulk", "BULK_ACTION_FAILED"));
     } finally {
       removeProcessing(BULK_KEY);
     }
@@ -528,14 +593,17 @@ export default function SessionDetailPage() {
     try {
       const res = await fetch(`/api/actions/${actionId}/convert-to-draft`, { method: "POST" });
       if (!res.ok) {
-        const body = await res.json();
-        alert(body.error ?? "Failed to convert to draft");
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "ACTION_DRAFT_FAILED",
+          error: "Failed to convert to draft",
+        });
+        window.alert(logAndMapDashboardError(apiError, "action-draft", "ACTION_DRAFT_FAILED"));
         return;
       }
       await loadSession();
       setSelectedAction(null);
-    } catch {
-      alert("Failed to convert to draft");
+    } catch (err) {
+      window.alert(logAndMapDashboardError(err, "action-draft", "ACTION_DRAFT_FAILED"));
     } finally {
       setIsConverting(false);
     }
@@ -567,7 +635,7 @@ export default function SessionDetailPage() {
     );
   }
 
-  if (error || !session) {
+  if (loadError || !session) {
     return (
       <div className="flex-1 flex flex-col">
         <div className="page-header">
@@ -576,7 +644,7 @@ export default function SessionDetailPage() {
         </div>
         <div className="page-content">
           <div className="bg-red-50 p-4 text-sm text-red-700">
-            {error ?? "Session not found"}
+            {loadError ?? getDashboardErrorMessage("SESSION_NOT_FOUND")}
           </div>
         </div>
       </div>
@@ -610,8 +678,8 @@ export default function SessionDetailPage() {
         </div>
 
       {/* Actions summary with controls */}
-      {error && (
-        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">{error}</div>
+      {actionError && (
+        <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">{actionError}</div>
       )}
 
       <ActionsSummary
