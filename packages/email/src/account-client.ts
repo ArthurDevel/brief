@@ -96,8 +96,12 @@ async function createUnipileClient(account: EmailAccountRecord): Promise<EmailAc
       await validateFolderExists(folder, () => unipile.listFolders(accountId));
       const results: { emailId: string; undoRecipe: import("./types").UndoRecipe | null }[] = [];
       for (const emailId of emailIds) {
-        const undoRecipe = await unipile.moveToFolder(accountId, emailId, folder, sourceFolder ?? "INBOX", account.provider);
-        results.push({ emailId, undoRecipe });
+        try {
+          const undoRecipe = await unipile.moveToFolder(accountId, emailId, folder, sourceFolder ?? "INBOX", account.provider);
+          results.push({ emailId, undoRecipe });
+        } catch {
+          results.push({ emailId, undoRecipe: null });
+        }
       }
       return results;
     },
@@ -156,8 +160,12 @@ async function createCustomClient(account: EmailAccountRecord): Promise<EmailAcc
       await validateFolderExists(folder, () => imapClient.listFolders(client));
       const results: { emailId: string; undoRecipe: import("./types").UndoRecipe | null }[] = [];
       for (const emailId of emailIds) {
-        const undoRecipe = await imapClient.moveEmailToFolder(client, emailId, folder, sourceFolder ?? "INBOX");
-        results.push({ emailId, undoRecipe });
+        try {
+          const undoRecipe = await imapClient.moveEmailToFolder(client, emailId, folder, sourceFolder ?? "INBOX");
+          results.push({ emailId, undoRecipe });
+        } catch {
+          results.push({ emailId, undoRecipe: null });
+        }
       }
       return results;
     },
