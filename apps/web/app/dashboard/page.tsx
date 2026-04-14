@@ -367,6 +367,67 @@ function PreviousSessionCard({
   );
 }
 
+function FirstCallCard() {
+  const benefits = [
+    "Hear what matters from your inbox without looking at a screen",
+    "Reply, archive, and triage by voice while you drive",
+    "Arrive with the easy email already handled",
+  ];
+
+  return (
+    <section className="settings-panel">
+      <div className="max-w-2xl">
+        <h2 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 8px 0", letterSpacing: "-0.02em" }}>
+          Make your first call
+        </h2>
+        <p style={{ fontSize: 15, color: "var(--text-secondary)", margin: "0 0 18px 0", lineHeight: 1.5 }}>
+          Clear your inbox on the drive to work. BrewDock reads your email aloud, drafts replies in your voice,
+          and helps you get through the easy stuff before you even arrive.
+        </p>
+
+        <div className="mb-6 flex flex-col gap-3">
+          {benefits.map((benefit) => (
+            <div key={benefit} className="flex items-start gap-3">
+              <div
+                className="mt-0.5 flex h-7 w-7 items-center justify-center shrink-0"
+                style={{ background: "rgba(22, 163, 74, 0.1)", color: "#15803d" }}
+              >
+                <Check size={14} strokeWidth={2.5} />
+              </div>
+              <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: 0, lineHeight: 1.45 }}>
+                {benefit}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <Link
+            href="/dashboard/call"
+            style={{
+              background: "var(--btn-primary-bg)",
+              color: "var(--btn-primary-text)",
+              padding: "10px 16px",
+              fontSize: 13,
+              fontWeight: 500,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+            className="hover:opacity-90 transition-opacity"
+          >
+            Make your first call <span style={{ fontSize: 16 }}>&rsaquo;</span>
+          </Link>
+          <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+            No app to stare at. Just call and talk naturally.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function OnboardingCard({ settings, emailStatus }: { settings: UserSettings; emailStatus: ReturnType<typeof useEmailStatus>["status"] }) {
   const onboardingState = getDashboardOnboardingState(settings, emailStatus);
   const completionPercent = (onboardingState.requiredCompleted / onboardingState.requiredTotal) * 100;
@@ -684,7 +745,7 @@ export default function DashboardOverviewPage() {
       <div className="page-header">
         <div className="flex items-center justify-between">
           <h1>Overview</h1>
-          {!showOnboardingCard && (
+          {!showOnboardingCard && mostRecent && (
             <Link
               href="/dashboard/sessions"
               style={{
@@ -730,9 +791,7 @@ export default function DashboardOverviewPage() {
                 />
               </div>
             ) : (
-              <div className="settings-panel">
-                <p className="text-[13px] text-[var(--text-secondary)]">No sessions yet.</p>
-              </div>
+              <FirstCallCard />
             )}
 
             {/* Previous sessions */}
