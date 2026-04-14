@@ -239,7 +239,7 @@ export function buildEngagementEmailHtml(content: EngagementEmailContent): strin
                 Do your email while you drive.
               </p>
               <p style="margin:0; font-family:${FONT_FAMILY}; font-size:11px; font-weight:400; color:#a1a1aa; line-height:1.5;">
-                BrewDock Inc., 123 Main Street, Suite 100, San Francisco, CA 94105
+                BrewDock Inc., 2 Marina Blvd B300, San Francisco, CA 94123
               </p>
             </td>
           </tr>
