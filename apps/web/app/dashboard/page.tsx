@@ -21,6 +21,11 @@ import type { SessionSummary } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 import SendEmailModal from "@/app/dashboard/components/SendEmailModal";
+import { getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -412,13 +417,16 @@ export default function DashboardOverviewPage() {
     try {
       const res = await fetch(`/api/actions/${actionId}/approve`, { method: "POST" });
       if (!res.ok) {
-        const body = await res.json();
-        setError(body.error ?? "Failed to approve action");
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "ACTION_APPROVE_FAILED",
+          error: "Failed to approve action",
+        });
+        setError(logAndMapDashboardError(apiError, "action-approve", "ACTION_APPROVE_FAILED"));
         return;
       }
       await loadData();
-    } catch {
-      setError("Failed to approve action");
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "action-approve", "ACTION_APPROVE_FAILED"));
     } finally {
       removeProcessing(actionId);
     }
@@ -429,13 +437,16 @@ export default function DashboardOverviewPage() {
     try {
       const res = await fetch(`/api/actions/${actionId}/reject`, { method: "POST" });
       if (!res.ok) {
-        const body = await res.json();
-        setError(body.error ?? "Failed to reject action");
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "ACTION_REJECT_FAILED",
+          error: "Failed to reject action",
+        });
+        setError(logAndMapDashboardError(apiError, "action-reject", "ACTION_REJECT_FAILED"));
         return;
       }
       await loadData();
-    } catch {
-      setError("Failed to reject action");
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "action-reject", "ACTION_REJECT_FAILED"));
     } finally {
       removeProcessing(actionId);
     }
@@ -464,19 +475,26 @@ export default function DashboardOverviewPage() {
       });
 
       if (!res.ok) {
-        const body = await res.json();
-        setError(body.error ?? `Failed to ${operation} actions`);
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "BULK_ACTION_FAILED",
+          error: `Failed to ${operation} actions`,
+        });
+        setError(logAndMapDashboardError(apiError, "action-bulk", "BULK_ACTION_FAILED"));
         return;
       }
 
       const result = await res.json();
       if (result.failed > 0) {
-        setError(`${result.failed} of ${result.total} actions failed to ${operation}`);
+        console.error("[dashboard-error]", {
+          context: "action-bulk",
+          error: { operation, result },
+        });
+        setError(getDashboardErrorMessage("BULK_ACTION_PARTIAL_FAILURE"));
       }
 
       await loadData();
-    } catch {
-      setError(`Failed to ${operation} actions`);
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "action-bulk", "BULK_ACTION_FAILED"));
     } finally {
       removeProcessing(BULK_KEY);
     }
@@ -491,14 +509,17 @@ export default function DashboardOverviewPage() {
     try {
       const res = await fetch(`/api/actions/${actionId}/convert-to-draft`, { method: "POST" });
       if (!res.ok) {
-        const body = await res.json();
-        alert(body.error ?? "Failed to convert to draft");
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "ACTION_DRAFT_FAILED",
+          error: "Failed to convert to draft",
+        });
+        window.alert(logAndMapDashboardError(apiError, "action-draft", "ACTION_DRAFT_FAILED"));
         return;
       }
       await loadData();
       setSelectedAction(null);
-    } catch {
-      alert("Failed to convert to draft");
+    } catch (err) {
+      window.alert(logAndMapDashboardError(err, "action-draft", "ACTION_DRAFT_FAILED"));
     } finally {
       setIsConverting(false);
     }

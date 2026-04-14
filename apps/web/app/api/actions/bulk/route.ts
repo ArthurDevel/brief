@@ -18,6 +18,11 @@ import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supab
 import { getActiveEmailAccountRecord } from "@/lib/email-accounts";
 import { bulkExecuteActions } from "@dublin/tools";
 import type { BulkActionResponse } from "@dublin/tools";
+import {
+  getDashboardErrorMessage,
+  type DashboardErrorCode,
+} from "@/lib/errors/dashboardErrors";
+import { mapDashboardError, mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
 
 const VALID_OPERATIONS = ["approve", "reject"] as const;
 type Operation = (typeof VALID_OPERATIONS)[number];
@@ -38,23 +43,20 @@ interface BulkRequestBody {
  */
 export async function POST(
   request: NextRequest
-): Promise<NextResponse<BulkActionResponse | { error: string }>> {
+): Promise<NextResponse<BulkActionResponse | { code: DashboardErrorCode; error: string }>> {
   // Auth
   const cookieStore = await cookies();
   const supabase = createServerSupabaseClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return errorResponse("UNAUTHORIZED", 401);
   }
 
   // Parse and validate body
   const body = await parseRequestBody(request);
   if (!body) {
-    return NextResponse.json(
-      { error: "Invalid request body. Expected { actionIds: string[], operation: \"approve\" | \"reject\" }" },
-      { status: 400 }
-    );
+    return errorResponse("BULK_ACTION_FAILED", 400);
   }
 
   const { actionIds, operation } = body;
@@ -66,13 +68,14 @@ export async function POST(
     .in("id", actionIds);
 
   if (loadError) {
-    return NextResponse.json({ error: loadError.message }, { status: 500 });
+    console.error("[actions/bulk]", loadError);
+    return errorResponse("BULK_ACTION_FAILED", 500);
   }
 
   // If any action belongs to a different user, reject the entire request
   const foreignAction = (actions ?? []).find((a) => a.user_id !== user.id);
   if (foreignAction) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    return errorResponse("UNAUTHORIZED", 403);
   }
 
   // Route to the correct handler
@@ -127,7 +130,7 @@ async function handleReject(
   loadedActions: { id: string; user_id: string; status: string }[],
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
-): Promise<NextResponse<BulkActionResponse>> {
+): Promise<NextResponse<BulkActionResponse | { code: DashboardErrorCode; error: string }>> {
   // Single DB update -- only pending actions are affected
   const { data: updated, error } = await supabase
     .from("actions")
@@ -138,8 +141,12 @@ async function handleReject(
     .select("id");
 
   if (error) {
+    console.error("[actions/bulk]", error);
     return NextResponse.json(
-      { error: error.message } as unknown as BulkActionResponse,
+      {
+        code: "BULK_ACTION_FAILED",
+        error: getDashboardErrorMessage("BULK_ACTION_FAILED"),
+      } as unknown as BulkActionResponse,
       { status: 500 }
     );
   }
@@ -174,20 +181,43 @@ async function handleApprove(
   actionIds: string[],
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
-): Promise<NextResponse<BulkActionResponse | { error: string }>> {
+): Promise<NextResponse<BulkActionResponse | { code: DashboardErrorCode; error: string }>> {
   // Load active email account with resolved credentials
   const serviceClient = createServiceRoleClient();
   const emailAccount = await getActiveEmailAccountRecord(supabase, serviceClient, userId);
 
   if (!emailAccount) {
-    return NextResponse.json({ error: "No active email account configured" }, { status: 400 });
+    return errorResponse("EMAIL_ACCOUNT_REQUIRED", 400);
   }
 
   try {
     const response = await bulkExecuteActions(actionIds, supabase, emailAccount);
-    return NextResponse.json(response);
+    return NextResponse.json({
+      ...response,
+      results: response.results.map((result) => ({
+        ...result,
+        error: result.error
+          ? mapDashboardError(result.error, "action-bulk", "ACTION_EXECUTION_FAILED")
+          : null,
+      })),
+    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to execute bulk actions";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("[actions/bulk]", error);
+    const { code, message } = mapDashboardErrorDetails(
+      error,
+      "action-bulk",
+      "BULK_ACTION_FAILED"
+    );
+    return NextResponse.json({ code, error: message }, { status: 500 });
   }
+}
+
+function errorResponse(
+  code: DashboardErrorCode,
+  status: number
+): NextResponse<{ code: DashboardErrorCode; error: string }> {
+  return NextResponse.json(
+    { code, error: getDashboardErrorMessage(code) },
+    { status }
+  );
 }

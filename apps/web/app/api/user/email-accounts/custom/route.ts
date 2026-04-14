@@ -18,6 +18,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
 import { getActiveEmailAccount, upsertCustomEmailAccount } from "@/lib/email-accounts";
 import type { EmailAccountSummary, CustomEmailAccountInput } from "@/lib/types";
+import {
+  getDashboardErrorMessage,
+  type DashboardErrorCode,
+} from "@/lib/errors/dashboardErrors";
+import { mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // MAIN HANDLER
@@ -31,59 +36,64 @@ import type { EmailAccountSummary, CustomEmailAccountInput } from "@/lib/types";
  */
 export async function PUT(
   request: NextRequest
-): Promise<NextResponse<EmailAccountSummary | { error: string }>> {
-  const cookieStore = await cookies();
-  const supabase = createServerSupabaseClient(cookieStore);
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+): Promise<NextResponse<EmailAccountSummary | { code: DashboardErrorCode; error: string }>> {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createServerSupabaseClient(cookieStore);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!user) {
+      return errorResponse("UNAUTHORIZED", 401);
+    }
+
+    const body = await request.json();
+
+    if (!body.imapHost || !body.imapPort || !body.imapUser) {
+      return errorResponse("EMAIL_SAVE_FAILED", 400);
+    }
+    if (!body.smtpHost || !body.smtpPort || !body.smtpUser) {
+      return errorResponse("EMAIL_SAVE_FAILED", 400);
+    }
+
+    const input: CustomEmailAccountInput = {
+      provider: "custom",
+      imapHost: body.imapHost,
+      imapPort: body.imapPort,
+      imapUser: body.imapUser,
+      imapPassword: body.imapPassword,
+      smtpHost: body.smtpHost,
+      smtpPort: body.smtpPort,
+      smtpUser: body.smtpUser,
+      smtpPassword: body.smtpPassword,
+    };
+
+    const existingAccount = await getActiveEmailAccount(supabase, user.id);
+    const oldImapUser = existingAccount?.emailAddress ?? null;
+
+    const serviceClient = createServiceRoleClient();
+    const summary = await upsertCustomEmailAccount(supabase, serviceClient, user.id, input);
+
+    const identityChanged = oldImapUser !== null && oldImapUser !== input.imapUser;
+    if (identityChanged) {
+      await invalidateContactsAndSync(serviceClient, user.id);
+    } else if (!existingAccount) {
+      await triggerContactSync(user.id, "full");
+    } else {
+      await triggerContactSync(user.id, "incremental");
+    }
+
+    return NextResponse.json(summary);
+  } catch (err) {
+    console.error("[email-accounts/custom]", err);
+    const { code, message } = mapDashboardErrorDetails(
+      err,
+      "settings-email",
+      "EMAIL_SAVE_FAILED"
+    );
+    return NextResponse.json({ code, error: message }, { status: 500 });
   }
-
-  const body = await request.json();
-
-  // Validate required fields
-  if (!body.imapHost || !body.imapPort || !body.imapUser) {
-    return NextResponse.json({ error: "Missing required IMAP fields" }, { status: 400 });
-  }
-  if (!body.smtpHost || !body.smtpPort || !body.smtpUser) {
-    return NextResponse.json({ error: "Missing required SMTP fields" }, { status: 400 });
-  }
-
-  const input: CustomEmailAccountInput = {
-    provider: "custom",
-    imapHost: body.imapHost,
-    imapPort: body.imapPort,
-    imapUser: body.imapUser,
-    imapPassword: body.imapPassword,
-    smtpHost: body.smtpHost,
-    smtpPort: body.smtpPort,
-    smtpUser: body.smtpUser,
-    smtpPassword: body.smtpPassword,
-  };
-
-  // Load the existing active account to detect mailbox identity change
-  const existingAccount = await getActiveEmailAccount(supabase, user.id);
-  const oldImapUser = existingAccount?.emailAddress ?? null;
-
-  const serviceClient = createServiceRoleClient();
-  const summary = await upsertCustomEmailAccount(supabase, serviceClient, user.id, input);
-
-  // If mailbox identity changed, invalidate contacts and trigger full sync
-  const identityChanged = oldImapUser !== null && oldImapUser !== input.imapUser;
-  if (identityChanged) {
-    await invalidateContactsAndSync(serviceClient, user.id);
-  } else if (!existingAccount) {
-    // First-time setup: trigger full sync
-    await triggerContactSync(user.id, "full");
-  } else {
-    // Same identity: trigger incremental sync
-    await triggerContactSync(user.id, "incremental");
-  }
-
-  return NextResponse.json(summary);
 }
 
 // ============================================================================
@@ -130,4 +140,14 @@ async function triggerContactSync(userId: string, mode: string): Promise<void> {
   } catch (err) {
     console.error("[email-accounts/custom] Failed to trigger contact sync:", err);
   }
+}
+
+function errorResponse(
+  code: DashboardErrorCode,
+  status: number
+): NextResponse<{ code: DashboardErrorCode; error: string }> {
+  return NextResponse.json(
+    { code, error: getDashboardErrorMessage(code) },
+    { status }
+  );
 }

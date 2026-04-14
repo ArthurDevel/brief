@@ -18,6 +18,11 @@ import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supab
 import { getActiveEmailAccountRecord } from "@/lib/email-accounts";
 import { convertActionToDraft } from "@dublin/tools";
 import type { ActionResult } from "@dublin/tools";
+import {
+  getDashboardErrorMessage,
+  type DashboardErrorCode,
+} from "@/lib/errors/dashboardErrors";
+import { mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // MAIN HANDLERS
@@ -32,14 +37,14 @@ import type { ActionResult } from "@dublin/tools";
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-): Promise<NextResponse<ActionResult | { error: string }>> {
+): Promise<NextResponse<ActionResult | { code: DashboardErrorCode; error: string }>> {
   const { id: actionId } = await params;
   const cookieStore = await cookies();
   const supabase = createServerSupabaseClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return errorResponse("UNAUTHORIZED", 401);
   }
 
   // Load the action and verify ownership + validate BEFORE loading email account
@@ -50,19 +55,19 @@ export async function POST(
     .single();
 
   if (actionError || !action) {
-    return NextResponse.json({ error: "Action not found" }, { status: 404 });
+    return errorResponse("ACTION_NOT_FOUND", 404);
   }
 
   if (action.user_id !== user.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    return errorResponse("UNAUTHORIZED", 403);
   }
 
   if (action.tool_name !== "send_email" && action.tool_name !== "reply_email") {
-    return NextResponse.json({ error: `Action is not a send_email or reply_email action (tool_name: ${action.tool_name})` }, { status: 400 });
+    return errorResponse("ACTION_DRAFT_FAILED", 400);
   }
 
   if (action.status !== "pending") {
-    return NextResponse.json({ error: `Action is not pending (status: ${action.status})` }, { status: 400 });
+    return errorResponse("ACTION_ALREADY_HANDLED", 400);
   }
 
   // Load active email account with resolved credentials
@@ -70,14 +75,29 @@ export async function POST(
   const emailAccount = await getActiveEmailAccountRecord(supabase, serviceClient, user.id);
 
   if (!emailAccount) {
-    return NextResponse.json({ error: "No active email account configured" }, { status: 400 });
+    return errorResponse("EMAIL_ACCOUNT_REQUIRED", 400);
   }
 
   try {
     const result = await convertActionToDraft(actionId, supabase, emailAccount);
     return NextResponse.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to convert action to draft";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("[actions/convert-to-draft]", error);
+    const { code, message } = mapDashboardErrorDetails(
+      error,
+      "action-draft",
+      "ACTION_DRAFT_FAILED"
+    );
+    return NextResponse.json({ code, error: message }, { status: 500 });
   }
+}
+
+function errorResponse(
+  code: DashboardErrorCode,
+  status: number
+): NextResponse<{ code: DashboardErrorCode; error: string }> {
+  return NextResponse.json(
+    { code, error: getDashboardErrorMessage(code) },
+    { status }
+  );
 }
