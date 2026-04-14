@@ -54,6 +54,20 @@ export interface HostedAuthLink {
   url: string;
 }
 
+export class UnipileApiError extends Error {
+  status: number;
+  body: string;
+  operation: string;
+
+  constructor(message: string, status: number, body: string, operation: string) {
+    super(message);
+    this.name = "UnipileApiError";
+    this.status = status;
+    this.body = body;
+    this.operation = operation;
+  }
+}
+
 /**
  * Unipile account metadata returned by the accounts endpoint.
  * Matches the real Unipile API response shape.
@@ -121,8 +135,11 @@ export async function createHostedAuthLink(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(
-      `Unipile createHostedAuthLink failed (${response.status}): ${text}`
+    throw new UnipileApiError(
+      `Unipile createHostedAuthLink failed (${response.status}): ${text}`,
+      response.status,
+      text,
+      "createHostedAuthLink"
     );
   }
 
@@ -153,8 +170,11 @@ export async function getAccount(accountId: string): Promise<UnipileAccount> {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(
-      `Unipile getAccount failed (${response.status}): ${text}`
+    throw new UnipileApiError(
+      `Unipile getAccount failed (${response.status}): ${text}`,
+      response.status,
+      text,
+      "getAccount"
     );
   }
 
@@ -200,8 +220,11 @@ export async function deleteAccount(accountId: string): Promise<void> {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(
-      `Unipile deleteAccount failed (${response.status}): ${text}`
+    throw new UnipileApiError(
+      `Unipile deleteAccount failed (${response.status}): ${text}`,
+      response.status,
+      text,
+      "deleteAccount"
     );
   }
 }

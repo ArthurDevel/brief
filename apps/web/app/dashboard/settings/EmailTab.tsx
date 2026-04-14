@@ -36,6 +36,7 @@ import {
 // ============================================================================
 
 type Provider = "gmail" | "outlook" | "custom";
+type ConnectIntent = "create" | "reconnect";
 
 const PROVIDERS: { id: Provider; label: string }[] = [
   { id: "gmail", label: "Gmail" },
@@ -87,11 +88,14 @@ async function saveCustomAccount(data: Record<string, unknown>): Promise<EmailAc
  * @param provider - "gmail" or "outlook"
  * @returns The hosted auth link URL
  */
-async function initiateConnect(provider: string): Promise<string> {
+async function initiateConnect(
+  provider: string,
+  intent: ConnectIntent
+): Promise<string> {
   const res = await fetch("/api/user/email-accounts/connect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider }),
+    body: JSON.stringify({ provider, intent }),
   });
   if (!res.ok) {
     throw await buildDashboardErrorFromResponse(res, {
@@ -215,12 +219,12 @@ export default function EmailTab() {
    * Initiates the Unipile connect flow for Gmail/Outlook.
    * Opens the hosted auth link in a new window.
    */
-  async function handleConnect() {
+  async function handleConnect(intent: ConnectIntent) {
     setConnecting(true);
     setError(null);
 
     try {
-      const url = await initiateConnect(provider);
+      const url = await initiateConnect(provider, intent);
       window.open(url, "_blank");
     } catch (err) {
       setError(logAndMapDashboardError(err, "settings-email", "EMAIL_CONNECT_FAILED"));
@@ -350,9 +354,9 @@ export default function EmailTab() {
                 </p>
                 <button
                   type="button"
-                  onClick={handleConnect}
+                  onClick={() => handleConnect("reconnect")}
                   disabled={connecting}
-                  className="w-full bg-amber-500 py-3 text-[13px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50 transition"
+                  className="bg-amber-500 px-4 py-3 text-[13px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50 transition"
                 >
                   {connecting ? "Redirecting..." : "Reconnect"}
                 </button>
@@ -374,9 +378,9 @@ export default function EmailTab() {
             {!(isConnected && isUnipileAccount && emailAccount?.provider === provider) && !needsReconnect && (
               <button
                 type="button"
-                onClick={handleConnect}
+                onClick={() => handleConnect("create")}
                 disabled={connecting}
-                className="w-full bg-[var(--btn-primary-bg)] py-3 text-[13px] font-semibold text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition mt-4"
+                className="bg-[var(--btn-primary-bg)] px-4 py-3 text-[13px] font-semibold text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition mt-4"
               >
                 {connecting ? "Redirecting..." : `Connect with ${provider === "gmail" ? "Gmail" : "Outlook"}`}
               </button>
@@ -386,9 +390,9 @@ export default function EmailTab() {
             {isConnected && isUnipileAccount && emailAccount?.provider === provider && (
               <button
                 type="button"
-                onClick={handleConnect}
+                onClick={() => handleConnect("create")}
                 disabled={connecting}
-                className="w-full border border-[var(--border-color)] py-3 text-[13px] font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-50 transition mt-4"
+                className="border border-[var(--border-color)] px-4 py-3 text-[13px] font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-50 transition mt-4"
               >
                 {connecting ? "Redirecting..." : "Connect a different account"}
               </button>

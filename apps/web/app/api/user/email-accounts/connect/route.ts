@@ -7,10 +7,11 @@
  *
  * Responsibilities:
  * - Authenticate user via Supabase session
- * - Accept provider ("gmail" | "outlook") from request body
- * - Generate HMAC-signed correlation token with user ID + timestamp
+ * - Accept provider ("gmail" | "outlook") plus optional connect intent
+ * - Generate an HMAC-signed correlation token with user ID + timestamp
  * - Call Unipile createHostedAuthLink with the signed token as the name field
- * - Support reconnect flow if the user has an existing Unipile account
+ * - Support explicit create vs reconnect flows
+ * - Recover if a reconnect points at a deleted Unipile account
  * - Return the hosted auth URL
  */
 
@@ -25,6 +26,11 @@ import {
   type DashboardErrorCode,
 } from "@/lib/errors/dashboardErrors";
 import { mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
+import {
+  normalizeConnectIntent,
+  resolveConnectMode,
+  shouldRetryReconnectAsCreate,
+} from "./logic";
 
 // ============================================================================
 // CONSTANTS
@@ -45,7 +51,7 @@ const PROVIDER_MAP: Record<string, "GOOGLE" | "OUTLOOK"> = {
 
 /**
  * Creates a Unipile hosted auth link for connecting Gmail or Outlook.
- * @param request - The incoming request with { provider: "gmail" | "outlook" }
+ * @param request - The incoming request with { provider: "gmail" | "outlook", intent?: "create" | "reconnect" | "auto" }
  * @returns JSON with { url: string } for the hosted auth link
  */
 export async function POST(
@@ -64,10 +70,13 @@ export async function POST(
 
     const body = await request.json();
     const provider = body.provider as string;
+    const intent = normalizeConnectIntent(body.intent);
 
     if (!provider || !PROVIDER_MAP[provider]) {
       return errorResponse("EMAIL_CONNECT_FAILED", 400);
     }
+
+    const providerKey = provider as "gmail" | "outlook";
 
     const notifySecret = process.env.UNIPILE_NOTIFY_SECRET;
     if (!notifySecret) {
@@ -81,13 +90,13 @@ export async function POST(
     const expiresOn = new Date(Date.now() + LINK_EXPIRY_MS).toISOString();
 
     const existingAccount = await getActiveEmailAccount(supabase, user.id);
-    const isReconnect =
-      existingAccount &&
-      existingAccount.connectionType === "unipile" &&
-      existingAccount.provider === provider;
 
     let reconnectAccountId: string | undefined;
-    if (isReconnect) {
+    if (
+      existingAccount &&
+      existingAccount.connectionType === "unipile" &&
+      existingAccount.provider === providerKey
+    ) {
       const { data: row } = await supabase
         .from("user_email_accounts")
         .select("unipile_account_id")
@@ -96,24 +105,35 @@ export async function POST(
       reconnectAccountId = row?.unipile_account_id ?? undefined;
     }
 
+    const connectMode = resolveConnectMode({
+      intent,
+      provider: providerKey,
+      existingAccount,
+      reconnectAccountId,
+    });
+
     console.log("[email-accounts/connect] Building hosted auth link:", {
+      intent,
       provider: PROVIDER_MAP[provider],
-      type: isReconnect ? "reconnect" : "create",
+      type: connectMode.type,
       notifyUrl,
       expiresOn,
-      reconnectAccountId,
+      reconnectAccountId: connectMode.reconnectAccountId,
     });
 
     const successRedirectUrl = `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/settings`;
 
-    const link = await createHostedAuthLink({
-      type: isReconnect ? "reconnect" : "create",
+    const link = await createHostedAuthLinkWithFallback({
+      type: connectMode.type,
       provider: PROVIDER_MAP[provider],
       expiresOn,
       notifyUrl,
       successRedirectUrl,
       name: correlationToken,
-      reconnectAccountId,
+      reconnectAccountId: connectMode.reconnectAccountId,
+      supabase,
+      userId: user.id,
+      existingAccountId: existingAccount?.id ?? null,
     });
 
     console.log("[email-accounts/connect] Got hosted auth link:", link.url);
@@ -162,4 +182,69 @@ function errorResponse(
     { code, error: getDashboardErrorMessage(code) },
     { status }
   );
+}
+
+async function createHostedAuthLinkWithFallback(input: {
+  type: "create" | "reconnect";
+  provider: "GOOGLE" | "OUTLOOK";
+  expiresOn: string;
+  notifyUrl: string;
+  successRedirectUrl: string;
+  name: string;
+  reconnectAccountId?: string;
+  supabase: ReturnType<typeof createServerSupabaseClient>;
+  userId: string;
+  existingAccountId: string | null;
+}) {
+  try {
+    return await createHostedAuthLink({
+      type: input.type,
+      provider: input.provider,
+      expiresOn: input.expiresOn,
+      notifyUrl: input.notifyUrl,
+      successRedirectUrl: input.successRedirectUrl,
+      name: input.name,
+      reconnectAccountId: input.reconnectAccountId,
+    });
+  } catch (err) {
+    if (shouldRetryReconnectAsCreate(err, input.type) && input.existingAccountId) {
+      console.warn(
+        "[email-accounts/connect] Reconnect account missing on Unipile, retrying as create",
+        { userId: input.userId, existingAccountId: input.existingAccountId }
+      );
+
+      await clearStaleUnipileAccount(input.supabase, input.userId, input.existingAccountId);
+
+      return createHostedAuthLink({
+        type: "create",
+        provider: input.provider,
+        expiresOn: input.expiresOn,
+        notifyUrl: input.notifyUrl,
+        successRedirectUrl: input.successRedirectUrl,
+        name: input.name,
+      });
+    }
+
+    throw err;
+  }
+}
+
+async function clearStaleUnipileAccount(
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+  userId: string,
+  accountId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("user_email_accounts")
+    .update({
+      unipile_account_id: null,
+      status: "reconnect_required",
+      last_error: "The previous email connection no longer exists. Please reconnect.",
+    })
+    .eq("id", accountId)
+    .eq("user_id", userId);
+
+  if (error) {
+    throw new Error(`Failed to clear stale Unipile account: ${error.message}`);
+  }
 }
