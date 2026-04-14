@@ -9,17 +9,6 @@ from pathlib import Path
 from typing import Any, cast
 
 
-_FALLBACK_USER_SETTINGS_DEFAULTS: dict[str, Any] = {
-    "voice_config": {
-        "voice": "aura-2-andromeda-en",
-        "speed": 1.2,
-    },
-    "tool_approval_config": {},
-    "phone": None,
-    "call_schedule": None,
-}
-
-
 def _build_defaults_path_candidates(module_path: Path) -> list[Path]:
     candidates: list[Path] = []
 
@@ -44,13 +33,19 @@ def _build_defaults_path_candidates(module_path: Path) -> list[Path]:
     return unique_candidates
 
 
-def _load_user_settings_defaults() -> dict[str, Any]:
-    for path in _build_defaults_path_candidates(Path(__file__)):
+def _load_user_settings_defaults(module_path: Path | None = None) -> dict[str, Any]:
+    candidates = _build_defaults_path_candidates(module_path or Path(__file__))
+
+    for path in candidates:
         if not path.is_file():
             continue
         return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
-    return copy.deepcopy(_FALLBACK_USER_SETTINGS_DEFAULTS)
+    candidate_list = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(
+        "Could not find user-settings-defaults.json. "
+        f"Tried: {candidate_list}"
+    )
 
 
 _USER_SETTINGS_DEFAULTS = _load_user_settings_defaults()
