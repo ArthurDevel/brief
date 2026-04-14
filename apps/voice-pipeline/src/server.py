@@ -408,6 +408,15 @@ async def _setup_pipeline_session(
         raise
 
 
+async def _start_connected_session(pipeline_result: PipelineResult, task, log_prefix: str) -> None:
+    """Start optional session side-effects, then queue the first assistant turn."""
+    logger.info("[%s] Client connected, sending greeting", log_prefix)
+    if pipeline_result.audio_buffer:
+        await pipeline_result.audio_buffer.start_recording()
+    await pipeline_result.startup_tone.start()
+    await task.queue_frames([LLMRunFrame()])
+
+
 async def _cleanup_session(
     email_ctx: EmailClientContext,
     cost_tracker,
@@ -579,10 +588,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport_instance, client):
-        logger.info("[server] WebRTC client connected, sending greeting")
-        if pipeline_result.audio_buffer:
-            await pipeline_result.audio_buffer.start_recording()
-        await task.queue_frames([LLMRunFrame()])
+        await _start_connected_session(pipeline_result, task, "server")
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport_instance, client):
@@ -593,6 +599,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
+        await pipeline_result.startup_tone.stop("session_end")
         await cancel_stt_tasks(pipeline_result.stt)
         await _cleanup_session(
             email_ctx, cost_tracker, langfuse_observer, session, supabase, settings,
@@ -1274,10 +1281,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport_instance, client):
-        logger.info("[twilio] Client connected, sending greeting")
-        if pipeline_result.audio_buffer:
-            await pipeline_result.audio_buffer.start_recording()
-        await task.queue_frames([LLMRunFrame()])
+        await _start_connected_session(pipeline_result, task, "twilio")
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport_instance, client):
@@ -1288,6 +1292,7 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
+        await pipeline_result.startup_tone.stop("session_end")
         await cancel_stt_tasks(pipeline_result.stt)
         await _cleanup_session(
             email_ctx, cost_tracker, langfuse_observer, session, supabase, settings,

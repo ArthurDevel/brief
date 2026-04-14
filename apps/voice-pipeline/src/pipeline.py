@@ -42,6 +42,7 @@ from supabase import Client
 from src.audio.normalizer import AudioNormalizerProcessor
 from src.audio.recorder import write_wav, upload_recording
 from src.audio.speed import AudioSpeedProcessor
+from src.audio.startup_tone import StartupToneInputMonitorProcessor, StartupToneProcessor
 from src.config import LLM_MODEL, Settings
 from src.cost_tracker import CostTracker
 from src.langfuse_observer import LangfuseObserver
@@ -66,6 +67,7 @@ class PipelineResult:
     task: PipelineTask
     stt: DeepgramFluxSTTService
     audio_buffer: AudioBufferProcessor | None
+    startup_tone: StartupToneProcessor
     narration_http_session: dict[str, aiohttp.ClientSession | None]
 
 
@@ -196,6 +198,12 @@ def create_pipeline(
         config=normalizer_config,
         sample_rate=sample_rate,
     )
+    startup_tone = StartupToneProcessor(
+        enabled=settings.startup_tone_enabled,
+        sample_rate=sample_rate,
+        num_channels=num_channels,
+    )
+    startup_tone_input_monitor = StartupToneInputMonitorProcessor(startup_tone)
     logger.info("[startup] Audio processors initialized")
 
     # -- Fetch email count for greeting --
@@ -402,11 +410,13 @@ def create_pipeline(
         transport.input(),
         watchdog,
         stt,
+        startup_tone_input_monitor,
         user_aggregator,
         llm,
         tts,
         speed_processor,
         normalizer,
+        startup_tone,
         transport.output(),
     ]
     if audio_buffer is not None:
@@ -432,6 +442,7 @@ def create_pipeline(
         task=task,
         stt=stt,
         audio_buffer=audio_buffer,
+        startup_tone=startup_tone,
         narration_http_session=narration_http_session,
     )
 
