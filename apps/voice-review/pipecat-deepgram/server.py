@@ -24,6 +24,7 @@ import re
 import uuid
 import wave
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
@@ -37,14 +38,21 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
 
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import (
+    CancelFrame,
+    EndFrame,
+    Frame,
+    InputAudioRawFrame,
+    LLMRunFrame,
+    OutputAudioRawFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
 from pipecat.services.deepgram.tts import DeepgramTTSService
@@ -94,6 +102,8 @@ MAX_DEMO_BRIEF_CHARS = 2000
 TWILIO_SAMPLE_RATE = 8000
 PHONE_NUMBER_PATTERN = re.compile(r"^\+[1-9]\d{7,14}$")
 DOWNLOADS_DIR = Path.home() / "Downloads"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+RECORDER_LOG_PATH = REPO_ROOT / ".context" / "voice-review-recorder.log"
 
 CHAT_SYSTEM_PROMPT = (
     "You are a friendly voice assistant used for testing voice quality. "
@@ -134,6 +144,7 @@ AVAILABLE_VOICES = [
 # session_id -> {voice, speed} from the /start request
 _active_sessions: dict[str, dict[str, Any]] = {}
 _pending_twilio_calls: dict[str, dict[str, Any]] = {}
+_active_twilio_calls: dict[str, dict[str, Any]] = {}
 
 # SmallWebRTC request handler (initialized in lifespan)
 _webrtc_handler: SmallWebRTCRequestHandler | None = None
@@ -157,6 +168,76 @@ class TwilioCallRequest(BaseModel):
     speed: float
     mode: str = "chat"
     demoBrief: str | None = None
+
+
+class RecorderProbeProcessor(FrameProcessor):
+    """Counts audio frame types passing a point in the pipeline for debugging."""
+
+    def __init__(self, recording_id: str, label: str):
+        super().__init__()
+        self.recording_id = recording_id
+        self.label = label
+        self.input_frames = 0
+        self.input_bytes = 0
+        self.output_frames = 0
+        self.output_bytes = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, InputAudioRawFrame):
+            self.input_frames += 1
+            self.input_bytes += len(frame.audio)
+        elif isinstance(frame, OutputAudioRawFrame):
+            self.output_frames += 1
+            self.output_bytes += len(frame.audio)
+
+        if isinstance(frame, (CancelFrame, EndFrame)):
+            await _log_recorder_event(
+                self.recording_id,
+                (
+                    f"probe {self.label} summary "
+                    f"input_frames={self.input_frames} input_bytes={self.input_bytes} "
+                    f"output_frames={self.output_frames} output_bytes={self.output_bytes}"
+                ),
+            )
+
+        await self.push_frame(frame, direction)
+
+
+class SingleTrackRecorderProcessor(FrameProcessor):
+    """Records only one audio frame type and writes it on pipeline shutdown."""
+
+    def __init__(self, recording_id: str, track: str, target_sample_rate: int, frame_type: type[Frame]):
+        super().__init__()
+        self.recording_id = recording_id
+        self.track = track
+        self.target_sample_rate = target_sample_rate
+        self.frame_type = frame_type
+        self.buffer = bytearray()
+        self.frame_count = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, self.frame_type):
+            audio = frame.audio
+            self.buffer.extend(audio)
+            self.frame_count += 1
+
+        if isinstance(frame, (CancelFrame, EndFrame)):
+            await _log_recorder_event(
+                self.recording_id,
+                f"{self.track} single-track summary frames={self.frame_count} bytes={len(self.buffer)}",
+            )
+            await _save_single_track_recording(
+                self.recording_id,
+                self.track,
+                bytes(self.buffer),
+                self.target_sample_rate,
+            )
+
+        await self.push_frame(frame, direction)
 
 
 def _build_system_prompt(mode: str, demo_brief: str | None) -> str:
@@ -217,29 +298,13 @@ def _build_twilio_stream_url(request: Request) -> str:
     return f"wss://{request.url.hostname}/twilio-stream"
 
 
-def _build_twiml_connect(stream_url: str, config: dict[str, Any]) -> str:
+def _build_twiml_connect(stream_url: str) -> str:
     """Build TwiML that starts a bidirectional Twilio media stream."""
-    params = [
-        ("voice", escape(str(config.get("voice", "aura-2-andromeda-en")))),
-        ("speed", escape(str(config.get("speed", 1.2)))),
-        ("mode", escape(str(config.get("mode", "chat")))),
-        ("recordingId", escape(str(config.get("recording_id", str(uuid.uuid4()))))),
-    ]
-    demo_brief = config.get("demo_brief")
-    if demo_brief:
-        params.append(("demoBrief", escape(str(demo_brief))))
-
-    parameter_lines = "\n".join(
-        f'      <Parameter name="{name}" value="{value}" />'
-        for name, value in params
-    )
-
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
         "  <Connect>\n"
         f'    <Stream url="{stream_url}">\n'
-        f"{parameter_lines}\n"
         "    </Stream>\n"
         "  </Connect>\n"
         "</Response>"
@@ -434,6 +499,17 @@ async def twilio_outbound(call_token: str, request: Request) -> Response:
         logger.error("[twilio] /twilio/outbound unknown call token: %s", call_token)
         return Response(content="Unknown call token", status_code=404)
 
+    if call_sid:
+        _active_twilio_calls[call_sid] = config
+        _pending_twilio_calls.pop(call_token, None)
+        logger.info(
+            "[twilio] Stored active call config: call_sid=%s recording_id=%s mode=%s voice=%s",
+            call_sid,
+            config["recording_id"],
+            config["mode"],
+            config["voice"],
+        )
+
     stream_url = _build_twilio_stream_url(request)
     logger.info(
         "[twilio] /twilio/outbound connecting stream: call_sid=%s stream_url=%s recording_id=%s",
@@ -441,7 +517,7 @@ async def twilio_outbound(call_token: str, request: Request) -> Response:
         stream_url,
         config["recording_id"],
     )
-    twiml = _build_twiml_connect(stream_url, config)
+    twiml = _build_twiml_connect(stream_url)
     return Response(content=twiml, media_type="text/xml")
 
 
@@ -524,6 +600,13 @@ async def _run_bot(transport, config: dict[str, Any], sample_rate: int) -> None:
         mode,
         sample_rate,
     )
+    await _log_recorder_event(
+        recording_id,
+        (
+            f"pipeline start voice={voice} speed={speed} mode={mode} sample_rate={sample_rate} "
+            f"transport={type(transport).__name__}"
+        ),
+    )
 
     # -- STT (Deepgram Flux with native turn detection) --
     stt = DeepgramFluxSTTService(api_key=DEEPGRAM_API_KEY)
@@ -554,20 +637,20 @@ async def _run_bot(transport, config: dict[str, Any], sample_rate: int) -> None:
     normalizer = AudioNormalizerProcessor(sample_rate=sample_rate)
 
     # -- Audio recording --
-    audio_buffer = AudioBufferProcessor(
-        sample_rate=sample_rate,
-        num_channels=NUM_CHANNELS,
+    user_probe = RecorderProbeProcessor(recording_id, "user_probe")
+    user_recorder = SingleTrackRecorderProcessor(
+        recording_id=recording_id,
+        track="user",
+        target_sample_rate=sample_rate,
+        frame_type=InputAudioRawFrame,
     )
-
-    @audio_buffer.event_handler("on_track_audio_data")
-    async def on_track_audio_data(
-        buffer: AudioBufferProcessor,
-        user_audio: bytes,
-        bot_audio: bytes,
-        sample_rate: int,
-        num_channels: int,
-    ) -> None:
-        await _save_track_recordings(recording_id, user_audio, bot_audio, sample_rate)
+    bot_probe = RecorderProbeProcessor(recording_id, "bot_probe")
+    bot_recorder = SingleTrackRecorderProcessor(
+        recording_id=recording_id,
+        track="bot",
+        target_sample_rate=sample_rate,
+        frame_type=OutputAudioRawFrame,
+    )
 
     # -- LLM context --
     messages: list[Any] = [{"role": "system", "content": system_prompt}]
@@ -577,14 +660,17 @@ async def _run_bot(transport, config: dict[str, Any], sample_rate: int) -> None:
     # -- Assemble pipeline --
     pipeline = Pipeline([
         transport.input(),
+        user_probe,
+        user_recorder,
         stt,
         context_aggregator.user(),
         llm,
         tts,
         speed_processor,
         normalizer,
+        bot_probe,
+        bot_recorder,
         transport.output(),
-        audio_buffer,
         context_aggregator.assistant(),
     ])
 
@@ -599,12 +685,13 @@ async def _run_bot(transport, config: dict[str, Any], sample_rate: int) -> None:
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport_instance, client):
         logger.info("[bot] Client connected, sending greeting")
-        await audio_buffer.start_recording()
+        await _log_recorder_event(recording_id, "client connected; starting recorders")
         await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport_instance, client):
         logger.info("[bot] Client disconnected")
+        await _log_recorder_event(recording_id, "client disconnected; cancelling task")
         await task.cancel()
 
     try:
@@ -613,6 +700,8 @@ async def _run_bot(transport, config: dict[str, Any], sample_rate: int) -> None:
     except Exception:
         logger.exception("[bot] Pipeline error")
     finally:
+        await _log_recorder_event(recording_id, "stopping recorders")
+        await _log_recorder_event(recording_id, "pipeline end")
         logger.info("[bot] Pipeline ended")
 
 
@@ -633,7 +722,15 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         stream_sid: str = call_data.get("stream_id", "")
         call_sid: str = call_data.get("call_id", "")
         body: dict[str, Any] = call_data.get("body", {})
-        config = _normalize_call_config(body)
+        config = _active_twilio_calls.get(call_sid)
+        if config is None:
+            logger.error(
+                "[twilio] No active config found for call_sid=%s. Body params were: %s",
+                call_sid,
+                body,
+            )
+            await websocket.close(code=1011, reason="Missing active call config")
+            return
 
         logger.info(
             "[twilio] Media stream metadata: call_sid=%s stream_sid=%s mode=%s voice=%s recording_id=%s",
@@ -644,6 +741,13 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
             config["recording_id"],
         )
         logger.info("[twilio] Media stream custom params: %s", body)
+        await _log_recorder_event(
+            str(config["recording_id"]),
+            (
+                f"twilio stream connected call_sid={call_sid} stream_sid={stream_sid} "
+                f"mode={config['mode']} voice={config['voice']}"
+            ),
+        )
 
         serializer = TwilioFrameSerializer(
             stream_sid=stream_sid,
@@ -664,6 +768,11 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
     except Exception:
         logger.exception("[twilio] /twilio-stream failed")
         raise
+    finally:
+        call_sid = locals().get("call_sid")
+        if call_sid:
+            _active_twilio_calls.pop(call_sid, None)
+            logger.info("[twilio] Cleared active call config: call_sid=%s", call_sid)
 
 
 # ============================================================================
@@ -678,6 +787,10 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, config: dict[str, Any])
             audio_in_enabled=True,
             audio_out_enabled=True,
         ),
+    )
+    await _log_recorder_event(
+        str(config["recording_id"]),
+        f"webrtc bot start mode={config['mode']} voice={config['voice']}",
     )
     await _run_bot(transport, config, sample_rate=SAMPLE_RATE)
 
@@ -719,27 +832,57 @@ def _recording_path(recording_id: str, track: str) -> Path:
     return DOWNLOADS_DIR / f"voice-review-{safe_id}-{track}.wav"
 
 
+def _append_recorder_log(recording_id: str, message: str) -> None:
+    """Append a timestamped recorder debug line to the shared recorder log."""
+    RECORDER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with RECORDER_LOG_PATH.open("a", encoding="utf-8") as fh:
+        fh.write(f"{timestamp} [{recording_id}] {message}\n")
+
+
+async def _log_recorder_event(recording_id: str, message: str) -> None:
+    """Write a recorder debug line without blocking the event loop."""
+    await asyncio.to_thread(_append_recorder_log, recording_id, message)
+
+
 def _write_recording_file(path: Path, wav_bytes: bytes) -> None:
     """Write a WAV recording to disk, ensuring the Downloads folder exists."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(wav_bytes)
 
 
-async def _save_track_recordings(
+async def _save_single_track_recording(
     recording_id: str,
-    user_audio: bytes,
-    bot_audio: bytes,
+    track: str,
+    audio: bytes,
     sample_rate: int,
 ) -> None:
-    """Persist separate user and bot recordings to the local Downloads folder."""
-    for track, audio_data in (("user", user_audio), ("bot", bot_audio)):
-        if not audio_data:
-            continue
+    """Persist a single user or bot recording to the local Downloads folder."""
+    if not audio:
+        logger.warning("[recorder] %s track was empty for recording %s", track, recording_id)
+        await _log_recorder_event(recording_id, f"{track} track empty")
+        return
 
-        wav_bytes = _write_wav(audio_data, sample_rate, 1)
-        path = _recording_path(recording_id, track)
-        await asyncio.to_thread(_write_recording_file, path, wav_bytes)
-        logger.info("[recorder] Saved %s track recording to %s", track, path)
+    wav_bytes = _write_wav(audio, sample_rate, 1)
+    path = _recording_path(recording_id, track)
+    await asyncio.to_thread(_write_recording_file, path, wav_bytes)
+    non_silent_bytes = sum(1 for byte in audio if byte != 0)
+    first_nonzero_index = next((i for i, byte in enumerate(audio) if byte != 0), -1)
+    logger.info(
+        "[recorder] Saved %s track recording to %s (bytes=%d non_silent_bytes=%d)",
+        track,
+        path,
+        len(audio),
+        non_silent_bytes,
+    )
+    await _log_recorder_event(
+        recording_id,
+        (
+            f"saved {track} track path={path} bytes={len(audio)} "
+            f"non_silent_bytes={non_silent_bytes} first_nonzero_index={first_nonzero_index} "
+            f"sample_rate={sample_rate}"
+        ),
+    )
 
 
 async def _call_deepgram_tts(text: str, voice: str) -> bytes:
