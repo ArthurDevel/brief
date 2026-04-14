@@ -23,6 +23,7 @@ sys.modules.setdefault("twilio.rest", twilio_rest_module)
 
 from src.server import _webrtc_bot
 from src.session import load_user_context
+from src.user_settings_defaults import DEFAULT_SPEED, DEFAULT_VOICE
 
 
 def _mock_user_context_supabase(
@@ -95,8 +96,8 @@ def test_load_user_context_uses_defaults_when_settings_row_missing():
 
     assert result.user_id == "user-123"
     assert result.email_account.provider == "gmail"
-    assert result.voice_preference == "aura-2-andromeda-en"
-    assert result.voice_speed == 1.2
+    assert result.voice_preference == DEFAULT_VOICE
+    assert result.voice_speed == DEFAULT_SPEED
     assert result.tool_approval_config == {}
     assert result.memory_entries == []
     assert result.timezone is None

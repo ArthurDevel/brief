@@ -19,12 +19,12 @@ import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
 import { getActiveEmailAccount } from "@/lib/email-accounts";
-import type { UserSettings, UserPhone, CallSchedule } from "@/lib/types";
-import type { ToolApprovalConfig } from "@dublin/tools/src/types";
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
+import type { UserSettings } from "@/lib/types";
+import {
+  getDefaultUserSettings,
+  getUserSettingsDomainDefaults,
+  mapUserSettingsRowToSettings,
+} from "@/lib/user-settings-defaults";
 
 /**
  * Gets the authenticated user from the Supabase session.
@@ -35,27 +35,6 @@ async function getAuthenticatedUser() {
   const supabase = createServerSupabaseClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();
   return { user, supabase };
-}
-
-/**
- * Maps a database row and email account summary to the UserSettings DTO.
- * @param row - The user_settings database row
- * @param emailAccount - The active email account summary, or null
- * @returns UserSettings with passwords masked
- */
-function mapRowToSettings(
-  row: Record<string, unknown>,
-  emailAccount: UserSettings["emailAccount"]
-): UserSettings {
-  return {
-    emailAccount,
-    voicePreference: ((row.voice_config as Record<string, unknown>)?.voice as string) ?? "aura-2-helena-en",
-    voiceSpeed: ((row.voice_config as Record<string, unknown>)?.speed as number) ?? 1.0,
-    toolApprovalConfig: (row.tool_approval_config as ToolApprovalConfig) ?? {},
-    phone: (row.phone as UserPhone) ?? null,
-    hasPin: !!row.pin_hash,
-    callSchedule: (row.call_schedule as CallSchedule) ?? null,
-  };
 }
 
 // ============================================================================
@@ -93,19 +72,10 @@ export async function GET(_request: NextRequest): Promise<NextResponse<UserSetti
 
   // Return defaults for new users who have no settings row yet
   if (!data) {
-    const defaults: UserSettings = {
-      emailAccount,
-      voicePreference: "aura-2-helena-en",
-      voiceSpeed: 1.0,
-      toolApprovalConfig: {},
-      phone: null,
-      hasPin: false,
-      callSchedule: null,
-    };
-    return NextResponse.json(defaults);
+    return NextResponse.json(getDefaultUserSettings(emailAccount));
   }
 
-  return NextResponse.json(mapRowToSettings(data, emailAccount));
+  return NextResponse.json(mapUserSettingsRowToSettings(data, emailAccount));
 }
 
 /**
@@ -138,9 +108,10 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
       .single();
 
     const existingVoice = (existing?.voice_config as Record<string, unknown>) ?? {};
+    const defaultVoiceConfig = getUserSettingsDomainDefaults().voice_config;
     upsertData.voice_config = {
-      voice: body.voicePreference ?? existingVoice.voice ?? "aura-2-helena-en",
-      speed: body.voiceSpeed ?? existingVoice.speed ?? 1.0,
+      voice: body.voicePreference ?? existingVoice.voice ?? defaultVoiceConfig.voice,
+      speed: body.voiceSpeed ?? existingVoice.speed ?? defaultVoiceConfig.speed,
     };
   }
 
@@ -181,5 +152,5 @@ export async function PUT(request: NextRequest): Promise<NextResponse<UserSettin
   // Load email account for the response
   const emailAccount = await getActiveEmailAccount(supabase, user.id);
 
-  return NextResponse.json(mapRowToSettings(data, emailAccount));
+  return NextResponse.json(mapUserSettingsRowToSettings(data, emailAccount));
 }

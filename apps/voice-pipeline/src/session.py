@@ -27,6 +27,10 @@ EmailProvider = Literal["gmail", "outlook", "custom"]
 from supabase import Client
 
 from src.tools.vault import retrieve_secret
+from src.user_settings_defaults import (
+    get_default_tool_approval_config,
+    get_default_voice_config,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -394,7 +398,9 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
         for row in memory_rows
     ]
 
+    default_voice_config = get_default_voice_config()
     voice_config = cast(dict[str, Any], settings.get("voice_config") or {})
+    default_tool_approval_config = get_default_tool_approval_config()
 
     # Extract timezone: prefer call_schedule.timezone, fall back to phone country code
     call_schedule = settings.get("call_schedule")
@@ -410,9 +416,12 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
     return UserContext(
         user_id=user_id,
         email_account=email_account,
-        voice_preference=str(voice_config.get("voice", "aura-2-andromeda-en")),
-        voice_speed=float(voice_config.get("speed", 1.2)),
-        tool_approval_config=cast(dict[str, str], settings.get("tool_approval_config") or {}),
+        voice_preference=str(voice_config.get("voice", default_voice_config["voice"])),
+        voice_speed=float(voice_config.get("speed", default_voice_config["speed"])),
+        tool_approval_config=cast(
+            dict[str, str],
+            settings.get("tool_approval_config") or default_tool_approval_config,
+        ),
         memory_entries=memory_entries,
         email_provider=email_provider,
         timezone=user_timezone,
