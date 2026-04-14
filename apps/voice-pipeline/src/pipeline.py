@@ -43,6 +43,7 @@ from supabase import Client
 from src.audio.normalizer import AudioNormalizerProcessor
 from src.audio.recorder import write_wav, upload_recording
 from src.audio.speed import AudioSpeedProcessor
+from src.audio.thinking_indicator import ThinkingCueProcessor
 from src.audio.startup_tone import FirstAssistantAudioNotifierProcessor
 from src.config import LLM_MODEL, Settings
 from src.cost_tracker import CostTracker
@@ -195,6 +196,7 @@ def create_pipeline(
         sample_rate=sample_rate,
         num_channels=num_channels,
     )
+    thinking_indicator = ThinkingCueProcessor()
 
     # -- Audio normalizer (RMS normalization with peak limiting) --
     normalizer_config = {"enabled": True}
@@ -414,6 +416,7 @@ def create_pipeline(
         user_aggregator,
         llm,
         tts,
+        thinking_indicator,
         speed_processor,
         normalizer,
         assistant_audio_notifier,
