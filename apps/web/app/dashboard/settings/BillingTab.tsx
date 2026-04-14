@@ -22,6 +22,11 @@ import {
   buildDashboardErrorFromResponse,
   logAndMapDashboardError,
 } from "@/lib/errors/mapDashboardError";
+import {
+  SETTINGS_FIELD_CARD,
+  SETTINGS_MAX_WIDTH,
+  SETTINGS_SECTION_COPY,
+} from "./settingsUi";
 
 // ============================================================================
 // CONSTANTS
@@ -114,84 +119,78 @@ export default function BillingTab(): React.ReactElement {
       {/* Current plan + usage */}
       <div className="settings-panel">
         <h2 >Current Plan</h2>
-
-        <p className="mb-2 text-[13px] text-[var(--text-secondary)]">
-          <span className="font-medium">Plan:</span>{" "}
-          <span className="capitalize">{usage.plan}</span>
+        <p className={SETTINGS_SECTION_COPY}>
+          Review your current plan, billing period, and remaining call hours.
         </p>
 
-        <p className="mb-4 text-[13px] text-[var(--text-secondary)]">
-          <span className="font-medium">Period:</span> {usage.periodStart} to{" "}
-          {usage.periodEnd}
-        </p>
+        <div className={`${SETTINGS_MAX_WIDTH} ${SETTINGS_FIELD_CARD}`}>
+          <p className="mb-2 text-[15px] text-[var(--text-secondary)]">
+            <span className="font-semibold text-[var(--text-primary)]">Plan:</span>{" "}
+            <span className="capitalize">{usage.plan}</span>
+          </p>
 
-        {/* Usage progress bar */}
-        <div className="mb-2">
-          <div className="flex justify-between text-[13px] text-[var(--text-secondary)]">
-            <span>{usage.hoursUsed.toFixed(2)}h used</span>
-            <span>{usage.hoursLimit}h limit</span>
+          <p className="mb-4 text-[15px] text-[var(--text-secondary)]">
+            <span className="font-semibold text-[var(--text-primary)]">Period:</span> {usage.periodStart} to{" "}
+            {usage.periodEnd}
+          </p>
+
+          <div className="mb-2">
+            <div className="flex justify-between text-[15px] text-[var(--text-secondary)]">
+              <span>{usage.hoursUsed.toFixed(2)}h used</span>
+              <span>{usage.hoursLimit}h limit</span>
+            </div>
+            <div className="mt-2 h-3 w-full bg-white">
+              <div
+                className={`h-3 ${usagePercent >= 90 ? "bg-red-500" : "bg-black"}`}
+                style={{ width: `${usagePercent}%` }}
+              />
+            </div>
           </div>
-          <div className="mt-1 h-3 w-full bg-[var(--bg-hover)]">
-            <div
-              className={`h-3 ${usagePercent >= 90 ? "bg-red-500" : "bg-[var(--btn-primary-bg)]"}`}
-              style={{ width: `${usagePercent}%` }}
-            />
-          </div>
+
+          <p className="text-[15px] text-[var(--text-secondary)]">
+            {usage.hoursRemaining.toFixed(2)}h remaining
+          </p>
         </div>
-
-        <p className="text-[13px] text-[var(--text-secondary)]">
-          {usage.hoursRemaining.toFixed(2)}h remaining
-        </p>
       </div>
 
       {/* Plan comparison */}
       <div className="settings-panel">
         <h2 >Plans</h2>
-        <table className="w-full text-left text-[13px]">
-          <thead>
-            <tr className="border-b border-[var(--border-color)]">
-              <th className="pb-2 font-medium text-[var(--text-secondary)]">Plan</th>
-              <th className="pb-2 font-medium text-[var(--text-secondary)]">Call Hours</th>
-              <th className="pb-2 font-medium text-[var(--text-secondary)]">Price</th>
-              <th className="w-0 pb-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {PLANS.map((plan) => {
-              const isCurrent = plan.name.toLowerCase() === usage.plan;
-              const showUpgrade =
-                plan.name === "Pro" && usage.plan === "free";
+        <p className={SETTINGS_SECTION_COPY}>
+          Compare available plans and upgrade when you need more call time.
+        </p>
+        <div className={`${SETTINGS_MAX_WIDTH} space-y-3`}>
+          {PLANS.map((plan) => {
+            const isCurrent = plan.name.toLowerCase() === usage.plan;
+            const showUpgrade = plan.name === "Pro" && usage.plan === "free";
 
-              return (
-                <tr
-                  key={plan.name}
-                  className={`border-b border-[var(--border-color)] ${isCurrent ? "bg-[var(--btn-primary-bg)]/5" : ""}`}
-                >
-                  <td className="py-3 font-medium">
-                    {plan.name}
-                    {isCurrent && (
-                      <span className="ml-2 text-xs font-medium text-[var(--text-primary)]">
-                        (current)
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-3 text-[var(--text-secondary)]">{plan.hours}h / month</td>
-                  <td className="py-3 text-[var(--text-secondary)]">{plan.price}</td>
-                  <td className="py-3 text-right">
-                    {showUpgrade && (
-                      <button
-                        onClick={() => setShowPaymentModal(true)}
-                        className="cursor-pointer bg-[var(--btn-primary-bg)] px-4 py-1 text-xs font-medium text-white hover:bg-[var(--btn-primary-hover)]"
-                      >
-                        Upgrade
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+            return (
+              <div
+                key={plan.name}
+                className={`${SETTINGS_FIELD_CARD} ${isCurrent ? "border-black" : ""}`}
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-[15px] font-semibold text-[var(--text-primary)]">
+                      {plan.name}
+                      {isCurrent && <span className="ml-2 text-sm font-medium text-[var(--text-secondary)]">(current)</span>}
+                    </p>
+                    <p className="text-[15px] text-[var(--text-secondary)]">{plan.hours}h / month</p>
+                    <p className="text-[15px] text-[var(--text-secondary)]">{plan.price}</p>
+                  </div>
+                  {showUpgrade && (
+                    <button
+                      onClick={() => setShowPaymentModal(true)}
+                      className="border border-zinc-900 bg-black px-4 py-3 text-[15px] font-semibold text-white hover:bg-zinc-800"
+                    >
+                      Upgrade
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Payment modal */}

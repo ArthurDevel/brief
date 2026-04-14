@@ -30,6 +30,13 @@ import {
   logAndMapDashboardError,
   mapDashboardError,
 } from "@/lib/errors/mapDashboardError";
+import {
+  SETTINGS_FIELD_CARD,
+  SETTINGS_FIELD_LABEL,
+  SETTINGS_INPUT,
+  SETTINGS_MAX_WIDTH,
+  SETTINGS_SECTION_COPY,
+} from "./settingsUi";
 
 // ============================================================================
 // CONSTANTS
@@ -313,7 +320,10 @@ export default function EmailTab() {
       {/* Provider Selector */}
       <section className="settings-panel">
         <h2>Email Provider</h2>
-        <div className="flex">
+        <p className={SETTINGS_SECTION_COPY}>
+          Choose how BrewDock should connect to your inbox. Hosted providers use secure OAuth; custom lets you enter IMAP and SMTP details manually.
+        </p>
+        <div className={`${SETTINGS_MAX_WIDTH} flex`}>
           {PROVIDERS.map((p) => (
             <button
               key={p.id}
@@ -332,7 +342,7 @@ export default function EmailTab() {
 
         {/* Gmail/Outlook: Connect or Reconnect flow */}
         {provider !== "custom" && (
-          <div className="mt-6 text-[13px] text-[var(--text-secondary)]">
+          <div className={`${SETTINGS_MAX_WIDTH} mt-6 text-[15px] leading-relaxed text-[var(--text-secondary)]`}>
             {/* Show current account status if connected via Unipile */}
             {isUnipileAccount && emailAccount?.provider === provider && (
               <AccountStatusBadge
@@ -356,7 +366,7 @@ export default function EmailTab() {
                   type="button"
                   onClick={() => handleConnect("reconnect")}
                   disabled={connecting}
-                  className="bg-amber-500 px-4 py-3 text-[13px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50 transition"
+                  className="bg-amber-500 px-4 py-3 text-[15px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50 transition"
                 >
                   {connecting ? "Redirecting..." : "Reconnect"}
                 </button>
@@ -380,7 +390,7 @@ export default function EmailTab() {
                 type="button"
                 onClick={() => handleConnect("create")}
                 disabled={connecting}
-                className="bg-[var(--btn-primary-bg)] px-4 py-3 text-[13px] font-semibold text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50 transition mt-4"
+                className="mt-4 border border-zinc-900 bg-black px-4 py-3 text-[15px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50 transition"
               >
                 {connecting ? "Redirecting..." : `Connect with ${provider === "gmail" ? "Gmail" : "Outlook"}`}
               </button>
@@ -392,14 +402,14 @@ export default function EmailTab() {
                 type="button"
                 onClick={() => handleConnect("create")}
                 disabled={connecting}
-                className="border border-[var(--border-color)] px-4 py-3 text-[13px] font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-50 transition mt-4"
+                className="mt-4 border border-zinc-200 px-4 py-3 text-[15px] font-semibold text-black hover:bg-zinc-50 disabled:opacity-50 transition"
               >
                 {connecting ? "Redirecting..." : "Connect a different account"}
               </button>
             )}
 
             {/* Unipile trust badge */}
-            <div className="flex items-center justify-center gap-1.5 mt-4 text-[var(--text-secondary)] text-xs">
+            <div className="mt-4 flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
               <span>Authentication is securely handled by</span>
               <a href="https://www.unipile.com/" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-[var(--bg-surface)] text-[var(--text-secondary)] px-2 py-0.5 rounded-full text-xs font-medium hover:bg-[var(--bg-hover)] transition border border-[var(--border-color)]">
                 <svg width="14" height="10" viewBox="0 0 79 65" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -415,7 +425,7 @@ export default function EmailTab() {
 
         {/* Custom hint */}
         {provider === "custom" && (
-          <p className="mt-4 text-[13px] text-[var(--text-secondary)]">
+          <p className={SETTINGS_SECTION_COPY}>
             Enter your IMAP and SMTP server details below.
           </p>
         )}
@@ -433,17 +443,22 @@ export default function EmailTab() {
           {/* Show account status for existing custom accounts */}
           {emailAccount && emailAccount.provider === "custom" && (
             <section className="settings-panel">
-              <AccountStatusBadge
-                emailAddress={emailAccount.emailAddress}
-                status={effectiveStatus}
-                message={effectiveStatusMessage}
-              />
+              <div className={SETTINGS_MAX_WIDTH}>
+                <AccountStatusBadge
+                  emailAddress={emailAccount.emailAddress}
+                  status={effectiveStatus}
+                  message={effectiveStatusMessage}
+                />
+              </div>
             </section>
           )}
 
           <section className="settings-panel">
             <h2>IMAP (Incoming Mail)</h2>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <p className={SETTINGS_SECTION_COPY}>
+              Enter the server details BrewDock should use to read incoming email.
+            </p>
+            <div className={`${SETTINGS_MAX_WIDTH} grid grid-cols-1 gap-4 md:grid-cols-2`}>
               <InputField label="Host" value={imapHost} onChange={setImapHost} placeholder="imap.example.com" />
               <InputField label="Port" type="number" value={String(imapPort)} onChange={(v) => setImapPort(Number(v))} />
               <InputField label="Email" value={imapUser} onChange={setImapUser} placeholder="you@example.com" />
@@ -462,7 +477,10 @@ export default function EmailTab() {
 
           <section className="settings-panel">
             <h2>SMTP (Outgoing Mail)</h2>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <p className={SETTINGS_SECTION_COPY}>
+              Enter the server details BrewDock should use to draft and send email.
+            </p>
+            <div className={`${SETTINGS_MAX_WIDTH} grid grid-cols-1 gap-4 md:grid-cols-2`}>
               <InputField label="Host" value={smtpHost} onChange={setSmtpHost} placeholder="smtp.example.com" />
               <InputField label="Port" type="number" value={String(smtpPort)} onChange={(v) => setSmtpPort(Number(v))} />
               <InputField label="Email" value={smtpUser} onChange={setSmtpUser} placeholder="you@example.com" />
@@ -483,12 +501,12 @@ export default function EmailTab() {
 
       {/* Save (Custom only) */}
       {provider === "custom" && (
-        <div className="flex items-center gap-3">
+        <div className={`${SETTINGS_MAX_WIDTH} flex flex-col items-start gap-3`}>
           <button
             type="button"
             onClick={handleSaveCustom}
             disabled={saving}
-            className="bg-[var(--btn-primary-bg)] px-6 py-2 text-[13px] font-medium text-white hover:bg-[var(--btn-primary-hover)] disabled:opacity-50"
+            className="border border-zinc-900 bg-black px-6 py-3 text-[15px] font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
           >
             {saving ? "Testing connection..." : "Test & Save"}
           </button>
@@ -522,23 +540,24 @@ function AccountStatusBadge({
   status: EmailStatus;
   message: string | null;
 }) {
-  const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
-    connected: { bg: "bg-green-100", text: "text-green-700", label: "Connected" },
-    reconnect_required: { bg: "bg-amber-100", text: "text-amber-700", label: "Reconnect required" },
-    pending: { bg: "bg-blue-100", text: "text-blue-700", label: "Pending" },
-    not_configured: { bg: "bg-slate-100", text: "text-slate-700", label: "Not configured" },
-    error: { bg: "bg-red-100", text: "text-red-700", label: "Error" },
+  const statusConfig: Record<string, { dot: string; text: string; label: string }> = {
+    connected: { dot: "bg-green-600", text: "text-green-700", label: "Connected" },
+    reconnect_required: { dot: "bg-amber-500", text: "text-amber-700", label: "Reconnect required" },
+    pending: { dot: "bg-blue-500", text: "text-blue-700", label: "Pending" },
+    not_configured: { dot: "bg-slate-400", text: "text-slate-700", label: "Not configured" },
+    error: { dot: "bg-red-500", text: "text-red-700", label: "Error" },
   };
 
   const config = statusConfig[status] ?? statusConfig.error;
 
   return (
-    <div className="flex items-center gap-3 mb-4">
-      <span className={`${config.bg} ${config.text} px-3 py-1 text-[12px] font-medium`}>
-        {config.label}
-      </span>
+    <div className={`${SETTINGS_FIELD_CARD} flex flex-col gap-3`}>
+      <div className="flex items-center gap-2">
+        <span className={`h-2.5 w-2.5 rounded-full ${config.dot}`} />
+        <span className={`text-[14px] font-semibold ${config.text}`}>{config.label}</span>
+      </div>
       {emailAddress && (
-        <span className="text-[13px] text-[var(--text-secondary)]">
+        <span className="text-[15px] text-[var(--text-secondary)]">
           {emailAddress}
         </span>
       )}
@@ -559,7 +578,7 @@ function AccountStatusBadge({
 
 function VaultNotice() {
   return (
-    <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] mt-1">
+    <div className={`mt-1 flex items-center gap-1.5 text-xs text-[var(--text-secondary)]`}>
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3 shrink-0">
         <path fillRule="evenodd" d="M8 1a3.5 3.5 0 0 0-3.5 3.5V7A1.5 1.5 0 0 0 3 8.5v5A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5v-5A1.5 1.5 0 0 0 11.5 7V4.5A3.5 3.5 0 0 0 8 1Zm2 6V4.5a2 2 0 1 0-4 0V7h4Z" clipRule="evenodd" />
       </svg>
@@ -584,14 +603,14 @@ interface InputFieldProps {
 
 function InputField({ label, value, onChange, placeholder, type = "text" }: InputFieldProps) {
   return (
-    <div>
-      <label className="mb-1 block text-[13px] font-medium text-[var(--text-secondary)]">{label}</label>
+    <div className={SETTINGS_FIELD_CARD}>
+      <label className={SETTINGS_FIELD_LABEL}>{label}</label>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
+        className={SETTINGS_INPUT}
       />
     </div>
   );

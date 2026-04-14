@@ -20,6 +20,14 @@ import {
   buildDashboardErrorFromResponse,
   logAndMapDashboardError,
 } from "@/lib/errors/mapDashboardError";
+import {
+  SETTINGS_FIELD_CARD,
+  SETTINGS_FIELD_LABEL,
+  SETTINGS_HELP_TEXT,
+  SETTINGS_INPUT,
+  SETTINGS_MAX_WIDTH,
+  SETTINGS_SECTION_COPY,
+} from "./settingsUi";
 
 // ============================================================================
 // CONSTANTS
@@ -306,21 +314,27 @@ export default function ScheduleTab() {
               <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>
             )}
           </div>
-          <select
-            value={formState.timezone}
-            onChange={(e) => {
-              handleTimezoneChange(e.target.value);
-              setSavedSection(null);
-            }}
-            className="w-full border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
-          >
-            {TIMEZONES.map((tz) => (
-              <option key={tz} value={tz}>
-                {tz.replace(/_/g, " ")}
-              </option>
-            ))}
-          </select>
-          <p className="mt-2 text-xs text-[var(--text-secondary)]">
+          <p className={SETTINGS_SECTION_COPY}>
+            Choose the timezone used for all scheduled calls.
+          </p>
+          <div className={SETTINGS_MAX_WIDTH}>
+            <label className={SETTINGS_FIELD_LABEL}>Timezone</label>
+            <select
+              value={formState.timezone}
+              onChange={(e) => {
+                handleTimezoneChange(e.target.value);
+                setSavedSection(null);
+              }}
+              className={SETTINGS_INPUT}
+            >
+              {TIMEZONES.map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className={SETTINGS_HELP_TEXT}>
             All scheduled call times are in this timezone.
           </p>
         </section>
@@ -333,11 +347,11 @@ export default function ScheduleTab() {
               <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>
             )}
           </div>
-          <p className="mb-4 text-[13px] text-[var(--text-secondary)]">
+          <p className={SETTINGS_SECTION_COPY}>
             Enable a day and pick the time you want to be called.
           </p>
 
-          <div className="space-y-3">
+          <div className={`${SETTINGS_MAX_WIDTH} space-y-3`}>
             {DAY_NAMES.map((day) => (
               <DayRow
                 key={day}
@@ -376,7 +390,7 @@ interface DayRowProps {
  */
 function DayRow({ label, config, onToggle, onTimeChange }: DayRowProps) {
   return (
-    <div className="flex items-center gap-4 border border-[var(--border-color)] p-3">
+    <div className={`${SETTINGS_FIELD_CARD} flex items-center gap-4`}>
       {/* Toggle */}
       <button
         type="button"
@@ -393,7 +407,7 @@ function DayRow({ label, config, onToggle, onTimeChange }: DayRowProps) {
       </button>
 
       {/* Day label */}
-      <span className="w-28 text-[13px] font-medium text-[var(--text-primary)]">{label}</span>
+      <span className="w-28 text-[15px] font-semibold text-[var(--text-primary)]">{label}</span>
 
       {/* Time picker */}
       <input
@@ -401,7 +415,7 @@ function DayRow({ label, config, onToggle, onTimeChange }: DayRowProps) {
         value={config.time}
         onChange={(e) => onTimeChange(e.target.value)}
         disabled={!config.enabled}
-        className="border border-[var(--border-color)] px-3 py-1.5 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)] disabled:bg-[var(--bg-hover)] disabled:text-[var(--text-secondary)]"
+        className="border border-zinc-300 bg-white px-3 py-2 text-[15px] font-medium transition focus:border-black focus:outline-none disabled:bg-zinc-100 disabled:text-[var(--text-secondary)]"
       />
     </div>
   );

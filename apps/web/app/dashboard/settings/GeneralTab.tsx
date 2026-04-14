@@ -1,30 +1,37 @@
 /**
- * General settings tab -- phone, PIN, voice, tool approvals, memory.
+ * General settings tab -- phone, PIN, and action approvals.
  *
  * - Text input sections (phone, PIN): show a Save button when there are pending changes
- * - Selectors, sliders, dropdowns (voice, speed, tool approvals): auto-save on change
- * - Memory entries: save/delete immediately via their own buttons
+ * - Action approval selectors auto-save on change
  */
 
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { parsePhoneNumber } from "libphonenumber-js";
-import type { UserSettings, MemoryEntry, CompanyPhone } from "@/lib/types";
+import { useState, useEffect } from "react";
+import {
+  parsePhoneNumber,
+  getCountries,
+  getCountryCallingCode,
+  getExampleNumber,
+  type CountryCode,
+} from "libphonenumber-js";
+import examples from "libphonenumber-js/examples.mobile.json";
+import type { UserSettings, CompanyPhone } from "@/lib/types";
 import type { ToolApprovalConfig, ActionClassification } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 import { getDefaultClassification } from "@dublin/tools/src/classification";
-import type { DeepgramVoice } from "@/app/api/deepgram/voices/route";
-import { DEFAULT_SPEED, DEFAULT_VOICE } from "@/lib/user-settings-defaults";
-import { type DashboardErrorCode, getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
+import { getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
 import {
   buildDashboardErrorFromResponse,
   logAndMapDashboardError,
 } from "@/lib/errors/mapDashboardError";
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
+import {
+  SETTINGS_FIELD_CARD,
+  SETTINGS_FIELD_LABEL,
+  SETTINGS_INPUT,
+  SETTINGS_MAX_WIDTH,
+  SETTINGS_SECTION_COPY,
+} from "./settingsUi";
 
 const TOOL_NAMES = [
   "mark_as_read",
@@ -36,39 +43,44 @@ const TOOL_NAMES = [
   "reply_email",
 ] as const;
 
-const CLASSIFICATION_OPTIONS: ActionClassification[] = [
-  "read_only",
+const CLASSIFICATION_OPTIONS: Array<Exclude<ActionClassification, "read_only">> = [
   "mutating_auto",
   "mutating_queued",
 ];
 
-/** Curated list of common countries for the country dropdown. */
-const COUNTRY_OPTIONS: { code: string; label: string }[] = [
-  { code: "US", label: "United States" },
-  { code: "BE", label: "Belgium" },
-  { code: "GB", label: "United Kingdom" },
-  { code: "DE", label: "Germany" },
-  { code: "FR", label: "France" },
-  { code: "NL", label: "Netherlands" },
-  { code: "ES", label: "Spain" },
-  { code: "IT", label: "Italy" },
-  { code: "AU", label: "Australia" },
-  { code: "CA", label: "Canada" },
-];
+const CLASSIFICATION_LABELS: Record<ActionClassification, string> = {
+  read_only: "Runs automatically",
+  mutating_auto: "Runs automatically",
+  mutating_queued: "Requires approval",
+};
 
-// ============================================================================
-// TYPES
-// ============================================================================
+const CLASSIFICATION_OPTION_LABELS: Record<Exclude<ActionClassification, "read_only">, string> = {
+  mutating_auto: "Run automatically",
+  mutating_queued: "Require approval",
+};
 
-/** Form state for the phone number + country fields. */
-interface PhoneFormState {
-  number: string;
-  countryCode: string;
+interface CountryOption {
+  code: CountryCode;
+  label: string;
+  callingCode: string;
 }
 
-// ============================================================================
-// API HELPERS
-// ============================================================================
+const COUNTRY_OPTIONS: CountryOption[] = (() => {
+  const displayNames = new Intl.DisplayNames(["en"], { type: "region" });
+
+  return getCountries()
+    .map((code) => ({
+      code,
+      label: displayNames.of(code) ?? code,
+      callingCode: `+${getCountryCallingCode(code)}`,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+})();
+
+interface PhoneFormState {
+  localNumber: string;
+  countryCode: CountryCode | "";
+}
 
 async function fetchSettings(): Promise<UserSettings> {
   const res = await fetch("/api/user/settings");
@@ -76,28 +88,6 @@ async function fetchSettings(): Promise<UserSettings> {
     throw await buildDashboardErrorFromResponse(res, {
       code: "SETTINGS_LOAD_FAILED",
       error: "Failed to load settings",
-    });
-  }
-  return res.json();
-}
-
-async function fetchVoices(): Promise<DeepgramVoice[]> {
-  const res = await fetch("/api/deepgram/voices");
-  if (!res.ok) {
-    throw await buildDashboardErrorFromResponse(res, {
-      code: "VOICE_LOAD_FAILED",
-      error: "Failed to load voices",
-    });
-  }
-  return res.json();
-}
-
-async function fetchMemory(): Promise<MemoryEntry[]> {
-  const res = await fetch("/api/memory");
-  if (!res.ok) {
-    throw await buildDashboardErrorFromResponse(res, {
-      code: "MEMORY_LOAD_FAILED",
-      error: "Failed to load memory",
     });
   }
   return res.json();
@@ -118,15 +108,14 @@ async function saveSettings(data: Record<string, unknown>): Promise<UserSettings
   return res.json();
 }
 
-/**
- * Save the user's phone number and country code.
- * @param phone - The phone form state with number and countryCode
- */
 async function savePhone(phone: PhoneFormState): Promise<void> {
   const res = await fetch("/api/user/phone", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ number: phone.number, countryCode: phone.countryCode }),
+    body: JSON.stringify({
+      number: buildFullPhoneNumber(phone.localNumber, phone.countryCode),
+      countryCode: phone.countryCode,
+    }),
   });
   if (!res.ok) {
     throw await buildDashboardErrorFromResponse(res, {
@@ -136,10 +125,6 @@ async function savePhone(phone: PhoneFormState): Promise<void> {
   }
 }
 
-/**
- * Fetch active company phone numbers for the current environment.
- * @returns Array of active company phones
- */
 async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
   const res = await fetch("/api/company-phones");
   if (!res.ok) {
@@ -151,196 +136,161 @@ async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
   return res.json();
 }
 
-async function createMemoryEntry(content: string): Promise<MemoryEntry> {
-  const res = await fetch("/api/memory", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
-  });
-  if (!res.ok) {
-    throw await buildDashboardErrorFromResponse(res, {
-      code: "MEMORY_CREATE_FAILED",
-      error: "Failed to create memory entry",
-    });
-  }
-  return res.json();
+function isAlwaysApprovalTool(toolName: string): boolean {
+  return toolName === "send_email" || toolName === "reply_email";
 }
 
-async function deleteMemoryEntry(id: string): Promise<void> {
-  const res = await fetch("/api/memory", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id }),
-  });
-  if (!res.ok) {
-    throw await buildDashboardErrorFromResponse(res, {
-      code: "MEMORY_DELETE_FAILED",
-      error: "Failed to delete memory entry",
-    });
-  }
+function getClassificationSummaryLabel(classification: ActionClassification): string {
+  return CLASSIFICATION_LABELS[classification];
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
+function getSelectableClassificationValue(
+  classification: ActionClassification | undefined
+): "" | Exclude<ActionClassification, "read_only"> {
+  if (!classification) {
+    return "";
+  }
+
+  return classification === "mutating_queued" ? "mutating_queued" : "mutating_auto";
+}
+
+function isCountryCode(value: string): value is CountryCode {
+  return COUNTRY_OPTIONS.some((country) => country.code === value);
+}
+
+function getSelectedCountry(countryCode: CountryCode | ""): CountryOption | null {
+  if (!countryCode) {
+    return null;
+  }
+
+  return COUNTRY_OPTIONS.find((country) => country.code === countryCode) ?? null;
+}
+
+function buildFullPhoneNumber(localNumber: string, countryCode: CountryCode | ""): string {
+  const selectedCountry = getSelectedCountry(countryCode);
+  if (!selectedCountry) {
+    return localNumber;
+  }
+
+  const digits = localNumber.replace(/\s/g, "").replace(/^0+/, "");
+  return `${selectedCountry.callingCode}${digits}`;
+}
+
+function toPhoneFormState(settingsPhone: UserSettings["phone"]): PhoneFormState {
+  if (!settingsPhone?.number) {
+    return { localNumber: "", countryCode: "" };
+  }
+
+  const resolvedCountryCode = isCountryCode(settingsPhone.countryCode) ? settingsPhone.countryCode : "";
+
+  try {
+    const parsed = parsePhoneNumber(settingsPhone.number);
+    const parsedCountryCode = parsed?.country && isCountryCode(parsed.country) ? parsed.country : resolvedCountryCode;
+
+    return {
+      localNumber: parsed?.formatNational() ?? settingsPhone.number,
+      countryCode: parsedCountryCode,
+    };
+  } catch {
+    return {
+      localNumber: settingsPhone.number,
+      countryCode: resolvedCountryCode,
+    };
+  }
+}
 
 export default function GeneralTab() {
-  // Form state
-  const [phone, setPhone] = useState<PhoneFormState>({ number: "", countryCode: "" });
+  const [phone, setPhone] = useState<PhoneFormState>({ localNumber: "", countryCode: "" });
+  const [savedPhone, setSavedPhone] = useState<PhoneFormState>({ localNumber: "", countryCode: "" });
   const [pin, setPin] = useState("");
-  const [voicePreference, setVoicePreference] = useState(DEFAULT_VOICE);
-  const [voiceSpeed, setVoiceSpeed] = useState(DEFAULT_SPEED);
-  const [voices, setVoices] = useState<DeepgramVoice[]>([]);
-  const [playingVoice, setPlayingVoice] = useState<string | null>(null);
-  const [previewingSpeed, setPreviewingSpeed] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [toolApprovalConfig, setToolApprovalConfig] = useState<ToolApprovalConfig>({});
-  const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([]);
-  const [newMemoryContent, setNewMemoryContent] = useState("");
   const [hasPin, setHasPin] = useState(false);
+  const [toolApprovalConfig, setToolApprovalConfig] = useState<ToolApprovalConfig>({});
   const [companyPhones, setCompanyPhones] = useState<CompanyPhone[]>([]);
-
-  // Saved state for detecting pending text changes
-  const [savedPhone, setSavedPhone] = useState<PhoneFormState>({ number: "", countryCode: "" });
-
-  // UI state
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savedSection, setSavedSection] = useState<string | null>(null);
   const [savingSection, setSavingSection] = useState<string | null>(null);
 
-  // Ref to always have latest form values for auto-save without stale closures
-  const formRef = useRef({
-    voicePreference: DEFAULT_VOICE, voiceSpeed: DEFAULT_SPEED,
-    toolApprovalConfig: {} as ToolApprovalConfig,
-  });
-  // Keep ref in sync
-  formRef.current = {
-    voicePreference, voiceSpeed,
-    toolApprovalConfig,
-  };
-
-  // Auto-save: fire a settings PUT with current form values, flash "Saved"
-  const savedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const autoSave = useCallback(async (
-    overrides?: Record<string, unknown>,
-    section?: string,
-    fallbackCode: DashboardErrorCode = "SETTINGS_SAVE_FAILED"
-  ) => {
-    const f = formRef.current;
-    const payload: Record<string, unknown> = {
-      voicePreference: f.voicePreference,
-      voiceSpeed: f.voiceSpeed,
-      toolApprovalConfig: f.toolApprovalConfig,
-      ...overrides,
-    };
-    try {
-      await saveSettings(payload);
-      if (section) {
-        setSavedSection(section);
-        clearTimeout(savedTimerRef.current);
-        savedTimerRef.current = setTimeout(() => setSavedSection(null), 1500);
-      }
-    } catch (err) {
-      setError(logAndMapDashboardError(err, "settings-general", fallbackCode));
-    }
-  }, []);
-
-  // Load settings on mount
   useEffect(() => {
     async function load() {
       try {
-        const [settings, memory, voiceList, phones] = await Promise.all([
-          fetchSettings(),
-          fetchMemory(),
-          fetchVoices(),
-          fetchCompanyPhones(),
-        ]);
-        setCompanyPhones(phones);
-        setVoices(voiceList);
+        const [settings, phones] = await Promise.all([fetchSettings(), fetchCompanyPhones()]);
+        const loadedPhone = toPhoneFormState(settings.phone);
 
-        // Load phone from settings (now a UserPhone object or null)
-        const loadedPhone: PhoneFormState = settings.phone
-          ? { number: settings.phone.number, countryCode: settings.phone.countryCode }
-          : { number: "", countryCode: "" };
         setPhone(loadedPhone);
         setSavedPhone(loadedPhone);
-
         setHasPin(settings.hasPin);
-        setVoicePreference(settings.voicePreference);
-        setVoiceSpeed(settings.voiceSpeed ?? DEFAULT_SPEED);
         setToolApprovalConfig(settings.toolApprovalConfig);
-        setMemoryEntries(memory);
+        setCompanyPhones(phones);
       } catch (err) {
         setError(logAndMapDashboardError(err, "settings-general", "SETTINGS_LOAD_FAILED"));
       } finally {
         setLoading(false);
       }
     }
+
     load();
   }, []);
 
-  // Stop audio previews on unmount (e.g. navigating away)
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-    };
-  }, []);
-
-  // Pending change detection
-  const phoneDirty = phone.number !== savedPhone.number || phone.countryCode !== savedPhone.countryCode;
-  const phoneUnsupported = savedPhone.countryCode !== "" && !companyPhones.some((p) => p.countryCode === savedPhone.countryCode);
+  const phoneDirty =
+    phone.localNumber !== savedPhone.localNumber || phone.countryCode !== savedPhone.countryCode;
+  const phoneUnsupported =
+    phone.countryCode !== "" &&
+    !companyPhones.some((companyPhone) => companyPhone.countryCode === phone.countryCode);
   const pinDirty = pin !== "";
+  const selectedCountry = getSelectedCountry(phone.countryCode);
+  const exampleNumber =
+    phone.countryCode && isCountryCode(phone.countryCode)
+      ? getExampleNumber(phone.countryCode, examples)?.formatNational() ?? ""
+      : "";
 
-  // ============================================================================
-  // EVENT HANDLERS
-  // ============================================================================
-
-  /**
-   * Handle phone number input change. Auto-detects country from the phone prefix.
-   * @param value - The raw phone number string
-   */
-  function handlePhoneNumberChange(value: string): void {
-    let detectedCountry = phone.countryCode;
-
-    // Try to auto-detect country from the phone number prefix
-    try {
-      const parsed = parsePhoneNumber(value);
-      if (parsed?.country) {
-        detectedCountry = parsed.country;
-      }
-    } catch {
-      // Not a valid phone number yet -- keep existing country
-    }
-
-    setPhone({ number: value, countryCode: detectedCountry });
+  function flashSaved(section: string) {
+    setSavedSection(section);
+    window.setTimeout(() => {
+      setSavedSection((current) => (current === section ? null : current));
+    }, 1500);
   }
 
-  /**
-   * Handle manual country dropdown change.
-   * @param countryCode - The selected ISO 3166-1 alpha-2 country code
-   */
+  function handlePhoneNumberChange(value: string): void {
+    setPhone((prev) => ({ ...prev, localNumber: value }));
+  }
+
   function handleCountryChange(countryCode: string): void {
-    setPhone((prev) => ({ ...prev, countryCode }));
+    setPhone((prev) => ({
+      ...prev,
+      countryCode: isCountryCode(countryCode) ? countryCode : "",
+    }));
+  }
+
+  function handlePinChange(value: string): void {
+    setPin(value.replace(/\D/g, "").slice(0, 6));
   }
 
   async function handleSavePhone(): Promise<void> {
     setSavingSection("phone");
     setError(null);
 
-    // Validate that the selected country matches the phone number
     try {
-      const parsed = parsePhoneNumber(phone.number);
+      if (!phone.countryCode) {
+        setError("Please select your country.");
+        setSavingSection(null);
+        return;
+      }
+
+      const digits = phone.localNumber.replace(/\s/g, "");
+      if (!digits || digits.replace(/^0+/, "").length < 4) {
+        setError("Please enter your phone number.");
+        setSavingSection(null);
+        return;
+      }
+
+      const parsed = parsePhoneNumber(buildFullPhoneNumber(phone.localNumber, phone.countryCode));
       if (parsed?.country && parsed.country !== phone.countryCode) {
         setError(getDashboardErrorMessage("PHONE_COUNTRY_MISMATCH"));
         setSavingSection(null);
         return;
       }
     } catch {
-      // If parsing fails, the number is likely invalid
       setError(getDashboardErrorMessage("PHONE_INVALID"));
       setSavingSection(null);
       return;
@@ -349,9 +299,7 @@ export default function GeneralTab() {
     try {
       await savePhone(phone);
       setSavedPhone(phone);
-      setSavedSection("phone");
-      clearTimeout(savedTimerRef.current);
-      savedTimerRef.current = setTimeout(() => setSavedSection(null), 1500);
+      flashSaved("phone");
     } catch (err) {
       setError(logAndMapDashboardError(err, "settings-general", "PHONE_SAVE_FAILED"));
     } finally {
@@ -362,10 +310,12 @@ export default function GeneralTab() {
   async function handleSavePin() {
     setSavingSection("pin");
     setError(null);
+
     try {
-      await autoSave({ pin }, "pin", "PIN_SAVE_FAILED");
+      await saveSettings({ pin });
       setHasPin(true);
       setPin("");
+      flashSaved("pin");
     } catch (err) {
       setError(logAndMapDashboardError(err, "settings-general", "PIN_SAVE_FAILED"));
     } finally {
@@ -373,97 +323,18 @@ export default function GeneralTab() {
     }
   }
 
-  // Instant-save handlers for non-text controls
-  function handleVoiceChange(canonicalName: string) {
-    setVoicePreference(canonicalName);
-    autoSave({ voicePreference: canonicalName }, "voice", "SETTINGS_SAVE_FAILED");
-  }
-
-  const speedDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  function handleSpeedChange(speed: number) {
-    setVoiceSpeed(speed);
-    if (audioRef.current) {
-      audioRef.current.playbackRate = speed;
-    }
-    clearTimeout(speedDebounceRef.current);
-    speedDebounceRef.current = setTimeout(() => {
-      autoSave({ voiceSpeed: speed }, "speed", "SETTINGS_SAVE_FAILED");
-    }, 400);
-  }
-
-  function handleToolApprovalChange(toolName: string, classification: ActionClassification) {
+  async function handleToolApprovalChange(toolName: string, classification: ActionClassification) {
     const updated = { ...toolApprovalConfig, [toolName]: classification };
     setToolApprovalConfig(updated);
-    autoSave({ toolApprovalConfig: updated }, "tools", "SETTINGS_SAVE_FAILED");
-  }
+    setError(null);
 
-  // Audio preview handlers
-  function handlePlayPreview(canonicalName: string, sampleUrl: string) {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (playingVoice === canonicalName) {
-      setPlayingVoice(null);
-      return;
-    }
-    const audio = new Audio(sampleUrl);
-    audio.playbackRate = voiceSpeed;
-    audio.onended = () => setPlayingVoice(null);
-    audio.play();
-    audioRef.current = audio;
-    setPlayingVoice(canonicalName);
-  }
-
-  function handleSpeedPreview() {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-      setPlayingVoice(null);
-    }
-    if (previewingSpeed) {
-      setPreviewingSpeed(false);
-      return;
-    }
-    const selectedVoice = voices.find((v) => v.canonicalName === voicePreference);
-    if (!selectedVoice?.sampleUrl) return;
-    const audio = new Audio(selectedVoice.sampleUrl);
-    audio.playbackRate = voiceSpeed;
-    audio.onended = () => {
-      setPreviewingSpeed(false);
-      audioRef.current = null;
-    };
-    audio.play();
-    audioRef.current = audio;
-    setPreviewingSpeed(true);
-  }
-
-  // Memory handlers
-  async function handleAddMemoryEntry() {
-    if (!newMemoryContent.trim()) return;
     try {
-      setError(null);
-      const entry = await createMemoryEntry(newMemoryContent.trim());
-      setMemoryEntries((prev) => [entry, ...prev]);
-      setNewMemoryContent("");
+      await saveSettings({ toolApprovalConfig: updated });
+      flashSaved("tools");
     } catch (err) {
-      setError(logAndMapDashboardError(err, "settings-general", "MEMORY_CREATE_FAILED"));
+      setError(logAndMapDashboardError(err, "settings-general", "SETTINGS_SAVE_FAILED"));
     }
   }
-
-  async function handleDeleteMemoryEntry(id: string) {
-    try {
-      setError(null);
-      await deleteMemoryEntry(id);
-      setMemoryEntries((prev) => prev.filter((entry) => entry.id !== id));
-    } catch (err) {
-      setError(logAndMapDashboardError(err, "settings-general", "MEMORY_DELETE_FAILED"));
-    }
-  }
-
-  // ============================================================================
-  // RENDER
-  // ============================================================================
 
   if (loading) {
     return <p className="text-[var(--text-secondary)]">Loading...</p>;
@@ -478,232 +349,140 @@ export default function GeneralTab() {
       )}
 
       <div>
-        {/* Phone Number */}
         <section className="settings-panel">
           <h2>Phone Number</h2>
-          <div className="flex flex-col md:flex-row gap-4 md:gap-3">
-            <div className="w-full md:w-48">
-              <label className="mb-1 block text-[13px] font-medium text-[var(--text-secondary)]">Country</label>
+          <p className={SETTINGS_SECTION_COPY}>
+            We use this to verify your caller ID when you call in. We will never share it or send spam.
+          </p>
+          <div className={SETTINGS_MAX_WIDTH}>
+            <div className="mb-4">
+              <label className={SETTINGS_FIELD_LABEL}>Country</label>
               <select
                 value={phone.countryCode}
                 onChange={(e) => handleCountryChange(e.target.value)}
-                className="w-full border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
+                className={SETTINGS_INPUT}
               >
-                <option value="">-- Select --</option>
-                {COUNTRY_OPTIONS.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.label} ({c.code})
+                <option value="">Select a country</option>
+                {COUNTRY_OPTIONS.map((country) => (
+                  <option key={country.code} value={country.code}>
+                    {country.label} ({country.callingCode})
                   </option>
                 ))}
               </select>
             </div>
-            <div className="flex-1">
-              <InputField
-                label="Your phone number (for caller ID authentication)"
-                value={phone.number}
-                onChange={handlePhoneNumberChange}
-                placeholder="+1234567890"
-              />
+
+            <div className="mb-2">
+              <label className={SETTINGS_FIELD_LABEL}>Phone number</label>
+              <div className="flex min-w-0">
+                <span className="inline-flex items-center border border-r-0 border-zinc-300 bg-zinc-100 px-3 text-[15px] font-semibold text-zinc-600 select-none">
+                  {selectedCountry?.callingCode ?? "+"}
+                </span>
+                <input
+                  type="tel"
+                  value={phone.localNumber}
+                  onChange={(e) => handlePhoneNumberChange(e.target.value)}
+                  className="min-w-0 flex-1 border border-zinc-300 bg-white px-3 py-2 text-lg font-medium tracking-wide placeholder-zinc-300 transition focus:border-black focus:outline-none"
+                  placeholder={exampleNumber || "555 123 4567"}
+                />
+              </div>
             </div>
           </div>
           <div className="mt-4 flex justify-end">
             {phoneDirty ? (
               <SectionSaveButton onClick={handleSavePhone} saving={savingSection === "phone"} />
             ) : savedSection === "phone" ? (
-              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
+                Saved
+              </span>
             ) : null}
           </div>
           {phoneUnsupported && (
             <p className="mt-3 text-sm text-red-600">
               Phone calls are not yet available in your country. Supported countries:{" "}
-              {companyPhones.map((p) => p.label).join(", ")}.
+              {companyPhones.map((companyPhone) => companyPhone.label).join(", ")}.
             </p>
           )}
         </section>
 
-        {/* PIN */}
         <section className="settings-panel">
-          <h2 >PIN</h2>
-          <InputField
-            label={hasPin ? "Change PIN (4-6 digits, leave blank to keep current)" : "Set PIN (4-6 digits)"}
-            type="password"
-            value={pin}
-            onChange={setPin}
-            placeholder={hasPin ? "****" : "1234"}
-          />
+          <h2>PIN</h2>
+          <p className={SETTINGS_SECTION_COPY}>
+            You enter this PIN when you call in to verify your identity. Choose 4 to 6 digits.
+          </p>
+          <div className={SETTINGS_MAX_WIDTH}>
+            <label className={SETTINGS_FIELD_LABEL}>PIN (4-6 digits)</label>
+            <input
+              type="password"
+              inputMode="numeric"
+              value={pin}
+              onChange={(e) => handlePinChange(e.target.value)}
+              placeholder={hasPin ? "----" : "----"}
+              className="w-full border border-zinc-300 bg-white px-3 py-2 text-center text-lg font-medium tracking-[0.3em] placeholder-zinc-300 transition focus:border-black focus:outline-none"
+            />
+          </div>
           <div className="mt-4 flex justify-end">
             {pinDirty ? (
               <SectionSaveButton onClick={handleSavePin} saving={savingSection === "pin"} />
             ) : savedSection === "pin" ? (
-              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>
+              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
+                Saved
+              </span>
             ) : null}
           </div>
         </section>
 
-        {/* Voice Speed */}
         <section className="settings-panel">
           <div className="mb-4 flex items-center justify-between">
-            <h2 >Voice Speed</h2>
-            {savedSection === "speed" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
-          </div>
-          <div className="flex items-center gap-2 md:gap-4 flex-wrap md:flex-nowrap">
-            <span className="text-[13px] text-[var(--text-secondary)] w-8 md:w-10">1x</span>
-            <input
-              type="range"
-              min={1}
-              max={1.5}
-              step={0.05}
-              value={voiceSpeed}
-              onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
-              className="flex-1 w-full md:w-auto accent-[var(--btn-primary-bg)] min-w-[120px]"
-            />
-            <span className="text-[13px] text-[var(--text-secondary)] w-10 md:w-12">1.5x</span>
-            <span className="text-[13px] font-medium text-[var(--text-primary)] w-10 md:w-12 text-right">{voiceSpeed.toFixed(2)}x</span>
-            <button
-              type="button"
-              onClick={handleSpeedPreview}
-              disabled={!voices.find((v) => v.canonicalName === voicePreference)?.sampleUrl}
-              className="shrink-0 border border-[var(--border-color)] px-3 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
-            >
-              {previewingSpeed ? "Stop" : "Preview"}
-            </button>
-          </div>
-        </section>
-
-        {/* Voice Preference */}
-        <section className="settings-panel">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 >Voice Preference</h2>
-            {savedSection === "voice" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
-          </div>
-          {voices.length === 0 ? (
-            <p className="text-[13px] text-[var(--text-secondary)]">Loading voices...</p>
-          ) : (
-            <div className="space-y-3 max-h-80 overflow-y-auto">
-              {voices.map((voice) => (
-                <label
-                  key={voice.canonicalName}
-                  className={`flex items-center gap-3 border p-3 cursor-pointer transition-colors ${
-                    voicePreference === voice.canonicalName
-                      ? "border-[var(--btn-primary-bg)] bg-[var(--btn-primary-bg)]/5"
-                      : "border-[var(--border-color)] hover:border-[var(--border-color)]"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="voicePreference"
-                    value={voice.canonicalName}
-                    checked={voicePreference === voice.canonicalName}
-                    onChange={() => handleVoiceChange(voice.canonicalName)}
-                    className="accent-[var(--btn-primary-bg)]"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[13px] font-medium text-[var(--text-primary)] capitalize">{voice.name}</span>
-                    <span className="ml-2 text-xs text-[var(--text-secondary)]">
-                      English ({voice.accent} accent)
-                    </span>
-                  </div>
-                  {voice.sampleUrl && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        handlePlayPreview(voice.canonicalName, voice.sampleUrl!);
-                      }}
-                      className="shrink-0 border border-[var(--border-color)] px-3 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
-                    >
-                      {playingVoice === voice.canonicalName ? "Stop" : "Preview"}
-                    </button>
-                  )}
-                </label>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* Tool Approval Toggles */}
-        <section className="settings-panel">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 >Tool Approval Settings</h2>
-            {savedSection === "tools" && <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">Saved</span>}
-          </div>
-          <p className="mb-4 text-[13px] text-[var(--text-secondary)]">
-            Control which actions require manual approval. &quot;send_email&quot; and &quot;reply_email&quot; always require approval.
-          </p>
-          <div className="space-y-3">
-            {TOOL_NAMES.map((toolName) => (
-              <div key={toolName} className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2">
-                <span className="text-[13px] font-medium text-[var(--text-secondary)]">{TOOL_LABELS[toolName] ?? toolName}</span>
-                <select
-                  value={toolApprovalConfig[toolName] ?? ""}
-                  onChange={(e) =>
-                    handleToolApprovalChange(toolName, e.target.value as ActionClassification)
-                  }
-                  disabled={toolName === "send_email" || toolName === "reply_email"}
-                  className="border border-[var(--border-color)] px-3 py-1.5 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)] disabled:bg-[var(--bg-hover)] disabled:text-[var(--text-secondary)]"
-                >
-                  <option value="">Default ({getDefaultClassification(toolName)})</option>
-                  {CLASSIFICATION_OPTIONS.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {opt}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Memory Entries */}
-        <section className="settings-panel">
-          <h2 >Memory Entries</h2>
-          <p className="mb-4 text-[13px] text-[var(--text-secondary)]">
-            Things the assistant remembers about you across calls.
-          </p>
-
-          <div className="mb-4 flex flex-col md:flex-row gap-2">
-            <textarea
-              value={newMemoryContent}
-              onChange={(e) => setNewMemoryContent(e.target.value)}
-              placeholder="Add something for the assistant to remember..."
-              rows={2}
-              className="flex-1 w-full border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
-            />
-            <button
-              type="button"
-              onClick={handleAddMemoryEntry}
-              className="md:self-end border border-[var(--border-color)] px-4 py-2 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] w-full md:w-auto mt-2 md:mt-0"
-            >
-              Add
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            {memoryEntries.map((entry) => (
-              <div key={entry.id} className="flex items-start gap-2 border border-[var(--border-color)] p-3">
-                <p className="flex-1 whitespace-pre-wrap text-[13px] text-[var(--text-secondary)]">{entry.content}</p>
-                <button
-                  type="button"
-                  onClick={() => handleDeleteMemoryEntry(entry.id)}
-                  className="shrink-0 border border-red-300 px-3 py-1 text-[13px] text-red-700 hover:bg-red-50"
-                >
-                  Delete
-                </button>
-              </div>
-            ))}
-            {memoryEntries.length === 0 && (
-              <p className="text-[13px] text-[var(--text-secondary)]">No memory entries yet.</p>
+            <h2>Action Approvals</h2>
+            {savedSection === "tools" && (
+              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
+                Saved
+              </span>
             )}
+          </div>
+          <p className={SETTINGS_SECTION_COPY}>
+            Choose which actions run immediately and which wait for your approval in the dashboard.
+            Sending and replying to emails always require approval.
+          </p>
+          <div className={`${SETTINGS_MAX_WIDTH} space-y-4`}>
+            {TOOL_NAMES.map((toolName) => (
+              <div
+                key={toolName}
+                className={SETTINGS_FIELD_CARD}
+              >
+                <label className={`${SETTINGS_FIELD_LABEL} mb-2`}>
+                  {TOOL_LABELS[toolName] ?? toolName}
+                </label>
+                {isAlwaysApprovalTool(toolName) ? (
+                  <span className={`inline-flex w-full items-center ${SETTINGS_INPUT} text-zinc-600`}>
+                    Always requires approval
+                  </span>
+                ) : (
+                  <select
+                    value={getSelectableClassificationValue(toolApprovalConfig[toolName])}
+                    onChange={(e) =>
+                      handleToolApprovalChange(toolName, e.target.value as ActionClassification)
+                    }
+                    className={SETTINGS_INPUT}
+                  >
+                    <option value="">
+                      Use default ({getClassificationSummaryLabel(getDefaultClassification(toolName))})
+                    </option>
+                    {CLASSIFICATION_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {CLASSIFICATION_OPTION_LABELS[option]}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            ))}
           </div>
         </section>
       </div>
     </div>
   );
 }
-
-// ============================================================================
-// HELPER COMPONENTS
-// ============================================================================
 
 function SectionSaveButton({ onClick, saving }: { onClick: () => void; saving: boolean }) {
   return (
@@ -715,28 +494,5 @@ function SectionSaveButton({ onClick, saving }: { onClick: () => void; saving: b
     >
       {saving ? "Saving..." : "Save"}
     </button>
-  );
-}
-
-interface InputFieldProps {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  type?: string;
-}
-
-function InputField({ label, value, onChange, placeholder, type = "text" }: InputFieldProps) {
-  return (
-    <div>
-      <label className="mb-1 block text-[13px] font-medium text-[var(--text-secondary)]">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full border border-[var(--border-color)] px-3 py-2 text-[13px] focus:border-[var(--btn-primary-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--btn-primary-bg)]"
-      />
-    </div>
   );
 }
