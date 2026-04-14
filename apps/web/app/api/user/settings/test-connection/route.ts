@@ -11,7 +11,7 @@
  * - Branch by connection type (imap_smtp vs unipile)
  * - Custom: test IMAP + SMTP connections using stored Vault credentials
  * - Unipile: check account status via Unipile API
- * - Return per-protocol success/error results
+ * - Return per-protocol success/error
  */
 
 import { cookies } from "next/headers";
@@ -26,12 +26,10 @@ import {
   type DashboardErrorCode,
 } from "@/lib/errors/dashboardErrors";
 import { mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
-
-// ============================================================================
-// TYPES
-// ============================================================================
+import { getConnectionErrorMessage, type EmailStatus } from "@/lib/email-status";
 
 interface TestResult {
+  status: EmailStatus;
   imap: { ok: boolean; code?: DashboardErrorCode; error?: string };
   smtp: { ok: boolean; code?: DashboardErrorCode; error?: string };
 }
@@ -41,15 +39,6 @@ interface ErrorResponse {
   error: string;
 }
 
-// ============================================================================
-// MAIN HANDLER
-// ============================================================================
-
-/**
- * Tests the email connection for the user's active account.
- * @param _request - The incoming request (no body needed)
- * @returns TestResult with per-protocol success/error
- */
 export async function POST(_request: NextRequest): Promise<NextResponse<TestResult | ErrorResponse>> {
   try {
     const cookieStore = await cookies();
@@ -61,7 +50,6 @@ export async function POST(_request: NextRequest): Promise<NextResponse<TestResu
     }
 
     const account = await getActiveEmailAccount(supabase, user.id);
-
     if (!account) {
       return errorResponse("EMAIL_ACCOUNT_REQUIRED", 400);
     }
@@ -70,7 +58,7 @@ export async function POST(_request: NextRequest): Promise<NextResponse<TestResu
       return testUnipileConnection(account.id, supabase, user.id);
     }
 
-    return testCustomConnection(supabase, user.id);
+    return testCustomConnection(account.id, supabase, user.id);
   } catch (err) {
     console.error("[user/settings/test-connection]", err);
     const { code, message } = mapDashboardErrorDetails(
@@ -82,23 +70,11 @@ export async function POST(_request: NextRequest): Promise<NextResponse<TestResu
   }
 }
 
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/**
- * Tests a Unipile-backed account by checking its status via the Unipile API.
- * @param accountId - The email account row ID
- * @param supabase - Supabase client for loading the Unipile account ID
- * @param userId - The user's ID
- * @returns TestResult derived from Unipile account status
- */
 async function testUnipileConnection(
   accountId: string,
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
 ): Promise<NextResponse<TestResult | ErrorResponse>> {
-  // Load the unipile_account_id from the database
   const { data: row, error: fetchError } = await supabase
     .from("user_email_accounts")
     .select("unipile_account_id")
@@ -118,39 +94,38 @@ async function testUnipileConnection(
 
   try {
     const unipileAccount = await getAccount(row.unipile_account_id);
-    const isOk = unipileAccount.status === "connected";
+    const status = unipileAccount.status as EmailStatus;
+    const isOk = status === "connected";
     const failure = isOk
       ? undefined
       : buildProtocolFailure(
-        { error: `Unipile account status: ${unipileAccount.status}` },
-        "EMAIL_VERIFY_FAILED"
+        { error: `Unipile account status: ${status}` },
+        status === "reconnect_required" ? "EMAIL_RECONNECT_REQUIRED" : "EMAIL_VERIFY_FAILED"
       );
 
+    await updateStoredStatus(supabase, accountId, userId, status, failure?.error ?? null);
+
     return NextResponse.json({
+      status,
       imap: isOk ? { ok: true } : failure!,
       smtp: isOk ? { ok: true } : failure!,
     });
   } catch (err) {
-    console.error("[user/settings/test-connection]", err);
     const failure = buildProtocolFailure(err, "EMAIL_VERIFY_FAILED");
+    await updateStoredStatus(supabase, accountId, userId, "error", failure.error);
     return NextResponse.json({
+      status: "error",
       imap: failure,
       smtp: failure,
     });
   }
 }
 
-/**
- * Tests a custom IMAP/SMTP account by connecting to both servers.
- * @param supabase - Supabase client for loading account config
- * @param userId - The user's ID
- * @returns TestResult with per-protocol results
- */
 async function testCustomConnection(
+  accountId: string,
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
 ): Promise<NextResponse<TestResult | ErrorResponse>> {
-  // Load custom account details
   const { data: account, error: fetchError } = await supabase
     .from("user_email_accounts")
     .select(
@@ -191,24 +166,33 @@ async function testCustomConnection(
       }),
     ]);
 
+    const imapFailure = imapResult.ok
+      ? undefined
+      : buildProtocolFailure(imapResult.error, "EMAIL_INBOX_VERIFY_FAILED");
+    const smtpFailure = smtpResult.ok
+      ? undefined
+      : buildProtocolFailure(smtpResult.error, "EMAIL_SMTP_VERIFY_FAILED");
+    const status: EmailStatus = imapResult.ok && smtpResult.ok ? "connected" : "error";
+    const message = getConnectionErrorMessage({
+      imap: imapFailure ? { ok: false, error: imapFailure.error } : { ok: true },
+      smtp: smtpFailure ? { ok: false, error: smtpFailure.error } : { ok: true },
+    }) ?? null;
+
+    await updateStoredStatus(supabase, accountId, userId, status, message);
+
     return NextResponse.json({
-      imap: imapResult.ok ? { ok: true } : buildProtocolFailure(imapResult.error, "EMAIL_INBOX_VERIFY_FAILED"),
-      smtp: smtpResult.ok ? { ok: true } : buildProtocolFailure(smtpResult.error, "EMAIL_SMTP_VERIFY_FAILED"),
+      status,
+      imap: imapResult.ok ? { ok: true } : imapFailure!,
+      smtp: smtpResult.ok ? { ok: true } : smtpFailure!,
     });
   } catch (err) {
     console.error("[user/settings/test-connection]", err);
+    const failure = buildProtocolFailure(err, "EMAIL_VERIFY_FAILED");
+    await updateStoredStatus(supabase, accountId, userId, "error", failure.error);
     return errorResponse("EMAIL_VERIFY_FAILED", 500);
   }
 }
 
-/**
- * Tests an IMAP connection by connecting and immediately logging out.
- * @param host - IMAP server hostname
- * @param port - IMAP server port
- * @param user - IMAP username
- * @param password - IMAP password (decrypted)
- * @returns Object with ok flag and optional error message
- */
 async function testImap(
   host: string,
   port: number,
@@ -221,6 +205,27 @@ async function testImap(
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "IMAP connection failed" };
+  }
+}
+
+async function updateStoredStatus(
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+  accountId: string,
+  userId: string,
+  status: EmailStatus,
+  message: string | null
+): Promise<void> {
+  const { error } = await supabase
+    .from("user_email_accounts")
+    .update({
+      status,
+      last_error: message,
+    })
+    .eq("id", accountId)
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("[user/settings/test-connection] Failed to persist email status:", error.message);
   }
 }
 

@@ -19,6 +19,11 @@
 import { useState, useEffect } from "react";
 import type { UserSettings, EmailAccountSummary } from "@/lib/types";
 import { useEmailStatus } from "@/contexts/EmailStatusContext";
+import {
+  getStoredEmailStatus,
+  type EmailConnectionTestResult,
+  type EmailStatus,
+} from "@/lib/email-status";
 import { getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
 import {
   buildDashboardErrorFromResponse,
@@ -98,10 +103,7 @@ async function initiateConnect(provider: string): Promise<string> {
   return data.url;
 }
 
-interface TestResult {
-  imap: { ok: boolean; error?: string };
-  smtp: { ok: boolean; error?: string };
-}
+type TestResult = EmailConnectionTestResult;
 
 /**
  * Tests email connection using stored credentials on the server.
@@ -125,7 +127,11 @@ async function testConnection(): Promise<TestResult> {
 // ============================================================================
 
 export default function EmailTab() {
-  const { refresh: refreshEmailStatus } = useEmailStatus();
+  const {
+    status: resolvedEmailStatus,
+    message: resolvedEmailStatusMessage,
+    refresh: refreshEmailStatus,
+  } = useEmailStatus();
 
   // Provider
   const [provider, setProvider] = useState<Provider>("gmail");
@@ -155,7 +161,7 @@ export default function EmailTab() {
   // Load settings on mount and refresh email status cache
   // (clears stale cache from e.g. returning after Unipile hosted auth redirect)
   useEffect(() => {
-    refreshEmailStatus();
+    refreshEmailStatus(true);
 
     async function load() {
       try {
@@ -262,28 +268,17 @@ export default function EmailTab() {
           console.error("[dashboard-error]", { context: "settings-email", error: result });
           setError(getDashboardErrorMessage("EMAIL_VERIFY_FAILED"));
         } else if (!result.imap.ok) {
-          setError(
-            logAndMapDashboardError(
-              result.imap.error ?? result,
-              "settings-email",
-              "EMAIL_INBOX_VERIFY_FAILED"
-            )
-          );
+          setError(result.imap.error ?? getDashboardErrorMessage("EMAIL_INBOX_VERIFY_FAILED"));
         } else {
-          setError(
-            logAndMapDashboardError(
-              result.smtp.error ?? result,
-              "settings-email",
-              "EMAIL_SMTP_VERIFY_FAILED"
-            )
-          );
+          setError(result.smtp.error ?? getDashboardErrorMessage("EMAIL_SMTP_VERIFY_FAILED"));
         }
+        refreshEmailStatus(true);
         setSaving(false);
         return;
       }
 
       setSaved(true);
-      refreshEmailStatus();
+      refreshEmailStatus(true);
     } catch (err) {
       setError(logAndMapDashboardError(err, "settings-email", "EMAIL_SAVE_FAILED"));
     } finally {
@@ -299,10 +294,15 @@ export default function EmailTab() {
     return <p className="text-[var(--text-secondary)]">Loading...</p>;
   }
 
+  const storedStatus = getStoredEmailStatus(emailAccount);
+  const effectiveStatus = resolvedEmailStatus ?? storedStatus.status;
+  const effectiveStatusMessage =
+    resolvedEmailStatusMessage ?? storedStatus.message ?? null;
+
   // Determine if the current account is Unipile-backed and needs reconnect
   const isUnipileAccount = emailAccount?.connectionType === "unipile";
-  const needsReconnect = emailAccount?.status === "reconnect_required";
-  const isConnected = emailAccount?.status === "connected";
+  const needsReconnect = effectiveStatus === "reconnect_required";
+  const isConnected = effectiveStatus === "connected";
 
   return (
     <div className="">
@@ -331,7 +331,11 @@ export default function EmailTab() {
           <div className="mt-6 text-[13px] text-[var(--text-secondary)]">
             {/* Show current account status if connected via Unipile */}
             {isUnipileAccount && emailAccount?.provider === provider && (
-              <AccountStatusBadge account={emailAccount} />
+              <AccountStatusBadge
+                emailAddress={emailAccount.emailAddress}
+                status={effectiveStatus}
+                message={effectiveStatusMessage}
+              />
             )}
 
             {/* Show error if any */}
@@ -425,7 +429,11 @@ export default function EmailTab() {
           {/* Show account status for existing custom accounts */}
           {emailAccount && emailAccount.provider === "custom" && (
             <section className="settings-panel">
-              <AccountStatusBadge account={emailAccount} />
+              <AccountStatusBadge
+                emailAddress={emailAccount.emailAddress}
+                status={effectiveStatus}
+                message={effectiveStatusMessage}
+              />
             </section>
           )}
 
@@ -497,31 +505,48 @@ export default function EmailTab() {
 
 /**
  * Displays the current account connection status as a compact badge.
- * @param account - The email account summary
+ * @param emailAddress - The account email address
+ * @param status - The effective email status
+ * @param message - Optional connection detail
  */
-function AccountStatusBadge({ account }: { account: EmailAccountSummary }) {
+function AccountStatusBadge({
+  emailAddress,
+  status,
+  message,
+}: {
+  emailAddress: EmailAccountSummary["emailAddress"];
+  status: EmailStatus;
+  message: string | null;
+}) {
   const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
     connected: { bg: "bg-green-100", text: "text-green-700", label: "Connected" },
     reconnect_required: { bg: "bg-amber-100", text: "text-amber-700", label: "Reconnect required" },
     pending: { bg: "bg-blue-100", text: "text-blue-700", label: "Pending" },
+    not_configured: { bg: "bg-slate-100", text: "text-slate-700", label: "Not configured" },
     error: { bg: "bg-red-100", text: "text-red-700", label: "Error" },
   };
 
-  const config = statusConfig[account.status] ?? statusConfig.error;
+  const config = statusConfig[status] ?? statusConfig.error;
 
   return (
     <div className="flex items-center gap-3 mb-4">
       <span className={`${config.bg} ${config.text} px-3 py-1 text-[12px] font-medium`}>
         {config.label}
       </span>
-      {account.emailAddress && (
+      {emailAddress && (
         <span className="text-[13px] text-[var(--text-secondary)]">
-          {account.emailAddress}
+          {emailAddress}
         </span>
       )}
-      {account.lastError && (
+      {message && (
         <span className="text-[12px] text-red-600">
-          {mapDashboardError(account.lastError, "email", "EMAIL_INBOX_CONNECT_FAILED")}
+          {mapDashboardError(
+            message,
+            "email",
+            status === "reconnect_required"
+              ? "EMAIL_RECONNECT_REQUIRED"
+              : "EMAIL_INBOX_CONNECT_FAILED"
+          )}
         </span>
       )}
     </div>
