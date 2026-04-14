@@ -15,12 +15,10 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { CallProvider } from "@/contexts/CallContext";
 import { EmailStatusProvider } from "@/contexts/EmailStatusContext";
-import ActiveCallBar from "@/components/ActiveCallBar";
 import { createBrowserClient } from "@/lib/supabase/client";
 import EmailStatusBanner from "./EmailStatusBanner";
-import { Home, Phone, Activity, Clock, Settings, Menu, X, User, LogOut, Shield } from "lucide-react";
+import { Home, Phone, Activity, Clock, Settings, Menu, User, LogOut, Shield } from "lucide-react";
 import { checkIsAdmin } from "@/app/admin/actions";
 
 // ============================================================================
@@ -113,10 +111,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <CallProvider>
-      <EmailStatusProvider>
+    <EmailStatusProvider>
       <div className="flex flex-col h-screen">
-        <ActiveCallBar />
         <div className="flex flex-1 min-h-0 relative">
 
         {/* Mobile Sidebar Overlay */}
@@ -223,7 +219,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         </div>
       </div>
-      </EmailStatusProvider>
-    </CallProvider>
+    </EmailStatusProvider>
   );
 }

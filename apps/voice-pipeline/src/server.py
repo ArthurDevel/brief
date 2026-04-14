@@ -34,7 +34,7 @@ from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
 from pipecat.transports.base_transport import TransportParams
-from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
+from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
@@ -67,7 +67,7 @@ from src.langfuse_observer import LangfuseObserver
 from src.tracked_services import UsageTracker
 from src.pipeline import create_pipeline, PipelineResult
 from src.scheduler import fetch_company_phones, start_scheduler
-from src.session import end_session, load_user_context, start_session
+from src.session import build_email_account, end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
 from src.tools.email_client import close_imap_connection, create_imap_connection, create_email_client_context, EmailClientContext
 from src.tools import contact_sync
@@ -252,6 +252,36 @@ async def cancel_stt_tasks(stt: DeepgramFluxSTTService) -> None:
         logger.warning("[server] Timed out waiting for %d STT tasks to cancel", len(tasks))
 
     logger.info("[server] Cancelled %d dangling STT task(s)", len(tasks))
+
+
+def _validate_browser_call_prerequisites(user_id: str, supabase: Any) -> tuple[bool, str | None]:
+    """Validate browser-call prerequisites before allocating a WebRTC session.
+
+    Returns:
+        Tuple of (is_valid, error_code). error_code is a stable frontend code.
+    """
+    account_response = (
+        supabase.table("user_email_accounts")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    account_rows = cast(list[dict[str, Any]], account_response.data or []) if account_response else []
+    if not account_rows:
+        return False, "EMAIL_ACCOUNT_REQUIRED"
+
+    try:
+        build_email_account(account_rows[0], supabase)
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        if "credentials not configured" in message:
+            return False, "EMAIL_PASSWORDS_REQUIRED"
+        return False, "CALL_START_FAILED"
+
+    return True, None
 
 
 # ============================================================================
@@ -805,10 +835,14 @@ async def trigger_call(request: Request) -> JSONResponse:
         .execute()
     )
 
-    if not response.data:
+    if response is None:
         return JSONResponse({"success": False, "error": "no_phone_configured"})
 
-    row = cast(dict[str, Any], response.data)
+    response_data = response.data
+    if response_data is None:
+        return JSONResponse({"success": False, "error": "no_phone_configured"})
+
+    row = cast(dict[str, Any], response_data)
     phone = row.get("phone")
     if not phone or not phone.get("number") or not phone.get("countryCode"):
         return JSONResponse({"success": False, "error": "no_phone_configured"})
@@ -872,6 +906,19 @@ async def webrtc_start(request: Request) -> JSONResponse:
     user_id = verify_token(token, supabase)
     if not user_id:
         return JSONResponse({"error": "Invalid token"}, status_code=401)
+
+    prerequisites_ok, prerequisite_error_code = _validate_browser_call_prerequisites(
+        user_id, supabase
+    )
+    if not prerequisites_ok:
+        status_code = 400 if prerequisite_error_code != "CALL_START_FAILED" else 500
+        return JSONResponse(
+            {
+                "code": prerequisite_error_code,
+                "error": prerequisite_error_code,
+            },
+            status_code=status_code,
+        )
 
     if not check_usage_limit(user_id, supabase):
         return JSONResponse({"error": "Monthly call limit reached", "code": "LIMIT_REACHED"}, status_code=403)
@@ -1208,7 +1255,6 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_enabled=False,
             serializer=serializer,
         ),
     )

@@ -1,21 +1,16 @@
 /**
- * Voice call page with two ways to start a conversation.
- *
- * Consumes the shared CallContext for all call state and actions.
- * The session lifecycle is managed by CallProvider (wrapped at the
- * dashboard layout level).
+ * Dashboard call launcher page with phone-based call options and a browser-call entry point.
  *
  * Responsibilities:
- * - Render call UI (start/end buttons, status, errors)
- * - Delegate call actions to CallContext
  * - Display QR code for phone-based calling (matched to user's country)
  * - Show unsupported-country message when no matching company phone exists
+ * - Trigger the outbound "Call me" flow
+ * - Open the standalone browser-call page in a new tab
  */
 
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useCall } from "@/contexts/CallContext";
 import { Smartphone, Monitor, QrCode, UserPlus, PhoneOutgoing } from "lucide-react";
 import * as QRCode from "qrcode";
 import type { UserSettings, CompanyPhone, UserPhone } from "@/lib/types";
@@ -69,8 +64,6 @@ async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
 // ============================================================================
 
 export default function CallPage() {
-  const { callActive, status, error, startCall, endCall } = useCall();
-
   // Data state
   const [userPhone, setUserPhone] = useState<UserPhone | null>(null);
   const [companyPhones, setCompanyPhones] = useState<CompanyPhone[]>([]);
@@ -172,6 +165,14 @@ export default function CallPage() {
     }
   }, []);
 
+  /**
+   * Opens the standalone browser-call screen in a new tab.
+   * This must happen directly in the click handler so the browser treats it as a user-initiated tab open.
+   */
+  const openBrowserCall = useCallback(() => {
+    window.open("/call?autostart=1", "_blank", "noopener,noreferrer");
+  }, []);
+
   // ============================================================================
   // RENDER
   // ============================================================================
@@ -192,12 +193,6 @@ export default function CallPage() {
           </div>
         ) : (
           <>
-        {error && (
-          <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-
         <div className="flex flex-col gap-6">
 
           {/* Phone card */}
@@ -306,26 +301,16 @@ export default function CallPage() {
             <div className="flex flex-col">
               <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">Call from your browser</h3>
               <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
-                Start a voice conversation directly from this page. No app or phone needed.
+                Start a browser call.
               </p>
 
-              <div className="flex items-center gap-4">
-                {!callActive ? (
-                  <button
-                    onClick={startCall}
-                    className="flex items-center justify-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-5 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition"
-                  >
-                    Start Call
-                  </button>
-                ) : (
-                  <button
-                    onClick={endCall}
-                    className="flex items-center justify-center gap-2 bg-red-600 text-white px-5 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-red-700 transition"
-                  >
-                    End Call
-                  </button>
-                )}
-                <span className="text-[13px] font-medium text-[var(--text-secondary)]">{status}</span>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={openBrowserCall}
+                  className="flex items-center justify-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-5 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition"
+                >
+                  Start browser call
+                </button>
               </div>
             </div>
           </section>

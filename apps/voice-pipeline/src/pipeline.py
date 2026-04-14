@@ -23,7 +23,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import aiohttp
-from pipecat.frames.frames import InputAudioRawFrame, LLMMessagesFrame, TTSAudioRawFrame
+from pipecat.frames.frames import InputAudioRawFrame, TTSAudioRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -423,8 +423,8 @@ def create_pipeline(
             audio_out_sample_rate=sample_rate,
             enable_metrics=True,
             enable_usage_metrics=True,
-            observers=[cost_tracker, langfuse_observer],
         ),
+        observers=[cost_tracker, langfuse_observer],
     )
     logger.info("[startup] Pipeline task created")
 

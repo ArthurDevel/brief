@@ -382,8 +382,18 @@ export function logAndMapDashboardError(
   context: DashboardErrorContext,
   fallbackCode?: DashboardErrorCode
 ): string {
-  console.error("[dashboard-error]", { context, error: input });
-  return mapDashboardError(input, context, fallbackCode);
+  const details = mapDashboardErrorDetails(input, context, fallbackCode);
+
+  if (process.env.NODE_ENV !== "production") {
+    console.warn("[dashboard-error]", {
+      context,
+      code: details.code,
+      message: details.message,
+      error: input,
+    });
+  }
+
+  return details.message;
 }
 
 export async function buildDashboardErrorFromResponse(
