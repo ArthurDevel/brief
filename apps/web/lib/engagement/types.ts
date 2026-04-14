@@ -5,7 +5,7 @@
  * email pipeline: email types, candidates, event tracking, and content.
  *
  * Responsibilities:
- * - Define the EmailType union of all 10 engagement email keys
+ * - Define the EmailType union of all 11 engagement email keys
  * - Define EmailCandidate for users matched to an email type
  * - Define EmailEventRow for the email_events database table
  * - Define EngagementEmailContent returned by template functions
@@ -18,6 +18,7 @@
 
 /** All possible engagement email type keys. */
 export type EmailType =
+  | "email_verified"
   | "onboarding_incomplete_1h"
   | "onboarding_incomplete_24h"
   | "onboarding_incomplete_72h"
