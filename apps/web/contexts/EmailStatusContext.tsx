@@ -9,7 +9,7 @@
  * Responsibilities:
  * - Fetch user settings and derive email status from emailAccount summary
  * - Cache connection test results in localStorage (12h TTL, keyed by email address)
- * - Expose status + refresh to consuming components via context
+ * - Expose status, status detail, and refresh to consuming components via context
  */
 
 "use client";
@@ -20,6 +20,7 @@ import {
   useState,
   useCallback,
   useEffect,
+  useRef,
   type ReactNode,
 } from "react";
 import {
@@ -29,6 +30,11 @@ import {
   type EmailStatus,
   type EmailStatusResult,
 } from "@/lib/email-status-cache";
+import {
+  getStoredEmailStatus,
+  getEmailStatusFromTestResult,
+  type EmailConnectionTestResult,
+} from "@/lib/email-status";
 import type { UserSettings } from "@/lib/types";
 
 // ============================================================================
@@ -36,17 +42,16 @@ import type { UserSettings } from "@/lib/types";
 // ============================================================================
 
 /** Response shape from POST /api/user/settings/test-connection */
-interface TestConnectionResponse {
-  imap: { ok: boolean; error?: string };
-  smtp: { ok: boolean; error?: string };
-}
+type TestConnectionResponse = EmailConnectionTestResult;
 
 /** Values exposed by the EmailStatusContext to consuming components. */
 interface EmailStatusContextValue {
   /** Current email status, or null while loading */
   status: EmailStatus | null;
-  /** Clears the cache and re-runs the full status check */
-  refresh: () => void;
+  /** Optional detail explaining the current status */
+  message: string | null;
+  /** Re-runs the status check. force=true bypasses any cached result. */
+  refresh: (force?: boolean) => void;
 }
 
 // ============================================================================
@@ -95,38 +100,28 @@ async function testConnection(): Promise<TestConnectionResponse> {
  * @returns The resolved email status result
  */
 async function resolveEmailStatus(
-  settings: UserSettings
+  settings: UserSettings,
+  options?: { forceRefresh?: boolean }
 ): Promise<EmailStatusResult> {
-  // Step 1: Check if email is configured at all
-  if (!settings.emailAccount) {
-    return { status: "not_configured" };
-  }
-
-  const account = settings.emailAccount;
-
-  // Step 2: If the account has a non-connected status, return it directly
-  if (account.status === "reconnect_required" || account.status === "error") {
-    return { status: "error", message: account.lastError ?? undefined };
-  }
-
-  if (account.status === "pending") {
-    return { status: "not_configured" };
+  const storedStatus = getStoredEmailStatus(settings.emailAccount);
+  if (storedStatus.status !== "connected") {
+    return storedStatus;
   }
 
   // Step 3: Account reports "connected" -- verify with a cached connection test
+  const account = settings.emailAccount!;
   const cacheKey = account.emailAddress ?? account.id;
 
-  const cached = getCachedEmailStatus(cacheKey);
-  if (cached) {
-    return cached;
+  if (!options?.forceRefresh) {
+    const cached = getCachedEmailStatus(cacheKey);
+    if (cached) {
+      return cached;
+    }
   }
 
   // Step 4: Run the connection test and cache the result
   const testResult = await testConnection();
-
-  const result: EmailStatusResult = testResult.imap.ok
-    ? { status: "connected" }
-    : { status: "error", message: testResult.imap.error };
+  const result = getEmailStatusFromTestResult(testResult);
 
   setCachedEmailStatus(cacheKey, result);
   return result;
@@ -151,7 +146,10 @@ export function EmailStatusProvider({
   children: ReactNode;
 }): React.ReactElement {
   const [status, setStatus] = useState<EmailStatus | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [cacheKey, setCacheKey] = useState<string | null>(null);
+  const isCheckingRef = useRef(false);
+  const queuedForceRefreshRef = useRef(false);
 
   /**
    * Runs the full email status check flow:
@@ -159,19 +157,41 @@ export function EmailStatusProvider({
    * On any network/server error, defaults to "connected" to avoid
    * showing a misleading banner.
    */
-  const checkStatus = useCallback(async () => {
+  const checkStatus = useCallback(async (options?: { forceRefresh?: boolean }) => {
+    if (isCheckingRef.current) {
+      if (options?.forceRefresh) {
+        queuedForceRefreshRef.current = true;
+      }
+      return;
+    }
+
+    isCheckingRef.current = true;
     setStatus(null);
+    setMessage(null);
 
     try {
       const settings = await fetchUserSettings();
       const key = settings.emailAccount?.emailAddress ?? settings.emailAccount?.id ?? null;
       setCacheKey(key);
 
-      const result = await resolveEmailStatus(settings);
+      if (options?.forceRefresh && key) {
+        clearEmailStatusCache(key);
+      }
+
+      const result = await resolveEmailStatus(settings, options);
       setStatus(result.status);
+      setMessage(result.message ?? null);
     } catch {
       // Fail silently -- don't show a misleading banner on network errors
       setStatus("connected");
+      setMessage(null);
+    } finally {
+      isCheckingRef.current = false;
+
+      if (queuedForceRefreshRef.current) {
+        queuedForceRefreshRef.current = false;
+        void checkStatus({ forceRefresh: true });
+      }
     }
   }, []);
 
@@ -179,11 +199,11 @@ export function EmailStatusProvider({
    * Clears the localStorage cache for the current user and re-runs
    * the full status check. Intended for use after saving settings.
    */
-  const refresh = useCallback(() => {
+  const refresh = useCallback((force = false) => {
     if (cacheKey) {
       clearEmailStatusCache(cacheKey);
     }
-    checkStatus();
+    void checkStatus({ forceRefresh: force });
   }, [cacheKey, checkStatus]);
 
   // Run the check on mount
@@ -191,7 +211,34 @@ export function EmailStatusProvider({
     checkStatus();
   }, [checkStatus]);
 
-  const value: EmailStatusContextValue = { status, refresh };
+  useEffect(() => {
+    function refreshAfterReturn(): void {
+      if (isCheckingRef.current) {
+        return;
+      }
+
+      if (cacheKey) {
+        clearEmailStatusCache(cacheKey);
+      }
+      void checkStatus();
+    }
+
+    function handleVisibilityChange(): void {
+      if (document.visibilityState === "visible") {
+        refreshAfterReturn();
+      }
+    }
+
+    window.addEventListener("focus", refreshAfterReturn);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", refreshAfterReturn);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [cacheKey, checkStatus]);
+
+  const value: EmailStatusContextValue = { status, message, refresh };
 
   return (
     <EmailStatusContext.Provider value={value}>
@@ -208,7 +255,7 @@ export function EmailStatusProvider({
  * Hook to consume the email status context.
  * Must be used within an EmailStatusProvider.
  *
- * @returns Object with status (EmailStatus | null) and refresh function
+ * @returns Object with status, optional message, and refresh function
  */
 export function useEmailStatus(): EmailStatusContextValue {
   const context = useContext(EmailStatusContext);

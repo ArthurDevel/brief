@@ -21,12 +21,17 @@ import { createImapConnection, closeImapConnection, testSmtpConnection } from "@
 import { retrieveSecret } from "@dublin/tools";
 import { getActiveEmailAccount } from "@/lib/email-accounts";
 import { getAccount } from "@/lib/unipile/client";
+import {
+  getConnectionErrorMessage,
+  type EmailStatus,
+} from "@/lib/email-status";
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
 interface TestResult {
+  status: EmailStatus;
   imap: { ok: boolean; error?: string };
   smtp: { ok: boolean; error?: string };
 }
@@ -64,7 +69,7 @@ export async function POST(_request: NextRequest): Promise<NextResponse<TestResu
     return testUnipileConnection(account.id, supabase, user.id);
   }
 
-  return testCustomConnection(supabase, user.id);
+  return testCustomConnection(account.id, supabase, user.id);
 }
 
 // ============================================================================
@@ -101,18 +106,32 @@ async function testUnipileConnection(
   try {
     const unipileAccount = await getAccount(row.unipile_account_id);
     const isOk = unipileAccount.status === "connected";
+    const message = isOk
+      ? null
+      : `Unipile account status: ${unipileAccount.status}`;
+
+    await updateStoredStatus(
+      supabase,
+      accountId,
+      userId,
+      unipileAccount.status as EmailStatus,
+      message
+    );
 
     return NextResponse.json({
+      status: unipileAccount.status as EmailStatus,
       imap: isOk
         ? { ok: true }
-        : { ok: false, error: `Unipile account status: ${unipileAccount.status}` },
+        : { ok: false, error: message ?? undefined },
       smtp: isOk
         ? { ok: true }
-        : { ok: false, error: `Unipile account status: ${unipileAccount.status}` },
+        : { ok: false, error: message ?? undefined },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unipile status check failed";
+    await updateStoredStatus(supabase, accountId, userId, "error", message);
     return NextResponse.json({
+      status: "error",
       imap: { ok: false, error: message },
       smtp: { ok: false, error: message },
     });
@@ -126,6 +145,7 @@ async function testUnipileConnection(
  * @returns TestResult with per-protocol results
  */
 async function testCustomConnection(
+  accountId: string,
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
 ): Promise<NextResponse<TestResult | { error: string }>> {
@@ -172,7 +192,12 @@ async function testCustomConnection(
     }),
   ]);
 
-  return NextResponse.json({ imap: imapResult, smtp: smtpResult });
+  const status: EmailStatus =
+    imapResult.ok && smtpResult.ok ? "connected" : "error";
+  const message = getConnectionErrorMessage({ imap: imapResult, smtp: smtpResult }) ?? null;
+  await updateStoredStatus(supabase, accountId, userId, status, message);
+
+  return NextResponse.json({ status, imap: imapResult, smtp: smtpResult });
 }
 
 /**
@@ -195,5 +220,26 @@ async function testImap(
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "IMAP connection failed" };
+  }
+}
+
+async function updateStoredStatus(
+  supabase: ReturnType<typeof createServerSupabaseClient>,
+  accountId: string,
+  userId: string,
+  status: EmailStatus,
+  message: string | null
+): Promise<void> {
+  const { error } = await supabase
+    .from("user_email_accounts")
+    .update({
+      status,
+      last_error: message,
+    })
+    .eq("id", accountId)
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("[user/settings/test-connection] Failed to persist email status:", error.message);
   }
 }
