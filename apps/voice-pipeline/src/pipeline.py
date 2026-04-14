@@ -91,6 +91,7 @@ TOOL_NARRATIONS: dict[str, str] = {
     "read_email": "Reading that email.",
     "read_thread": "Pulling up the thread.",
     "search_emails": "Searching your emails.",
+    "read_calendar": "Checking your calendar.",
     "draft_email": "Drafting that email.",
     "send_email": "Sending that email.",
     "archive_email": "Archiving that email.",

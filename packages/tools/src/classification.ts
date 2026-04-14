@@ -20,6 +20,7 @@ const DEFAULT_CLASSIFICATIONS: Record<ToolName, ActionClassification> = {
   read_email: "read_only",
   read_thread: "read_only",
   search_emails: "read_only",
+  read_calendar: "read_only",
   save_memory: "read_only",
   submit_feature_request: "read_only",
   what_can_you_do: "read_only",

@@ -29,8 +29,11 @@ BASE_INSTRUCTIONS = (
     "You have access to tools to list, read, search, draft, delete, archive, "
     "reply to, and send emails, move emails between folders, and list available folders. "
     "You can also save things to memory, submit feature requests, and retrieve or "
-    "configure daily newsletter summaries. Use them whenever the user asks about "
-    "their inbox or wants to take action.\n"
+    "configure daily newsletter summaries. A placeholder calendar tool exists, but "
+    "calendar access is not implemented yet. If that tool says calendar is not "
+    "implemented, tell the user clearly and ask whether they want to send feedback "
+    "to the developers using submit_feature_request. Use the available tools "
+    "whenever the user asks about their inbox or wants to take action.\n"
     "\n"
     "Speak fast and be brief. Use short sentences. No filler words. Get to "
     "the point immediately. When reading an email, summarize the key "
@@ -95,6 +98,7 @@ ALL_TOOLS: list[dict[str, str]] = [
     {"name": "read_email", "default_class": "read_only"},
     {"name": "read_thread", "default_class": "read_only"},
     {"name": "search_emails", "default_class": "read_only"},
+    {"name": "read_calendar", "default_class": "read_only"},
     {"name": "mark_as_read", "default_class": "mutating_auto"},
     {"name": "archive_email", "default_class": "mutating_auto"},
     {"name": "draft_email", "default_class": "mutating_auto"},
