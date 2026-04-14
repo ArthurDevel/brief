@@ -593,6 +593,18 @@ def _dispatch_tool(
     Raises:
         ValueError: If tool_name is unknown.
     """
+    if tool_name == "read_calendar":
+        return {
+            "implemented": False,
+            "message": "I can't check your calendar yet.",
+            "instruction": (
+                "Tell the user that calendar support is not available yet, and "
+                "ask whether they want to send feedback to the developers using "
+                "submit_feature_request."
+            ),
+            "feedback_tool_name": "submit_feature_request",
+        }, None, None
+
     # For Unipile accounts, delegate email operations to the Unipile client
     if email_ctx.connection_type == "unipile":
         return _dispatch_tool_unipile(tool_name, args, email_ctx, supabase, user_id, session_id)

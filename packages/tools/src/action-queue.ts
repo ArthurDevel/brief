@@ -726,6 +726,19 @@ async function dispatchTool(
       return { result: { markdown: formatEmailSummaries(emails, "Search Results") }, undoRecipe: null };
     }
 
+    case "read_calendar": {
+      return {
+        result: {
+          implemented: false,
+          message: "I can't check your calendar yet.",
+          instruction:
+            "Tell the user that calendar support is not available yet, and ask whether they want to send feedback to the developers using submit_feature_request.",
+          feedbackToolName: "submit_feature_request",
+        },
+        undoRecipe: null,
+      };
+    }
+
     case "mark_as_read": {
       await emailClient.markAsRead(args.email_id as string);
       return { result: { marked: true }, undoRecipe: null };

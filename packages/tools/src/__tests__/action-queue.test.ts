@@ -2377,3 +2377,42 @@ describe("what_can_you_do", () => {
     expect((result.result as Record<string, unknown>).markdown).toContain("archive");
   });
 });
+
+describe("read_calendar", () => {
+  beforeAll(() => {
+    setMockUnipileClient(createMockEmailClient());
+  });
+
+  afterAll(() => {
+    setMockUnipileClient(null);
+  });
+
+  it("returns placeholder guidance with submit_feature_request", async () => {
+    const store: Record<string, Record<string, Row>> = { actions: {} };
+    const supabase = createFakeSupabase(store) as unknown as SupabaseClient;
+
+    const input: ActionInput = {
+      userId: "user-1",
+      sessionId: "session-1",
+      toolName: "read_calendar",
+      arguments: {
+        start: "2026-04-13",
+        end: "2026-04-14",
+      },
+    };
+
+    const result: ActionResult = await handleToolCall(
+      input,
+      {},
+      buildUnipileTestAccount(),
+      supabase,
+    );
+
+    expect(result.status).toBe("executed");
+    expect(result.result).toMatchObject({
+      implemented: false,
+      feedbackToolName: "submit_feature_request",
+    });
+    expect((result.result as Record<string, unknown>).instruction).toContain("submit_feature_request");
+  });
+});

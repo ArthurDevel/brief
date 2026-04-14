@@ -25,6 +25,7 @@ export type ToolName =
   | "read_email"
   | "read_thread"
   | "search_emails"
+  | "read_calendar"
   | "mark_as_read"
   | "draft_email"
   | "delete_email"

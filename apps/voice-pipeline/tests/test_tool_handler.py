@@ -452,3 +452,35 @@ class TestWhatCanYouDo:
         assert result.result is not None
         assert "archive" in result.result["markdown"].lower()
         assert "read" in result.result["markdown"].lower()
+
+
+class TestReadCalendar:
+    """read_calendar should return placeholder guidance."""
+
+    def test_returns_placeholder_feedback_instruction(self):
+        """handle_tool_call with read_calendar returns a stub response
+        that points the model to submit_feature_request."""
+        from src.tools.handlers import handle_tool_call, ActionInput
+
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.insert.return_value.execute.return_value.data = [
+            {"id": "fake-action-id"}
+        ]
+
+        result = handle_tool_call(
+            input=ActionInput(
+                user_id="test-user",
+                session_id="test-session",
+                tool_name="read_calendar",
+                arguments={"start": "2026-04-13", "end": "2026-04-14"},
+            ),
+            user_config={},
+            email_ctx=_make_email_ctx(),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert result.result is not None
+        assert result.result["implemented"] is False
+        assert result.result["feedback_tool_name"] == "submit_feature_request"
+        assert "submit_feature_request" in result.result["instruction"]
