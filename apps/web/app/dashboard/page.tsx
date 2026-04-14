@@ -16,11 +16,16 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { Clock, Timer, Zap } from "lucide-react";
-import type { SessionSummary } from "@/lib/types";
+import { Calendar, Check, ChevronRight, Clock, Lock, Mail, Phone, Timer, Zap } from "lucide-react";
+import type { SessionSummary, UserSettings } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 import SendEmailModal from "@/app/dashboard/components/SendEmailModal";
+import { useEmailStatus } from "@/contexts/EmailStatusContext";
+import {
+  getDashboardOnboardingState,
+  type DashboardOnboardingStep,
+} from "@/lib/dashboard-onboarding";
 import { getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
 import {
   buildDashboardErrorFromResponse,
@@ -121,6 +126,16 @@ function Spinner() {
     <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
   );
 }
+
+const ONBOARDING_STEP_ICONS: Record<
+  DashboardOnboardingStep["id"],
+  typeof Phone
+> = {
+  phone: Phone,
+  email: Mail,
+  pin: Lock,
+  schedule: Calendar,
+};
 
 // ============================================================================
 // COMPONENTS
@@ -352,13 +367,172 @@ function PreviousSessionCard({
   );
 }
 
+function FirstCallCard() {
+  const benefits = [
+    "Hear what matters from your inbox without looking at a screen",
+    "Reply, archive, and triage by voice while you drive",
+    "Arrive with the easy email already handled",
+  ];
+
+  return (
+    <section className="settings-panel">
+      <div className="max-w-2xl">
+        <h2 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 8px 0", letterSpacing: "-0.02em" }}>
+          Make your first call
+        </h2>
+        <p style={{ fontSize: 15, color: "var(--text-secondary)", margin: "0 0 18px 0", lineHeight: 1.5 }}>
+          Clear your inbox on the drive to work. BrewDock reads your email aloud, drafts replies in your voice,
+          and helps you get through the easy stuff before you even arrive.
+        </p>
+
+        <div className="mb-6 flex flex-col gap-3">
+          {benefits.map((benefit) => (
+            <div key={benefit} className="flex items-start gap-3">
+              <div
+                className="mt-0.5 flex h-7 w-7 items-center justify-center shrink-0"
+                style={{ background: "rgba(22, 163, 74, 0.1)", color: "#15803d" }}
+              >
+                <Check size={14} strokeWidth={2.5} />
+              </div>
+              <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: 0, lineHeight: 1.45 }}>
+                {benefit}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <Link
+            href="/dashboard/call"
+            style={{
+              background: "var(--btn-primary-bg)",
+              color: "var(--btn-primary-text)",
+              padding: "10px 16px",
+              fontSize: 13,
+              fontWeight: 500,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+            className="hover:opacity-90 transition-opacity"
+          >
+            Make your first call <span style={{ fontSize: 16 }}>&rsaquo;</span>
+          </Link>
+          <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+            No app to stare at. Just call and talk naturally.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function OnboardingCard({ settings, emailStatus }: { settings: UserSettings; emailStatus: ReturnType<typeof useEmailStatus>["status"] }) {
+  const onboardingState = getDashboardOnboardingState(settings, emailStatus);
+  const completionPercent = (onboardingState.requiredCompleted / onboardingState.requiredTotal) * 100;
+
+  if (onboardingState.isComplete) {
+    return null;
+  }
+
+  return (
+    <section className="settings-panel overflow-hidden" style={{ padding: 0 }}>
+      <div
+        aria-hidden="true"
+        className="h-1 w-full"
+        style={{ background: "rgba(22, 163, 74, 0.12)" }}
+      >
+        <div
+          className="h-full transition-all duration-300"
+          style={{ width: `${completionPercent}%`, background: "#16a34a" }}
+        />
+      </div>
+
+      <div className="p-6 md:p-6">
+        <div className="relative mb-5">
+          <div style={{ maxWidth: 560 }}>
+            <h2 style={{ margin: "0 0 6px 0" }}>Finish onboarding</h2>
+            <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+              You can explore the dashboard first. Finish these setup steps when you&apos;re ready to make calls,
+              connect your inbox, and sign in securely.
+            </p>
+          </div>
+          <span
+            className="mt-3 inline-flex whitespace-nowrap px-2.5 py-1 text-xs font-medium md:absolute md:right-0 md:top-0 md:mt-0"
+            style={{ background: "var(--bg-hover)", border: "1px solid var(--border-color)", color: "var(--text-secondary)" }}
+          >
+            {onboardingState.requiredCompleted} of {onboardingState.requiredTotal} required complete
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          {onboardingState.steps.map((step) => {
+            const Icon = ONBOARDING_STEP_ICONS[step.id];
+            return (
+              <Link
+                key={step.id}
+                href={step.href}
+                className="flex items-center gap-3 border p-3 transition-colors hover:bg-[var(--bg-hover)]"
+                style={{ borderColor: "var(--border-color)", color: "inherit", textDecoration: "none" }}
+              >
+                <div
+                  className="flex h-9 w-9 items-center justify-center shrink-0"
+                  style={{
+                    background: step.complete ? "rgba(22, 163, 74, 0.1)" : "var(--bg-hover)",
+                    color: step.complete ? "#15803d" : "var(--text-secondary)",
+                  }}
+                >
+                  {step.complete ? <Check size={16} strokeWidth={2.5} /> : <Icon size={16} strokeWidth={2} />}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex items-center gap-2">
+                    <span
+                      className="text-[13px] font-medium"
+                      style={{
+                        color: step.complete ? "var(--text-secondary)" : "var(--text-primary)",
+                        textDecoration: step.complete ? "line-through" : "none",
+                      }}
+                    >
+                      {step.title}
+                    </span>
+                    {step.optional && (
+                      <span
+                        className="px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide"
+                        style={{ background: "var(--bg-hover)", color: "var(--text-secondary)" }}
+                      >
+                        Optional
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0 }}>{step.description}</p>
+                </div>
+
+                <ChevronRight
+                  size={16}
+                  strokeWidth={2}
+                  className="shrink-0"
+                  style={{ color: "var(--text-secondary)" }}
+                />
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ============================================================================
 // RENDER
 // ============================================================================
 
 export default function DashboardOverviewPage() {
+  const { status: emailStatus } = useEmailStatus();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [allActions, setAllActions] = useState<ActionRow[]>([]);
+  const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -387,9 +561,10 @@ export default function DashboardOverviewPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [sessionsRes, actionsRes] = await Promise.all([
+      const [sessionsRes, actionsRes, settingsRes] = await Promise.all([
         fetch("/api/sessions"),
         fetch("/api/actions"),
+        fetch("/api/user/settings"),
       ]);
 
       if (sessionsRes.ok) {
@@ -400,6 +575,11 @@ export default function DashboardOverviewPage() {
       if (actionsRes.ok) {
         const actionsData: ActionRow[] = await actionsRes.json();
         setAllActions(actionsData);
+      }
+
+      if (settingsRes.ok) {
+        const settingsData: UserSettings = await settingsRes.json();
+        setSettings(settingsData);
       }
     } catch {
       // Non-fatal for overview
@@ -553,6 +733,7 @@ export default function DashboardOverviewPage() {
 
   const mostRecent = sessions[0] ?? null;
   const previousSessions = sessions.slice(1, 3);
+  const showOnboardingCard = settings ? !getDashboardOnboardingState(settings, emailStatus).isComplete : false;
 
   // Filter actions for the most recent session, sorted: pending first, then oldest first
   const mostRecentActions = mostRecent
@@ -564,23 +745,25 @@ export default function DashboardOverviewPage() {
       <div className="page-header">
         <div className="flex items-center justify-between">
           <h1>Overview</h1>
-          <Link
-            href="/dashboard/sessions"
-            style={{
-              background: "var(--btn-primary-bg)",
-              color: "var(--btn-primary-text)",
-              padding: "8px 16px",
-              fontSize: 13,
-              fontWeight: 500,
-              textDecoration: "none",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-            }}
-            className="hover:opacity-90 transition-opacity"
-          >
-            All Sessions <span style={{ fontSize: 16 }}>&rsaquo;</span>
-          </Link>
+          {!showOnboardingCard && mostRecent && (
+            <Link
+              href="/dashboard/sessions"
+              style={{
+                background: "var(--btn-primary-bg)",
+                color: "var(--btn-primary-text)",
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 500,
+                textDecoration: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+              className="hover:opacity-90 transition-opacity"
+            >
+              All Sessions <span style={{ fontSize: 16 }}>&rsaquo;</span>
+            </Link>
+          )}
         </div>
         <p>Manage your Voice Email sessions and activities.</p>
       </div>
@@ -590,36 +773,40 @@ export default function DashboardOverviewPage() {
           <div className="mb-6 bg-red-50 p-4 text-sm text-red-700">{error}</div>
         )}
 
-        {/* Most recent session */}
-        {mostRecent ? (
-          <div className="mb-6">
-            <RecentSessionCard
-              session={mostRecent}
-              actions={mostRecentActions}
-              processingIds={processingIds}
-              onApprove={handleApprove}
-              onReject={handleReject}
-              onBulk={handleBulk}
-              onRowClick={setSelectedAction}
-            />
-          </div>
-        ) : (
-          <div className="settings-panel">
-            <p className="text-[13px] text-[var(--text-secondary)]">No sessions yet.</p>
-          </div>
-        )}
+        {settings && <OnboardingCard settings={settings} emailStatus={emailStatus} />}
 
-        {/* Previous sessions */}
-        {previousSessions.length > 0 && (
-          <div className="mb-6 flex flex-col">
-            {previousSessions.map((session) => (
-              <PreviousSessionCard
-                key={session.id}
-                session={session}
-                hasPendingActions={session.pendingActionCount > 0}
-              />
-            ))}
-          </div>
+        {!showOnboardingCard && (
+          <>
+            {/* Most recent session */}
+            {mostRecent ? (
+              <div className="mb-6">
+                <RecentSessionCard
+                  session={mostRecent}
+                  actions={mostRecentActions}
+                  processingIds={processingIds}
+                  onApprove={handleApprove}
+                  onReject={handleReject}
+                  onBulk={handleBulk}
+                  onRowClick={setSelectedAction}
+                />
+              </div>
+            ) : (
+              <FirstCallCard />
+            )}
+
+            {/* Previous sessions */}
+            {previousSessions.length > 0 && (
+              <div className="mb-6 flex flex-col">
+                {previousSessions.map((session) => (
+                  <PreviousSessionCard
+                    key={session.id}
+                    session={session}
+                    hasPendingActions={session.pendingActionCount > 0}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
 
       </div>
