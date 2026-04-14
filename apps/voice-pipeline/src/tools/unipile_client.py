@@ -19,6 +19,7 @@ used by email_client.py so tool handlers are provider-agnostic.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -353,8 +354,9 @@ async def batch_move_to_folder(
 ) -> list[dict[str, Any]]:
     """Move multiple emails to a target folder through Unipile.
 
-    Resolves the source folder once, then loops over email IDs making one
-    PUT call per email. Returns a result per email with undo recipe and
+    Resolves the source folder once, then moves all emails concurrently
+    via asyncio.gather (safe because these are independent HTTP calls,
+    not IMAP). Returns a result per email with undo recipe and
     success/failure status.
 
     Args:
@@ -373,8 +375,8 @@ async def batch_move_to_folder(
     if source_folder == "INBOX":
         resolved_source = await _resolve_folder_by_role(account_id, "inbox")
 
-    results: list[dict[str, Any]] = []
-    for email_id in email_ids:
+    async def _move_single(email_id: str) -> dict[str, Any]:
+        """Move a single email and return its result dict."""
         try:
             # For Outlook: fetch stable RFC Message-ID BEFORE moving
             rfc_message_id: str | None = None
@@ -391,19 +393,21 @@ async def batch_move_to_folder(
             if rfc_message_id is not None:
                 undo_params["rfc_message_id"] = rfc_message_id
 
-            results.append({
+            return {
                 "email_id": email_id,
                 "succeeded": True,
                 "undo_recipe": {"operation": "unipile_move_email", "params": undo_params},
-            })
+            }
         except Exception as e:
-            results.append({
+            return {
                 "email_id": email_id,
                 "succeeded": False,
                 "error": str(e),
-            })
+            }
 
-    return results
+    # Fire all moves concurrently -- these are independent HTTP requests
+    results = await asyncio.gather(*[_move_single(eid) for eid in email_ids])
+    return list(results)
 
 
 # ============================================================================
