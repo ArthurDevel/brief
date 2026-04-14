@@ -316,6 +316,18 @@ function inferCodeFromMessage(
 
   if (
     includesAny(haystack, [
+      "already used by another account",
+      "already used by someone",
+      "already exists",
+      "duplicate key value violates unique constraint",
+      "idx_user_settings_phone_number",
+    ])
+  ) {
+    return "PHONE_ALREADY_IN_USE";
+  }
+
+  if (
+    includesAny(haystack, [
       "phone number belongs to",
       "doesn't match the selected country",
       "does not match the selected country",

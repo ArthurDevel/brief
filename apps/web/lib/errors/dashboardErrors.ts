@@ -48,6 +48,7 @@ export const DASHBOARD_ERROR_MESSAGES = {
   COMPANY_PHONES_LOAD_FAILED: "We couldn't load supported phone numbers. Please refresh and try again.",
   PHONE_INVALID: "Enter a valid phone number in international format.",
   PHONE_COUNTRY_MISMATCH: "That phone number doesn't match the selected country.",
+  PHONE_ALREADY_IN_USE: "This phone number is already used by another account. Please use another number.",
   PHONE_SAVE_FAILED: "We couldn't save your phone number. Please try again.",
   PIN_SAVE_FAILED: "We couldn't save your PIN. Please try again.",
   MEMORY_CREATE_FAILED: "We couldn't save that note. Please try again.",

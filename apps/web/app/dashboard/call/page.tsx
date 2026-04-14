@@ -170,7 +170,7 @@ export default function CallPage() {
    * This must happen directly in the click handler so the browser treats it as a user-initiated tab open.
    */
   const openBrowserCall = useCallback(() => {
-    window.open("/call?autostart=1", "_blank", "noopener,noreferrer");
+    window.open("/call", "_blank", "noopener,noreferrer");
   }, []);
 
   // ============================================================================

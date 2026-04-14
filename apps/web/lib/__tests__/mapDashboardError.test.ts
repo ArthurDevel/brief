@@ -48,6 +48,18 @@ describe("mapDashboardError", () => {
     ).toBe("We couldn't access your microphone. Please check your browser permissions.");
   });
 
+  it("maps duplicate phone number errors to the explicit settings message", () => {
+    expect(
+      mapDashboardError(
+        {
+          error: "duplicate key value violates unique constraint \"idx_user_settings_phone_number\"",
+        },
+        "settings-general",
+        "PHONE_SAVE_FAILED"
+      )
+    ).toBe("This phone number is already used by another account. Please use another number.");
+  });
+
   it("falls back to the provided safe code for unknown errors", () => {
     expect(
       mapDashboardError(
@@ -74,7 +86,7 @@ describe("mapDashboardError", () => {
 
 describe("logAndMapDashboardError", () => {
   it("logs the original error before returning the safe message", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const message = logAndMapDashboardError(
       { error: "Action not found" },
@@ -85,6 +97,8 @@ describe("logAndMapDashboardError", () => {
     expect(message).toBe("That action is no longer available.");
     expect(spy).toHaveBeenCalledWith("[dashboard-error]", {
       context: "action-approve",
+      code: "ACTION_NOT_FOUND",
+      message: "That action is no longer available.",
       error: { error: "Action not found" },
     });
 
