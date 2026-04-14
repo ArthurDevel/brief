@@ -2,47 +2,25 @@
  * Tests for the settings API route helper logic.
  *
  * Verifies:
- * - mapRowToSettings correctly maps DB rows + email account to UserSettings DTO
- * - mapRowToSettings returns correct defaults when fields are missing
- * - GET returns defaults for new users (no settings row)
+ * - mapUserSettingsRowToSettings correctly maps DB rows + email account to UserSettings DTO
+ * - mapUserSettingsRowToSettings returns correct defaults when fields are missing
+ * - getDefaultUserSettings returns shared defaults for new users (no settings row)
  */
 
 import { describe, it, expect } from "vitest";
 import type { UserSettings } from "@/lib/types";
-import type { ToolApprovalConfig } from "@dublin/tools/src/types";
-
-// ============================================================================
-// mapRowToSettings -- replicated here since it's not exported from route.ts
-// ============================================================================
-
-/**
- * Maps a database row and email account summary to the UserSettings DTO.
- * Mirrors the mapRowToSettings function in the settings route.
- */
-function mapRowToSettings(
-  row: Record<string, unknown>,
-  emailAccount: UserSettings["emailAccount"]
-): UserSettings {
-  return {
-    emailAccount,
-    voicePreference:
-      ((row.voice_config as Record<string, unknown>)?.voice as string) ??
-      "aura-2-helena-en",
-    voiceSpeed:
-      ((row.voice_config as Record<string, unknown>)?.speed as number) ?? 1.0,
-    toolApprovalConfig:
-      (row.tool_approval_config as ToolApprovalConfig) ?? {},
-    phone: (row.phone as UserSettings["phone"]) ?? null,
-    hasPin: !!row.pin_hash,
-    callSchedule: (row.call_schedule as UserSettings["callSchedule"]) ?? null,
-  };
-}
+import {
+  DEFAULT_SPEED,
+  DEFAULT_VOICE,
+  getDefaultUserSettings,
+  mapUserSettingsRowToSettings,
+} from "@/lib/user-settings-defaults";
 
 // ============================================================================
 // TESTS
 // ============================================================================
 
-describe("mapRowToSettings", () => {
+describe("mapUserSettingsRowToSettings", () => {
   const fakeEmailAccount: UserSettings["emailAccount"] = {
     id: "acc-1",
     provider: "gmail",
@@ -63,7 +41,7 @@ describe("mapRowToSettings", () => {
       call_schedule: { timezone: "America/New_York", monday: "09:00" },
     };
 
-    const result = mapRowToSettings(row, fakeEmailAccount);
+    const result = mapUserSettingsRowToSettings(row, fakeEmailAccount);
 
     expect(result.emailAccount).toBe(fakeEmailAccount);
     expect(result.voicePreference).toBe("aura-2-andromeda-en");
@@ -77,11 +55,11 @@ describe("mapRowToSettings", () => {
   it("returns defaults when optional fields are missing", () => {
     const row = {};
 
-    const result = mapRowToSettings(row, null);
+    const result = mapUserSettingsRowToSettings(row, null);
 
     expect(result.emailAccount).toBeNull();
-    expect(result.voicePreference).toBe("aura-2-helena-en");
-    expect(result.voiceSpeed).toBe(1.0);
+    expect(result.voicePreference).toBe(DEFAULT_VOICE);
+    expect(result.voiceSpeed).toBe(DEFAULT_SPEED);
     expect(result.toolApprovalConfig).toEqual({});
     expect(result.phone).toBeNull();
     expect(result.hasPin).toBe(false);
@@ -91,8 +69,22 @@ describe("mapRowToSettings", () => {
   it("hasPin is false when pin_hash is null", () => {
     const row = { pin_hash: null };
 
-    const result = mapRowToSettings(row, null);
+    const result = mapUserSettingsRowToSettings(row, null);
 
     expect(result.hasPin).toBe(false);
+  });
+});
+
+describe("getDefaultUserSettings", () => {
+  it("returns the shared defaults for users with no settings row", () => {
+    const result = getDefaultUserSettings(null);
+
+    expect(result.emailAccount).toBeNull();
+    expect(result.voicePreference).toBe(DEFAULT_VOICE);
+    expect(result.voiceSpeed).toBe(DEFAULT_SPEED);
+    expect(result.toolApprovalConfig).toEqual({});
+    expect(result.phone).toBeNull();
+    expect(result.hasPin).toBe(false);
+    expect(result.callSchedule).toBeNull();
   });
 });

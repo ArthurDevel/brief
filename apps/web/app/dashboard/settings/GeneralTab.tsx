@@ -15,6 +15,7 @@ import type { ToolApprovalConfig, ActionClassification } from "@dublin/tools/src
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 import { getDefaultClassification } from "@dublin/tools/src/classification";
 import type { DeepgramVoice } from "@/app/api/deepgram/voices/route";
+import { DEFAULT_SPEED, DEFAULT_VOICE } from "@/lib/user-settings-defaults";
 import { type DashboardErrorCode, getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
 import {
   buildDashboardErrorFromResponse,
@@ -24,9 +25,6 @@ import {
 // ============================================================================
 // CONSTANTS
 // ============================================================================
-
-const DEFAULT_VOICE = "aura-2-andromeda-en";
-const DEFAULT_SPEED = 1.2;
 
 const TOOL_NAMES = [
   "mark_as_read",
@@ -270,7 +268,7 @@ export default function GeneralTab() {
 
         setHasPin(settings.hasPin);
         setVoicePreference(settings.voicePreference);
-        setVoiceSpeed(settings.voiceSpeed ?? 1.0);
+        setVoiceSpeed(settings.voiceSpeed ?? DEFAULT_SPEED);
         setToolApprovalConfig(settings.toolApprovalConfig);
         setMemoryEntries(memory);
       } catch (err) {

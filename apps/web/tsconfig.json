@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": ".",
+    "rootDir": "../..",
     "jsx": "preserve",
     "lib": [
       "dom",
@@ -26,6 +26,7 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    "../../shared/**/*.json",
     "next-env.d.ts",
     ".next/types/**/*.ts"
   ],
