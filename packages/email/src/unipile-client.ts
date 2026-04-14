@@ -32,6 +32,7 @@ import type { UndoRecipe } from "@dublin/tools/src/types";
 
 const UNIPILE_API_KEY = process.env.UNIPILE_API_KEY;
 const UNIPILE_DSN = process.env.UNIPILE_DSN;
+const UNIPILE_BASE_URL = normalizeUnipileDsn(UNIPILE_DSN);
 
 // ============================================================================
 // MAIN HANDLERS
@@ -491,10 +492,10 @@ export async function fetchEmailMetaBatch(
  * @returns Base URL string
  */
 function getBaseUrl(): string {
-  if (!UNIPILE_DSN) {
+  if (!UNIPILE_BASE_URL) {
     throw new Error("UNIPILE_DSN environment variable is not set");
   }
-  return UNIPILE_DSN;
+  return UNIPILE_BASE_URL;
 }
 
 /**
@@ -506,6 +507,14 @@ function getApiKey(): string {
     throw new Error("UNIPILE_API_KEY environment variable is not set");
   }
   return UNIPILE_API_KEY;
+}
+
+function normalizeUnipileDsn(dsn: string | undefined): string | undefined {
+  if (!dsn) {
+    return undefined;
+  }
+  const withProtocol = dsn.includes("://") ? dsn : `https://${dsn}`;
+  return withProtocol.replace(/\/+$/, "");
 }
 
 /**

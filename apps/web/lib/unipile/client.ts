@@ -15,6 +15,7 @@
 
 const UNIPILE_API_KEY = process.env.UNIPILE_API_KEY;
 const UNIPILE_DSN = process.env.UNIPILE_DSN;
+const UNIPILE_BASE_URL = normalizeUnipileDsn(UNIPILE_DSN);
 
 // OAuth scopes -- restrict permissions to read/modify only, exclude sending.
 // Google: full OAuth URL required (short names return 400).
@@ -94,7 +95,7 @@ export async function createHostedAuthLink(
   const body: Record<string, unknown> = {
     type: input.type,
     providers: [input.provider],
-    api_url: UNIPILE_DSN,
+    api_url: UNIPILE_BASE_URL,
     expiresOn: input.expiresOn,
     notify_url: input.notifyUrl,
     success_redirect_url: input.successRedirectUrl,
@@ -109,7 +110,7 @@ export async function createHostedAuthLink(
 
   console.log("[unipile/client] createHostedAuthLink request body:", JSON.stringify(body, null, 2));
 
-  const response = await fetch(`${UNIPILE_DSN}/api/v1/hosted/accounts/link`, {
+  const response = await fetch(`${UNIPILE_BASE_URL}/api/v1/hosted/accounts/link`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -141,7 +142,7 @@ export async function getAccount(accountId: string): Promise<UnipileAccount> {
   assertEnvVars();
 
   const response = await fetch(
-    `${UNIPILE_DSN}/api/v1/accounts/${accountId}`,
+    `${UNIPILE_BASE_URL}/api/v1/accounts/${accountId}`,
     {
       method: "GET",
       headers: {
@@ -188,7 +189,7 @@ export async function deleteAccount(accountId: string): Promise<void> {
   assertEnvVars();
 
   const response = await fetch(
-    `${UNIPILE_DSN}/api/v1/accounts/${accountId}`,
+    `${UNIPILE_BASE_URL}/api/v1/accounts/${accountId}`,
     {
       method: "DELETE",
       headers: {
@@ -217,9 +218,17 @@ function assertEnvVars(): void {
   if (!UNIPILE_API_KEY) {
     throw new Error("UNIPILE_API_KEY environment variable is not set");
   }
-  if (!UNIPILE_DSN) {
+  if (!UNIPILE_BASE_URL) {
     throw new Error("UNIPILE_DSN environment variable is not set");
   }
+}
+
+function normalizeUnipileDsn(dsn: string | undefined): string | undefined {
+  if (!dsn) {
+    return undefined;
+  }
+  const withProtocol = dsn.includes("://") ? dsn : `https://${dsn}`;
+  return withProtocol.replace(/\/+$/, "");
 }
 
 /**
