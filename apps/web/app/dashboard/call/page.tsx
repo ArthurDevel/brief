@@ -19,6 +19,10 @@ import { useCall } from "@/contexts/CallContext";
 import { Smartphone, Monitor, QrCode, UserPlus, PhoneOutgoing } from "lucide-react";
 import * as QRCode from "qrcode";
 import type { UserSettings, CompanyPhone, UserPhone } from "@/lib/types";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -36,7 +40,12 @@ const VCARD_CONTACT_NAME = "Brief.ai";
  */
 async function fetchUserSettings(): Promise<UserSettings> {
   const res = await fetch("/api/user/settings");
-  if (!res.ok) throw new Error("Failed to load user settings");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "CALL_SETTINGS_LOAD_FAILED",
+      error: "Failed to load user settings",
+    });
+  }
   return res.json();
 }
 
@@ -46,7 +55,12 @@ async function fetchUserSettings(): Promise<UserSettings> {
  */
 async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
   const res = await fetch("/api/company-phones");
-  if (!res.ok) throw new Error("Failed to load company phone numbers");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "CALL_SETTINGS_LOAD_FAILED",
+      error: "Failed to load company phone numbers",
+    });
+  }
   return res.json();
 }
 
@@ -103,7 +117,7 @@ export default function CallPage() {
           }
         }
       } catch (err) {
-        setLoadError(err instanceof Error ? err.message : "Failed to load data");
+        setLoadError(logAndMapDashboardError(err, "call", "CALL_SETTINGS_LOAD_FAILED"));
       } finally {
         setLoading(false);
       }
@@ -144,22 +158,17 @@ export default function CallPage() {
 
     try {
       const res = await fetch("/api/trigger-call", { method: "POST" });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
 
-      if (data.success) {
+      if (res.ok && data?.success) {
         setCallMeStatus("success");
       } else {
         setCallMeStatus("error");
-        const messages: Record<string, string> = {
-          no_phone_configured: "No phone number configured. Add one in Settings.",
-          country_not_supported: "Your country is not yet supported for outbound calls.",
-          usage_limit_exceeded: "You have reached your monthly call limit.",
-        };
-        setCallMeError(messages[data.error] ?? "Failed to initiate call.");
+        setCallMeError(logAndMapDashboardError(data ?? { error: "Failed to initiate call." }, "call-trigger", "CALL_TRIGGER_FAILED"));
       }
-    } catch {
+    } catch (err) {
       setCallMeStatus("error");
-      setCallMeError("Failed to initiate call.");
+      setCallMeError(logAndMapDashboardError(err, "call-trigger", "CALL_TRIGGER_FAILED"));
     }
   }, []);
 

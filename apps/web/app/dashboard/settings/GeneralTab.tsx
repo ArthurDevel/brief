@@ -16,6 +16,11 @@ import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 import { getDefaultClassification } from "@dublin/tools/src/classification";
 import type { DeepgramVoice } from "@/app/api/deepgram/voices/route";
 import { DEFAULT_SPEED, DEFAULT_VOICE } from "@/lib/user-settings-defaults";
+import { type DashboardErrorCode, getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -67,19 +72,34 @@ interface PhoneFormState {
 
 async function fetchSettings(): Promise<UserSettings> {
   const res = await fetch("/api/user/settings");
-  if (!res.ok) throw new Error("Failed to load settings");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "SETTINGS_LOAD_FAILED",
+      error: "Failed to load settings",
+    });
+  }
   return res.json();
 }
 
 async function fetchVoices(): Promise<DeepgramVoice[]> {
   const res = await fetch("/api/deepgram/voices");
-  if (!res.ok) throw new Error("Failed to load voices");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "VOICE_LOAD_FAILED",
+      error: "Failed to load voices",
+    });
+  }
   return res.json();
 }
 
 async function fetchMemory(): Promise<MemoryEntry[]> {
   const res = await fetch("/api/memory");
-  if (!res.ok) throw new Error("Failed to load memory");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "MEMORY_LOAD_FAILED",
+      error: "Failed to load memory",
+    });
+  }
   return res.json();
 }
 
@@ -90,8 +110,10 @@ async function saveSettings(data: Record<string, unknown>): Promise<UserSettings
     body: JSON.stringify(data),
   });
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error || "Failed to save settings");
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "SETTINGS_SAVE_FAILED",
+      error: "Failed to save settings",
+    });
   }
   return res.json();
 }
@@ -107,8 +129,10 @@ async function savePhone(phone: PhoneFormState): Promise<void> {
     body: JSON.stringify({ number: phone.number, countryCode: phone.countryCode }),
   });
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error || "Failed to save phone number");
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "PHONE_SAVE_FAILED",
+      error: "Failed to save phone number",
+    });
   }
 }
 
@@ -118,7 +142,12 @@ async function savePhone(phone: PhoneFormState): Promise<void> {
  */
 async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
   const res = await fetch("/api/company-phones");
-  if (!res.ok) throw new Error("Failed to load company phone numbers");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "COMPANY_PHONES_LOAD_FAILED",
+      error: "Failed to load company phone numbers",
+    });
+  }
   return res.json();
 }
 
@@ -129,8 +158,10 @@ async function createMemoryEntry(content: string): Promise<MemoryEntry> {
     body: JSON.stringify({ content }),
   });
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error || "Failed to create memory entry");
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "MEMORY_CREATE_FAILED",
+      error: "Failed to create memory entry",
+    });
   }
   return res.json();
 }
@@ -142,8 +173,10 @@ async function deleteMemoryEntry(id: string): Promise<void> {
     body: JSON.stringify({ id }),
   });
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error || "Failed to delete memory entry");
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "MEMORY_DELETE_FAILED",
+      error: "Failed to delete memory entry",
+    });
   }
 }
 
@@ -189,7 +222,11 @@ export default function GeneralTab() {
 
   // Auto-save: fire a settings PUT with current form values, flash "Saved"
   const savedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const autoSave = useCallback(async (overrides?: Record<string, unknown>, section?: string) => {
+  const autoSave = useCallback(async (
+    overrides?: Record<string, unknown>,
+    section?: string,
+    fallbackCode: DashboardErrorCode = "SETTINGS_SAVE_FAILED"
+  ) => {
     const f = formRef.current;
     const payload: Record<string, unknown> = {
       voicePreference: f.voicePreference,
@@ -205,7 +242,7 @@ export default function GeneralTab() {
         savedTimerRef.current = setTimeout(() => setSavedSection(null), 1500);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      setError(logAndMapDashboardError(err, "settings-general", fallbackCode));
     }
   }, []);
 
@@ -235,7 +272,7 @@ export default function GeneralTab() {
         setToolApprovalConfig(settings.toolApprovalConfig);
         setMemoryEntries(memory);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load settings");
+        setError(logAndMapDashboardError(err, "settings-general", "SETTINGS_LOAD_FAILED"));
       } finally {
         setLoading(false);
       }
@@ -298,13 +335,13 @@ export default function GeneralTab() {
     try {
       const parsed = parsePhoneNumber(phone.number);
       if (parsed?.country && parsed.country !== phone.countryCode) {
-        setError(`Phone number belongs to ${parsed.country}, not ${phone.countryCode}.`);
+        setError(getDashboardErrorMessage("PHONE_COUNTRY_MISMATCH"));
         setSavingSection(null);
         return;
       }
     } catch {
       // If parsing fails, the number is likely invalid
-      setError("Invalid phone number format.");
+      setError(getDashboardErrorMessage("PHONE_INVALID"));
       setSavingSection(null);
       return;
     }
@@ -316,7 +353,7 @@ export default function GeneralTab() {
       clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSavedSection(null), 1500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save phone number");
+      setError(logAndMapDashboardError(err, "settings-general", "PHONE_SAVE_FAILED"));
     } finally {
       setSavingSection(null);
     }
@@ -326,11 +363,11 @@ export default function GeneralTab() {
     setSavingSection("pin");
     setError(null);
     try {
-      await autoSave({ pin }, "pin");
+      await autoSave({ pin }, "pin", "PIN_SAVE_FAILED");
       setHasPin(true);
       setPin("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save PIN");
+      setError(logAndMapDashboardError(err, "settings-general", "PIN_SAVE_FAILED"));
     } finally {
       setSavingSection(null);
     }
@@ -339,7 +376,7 @@ export default function GeneralTab() {
   // Instant-save handlers for non-text controls
   function handleVoiceChange(canonicalName: string) {
     setVoicePreference(canonicalName);
-    autoSave({ voicePreference: canonicalName }, "voice");
+    autoSave({ voicePreference: canonicalName }, "voice", "SETTINGS_SAVE_FAILED");
   }
 
   const speedDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -350,14 +387,14 @@ export default function GeneralTab() {
     }
     clearTimeout(speedDebounceRef.current);
     speedDebounceRef.current = setTimeout(() => {
-      autoSave({ voiceSpeed: speed }, "speed");
+      autoSave({ voiceSpeed: speed }, "speed", "SETTINGS_SAVE_FAILED");
     }, 400);
   }
 
   function handleToolApprovalChange(toolName: string, classification: ActionClassification) {
     const updated = { ...toolApprovalConfig, [toolName]: classification };
     setToolApprovalConfig(updated);
-    autoSave({ toolApprovalConfig: updated }, "tools");
+    autoSave({ toolApprovalConfig: updated }, "tools", "SETTINGS_SAVE_FAILED");
   }
 
   // Audio preview handlers
@@ -410,7 +447,7 @@ export default function GeneralTab() {
       setMemoryEntries((prev) => [entry, ...prev]);
       setNewMemoryContent("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create memory entry");
+      setError(logAndMapDashboardError(err, "settings-general", "MEMORY_CREATE_FAILED"));
     }
   }
 
@@ -420,7 +457,7 @@ export default function GeneralTab() {
       await deleteMemoryEntry(id);
       setMemoryEntries((prev) => prev.filter((entry) => entry.id !== id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete memory entry");
+      setError(logAndMapDashboardError(err, "settings-general", "MEMORY_DELETE_FAILED"));
     }
   }
 

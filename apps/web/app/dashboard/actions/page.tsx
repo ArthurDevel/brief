@@ -13,6 +13,11 @@ import { useEffect, useState, useCallback } from "react";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
 import SendEmailModal from "../components/SendEmailModal";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+  mapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -44,7 +49,10 @@ const STATUS_STYLES: Record<string, string> = {
 async function fetchActions(): Promise<ActionRow[]> {
   const res = await fetch("/api/actions");
   if (!res.ok) {
-    throw new Error("Failed to fetch actions");
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "ACTION_LOAD_FAILED",
+      error: "Failed to fetch actions",
+    });
   }
   return res.json();
 }
@@ -179,7 +187,15 @@ function ActionsTable({
                 <td className="py-3 pr-6">
                   <span
                     className={`px-2 py-0.5 text-xs font-bold ${STATUS_STYLES[action.status] ?? "bg-gray-100 text-gray-600"}`}
-                    title={action.status === "failed" ? (action.result?.error as string) : undefined}
+                    title={
+                      action.status === "failed"
+                        ? mapDashboardError(
+                          action.result?.error,
+                          "action-approve",
+                          "ACTION_EXECUTION_FAILED"
+                        )
+                        : undefined
+                    }
                   >
                     {action.status}
                   </span>
@@ -263,8 +279,8 @@ export default function ActionsPage() {
       const data = await fetchActions();
       setActions(data);
       setError(null);
-    } catch {
-      setError("Failed to load actions");
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "actions-page", "ACTION_LOAD_FAILED"));
     } finally {
       setLoading(false);
     }
@@ -277,10 +293,18 @@ export default function ActionsPage() {
   const handleApprove = async (actionId: string) => {
     addProcessing(actionId);
     try {
-      await approveAction(actionId);
+      const res = await approveAction(actionId);
+      if (!res.ok) {
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "ACTION_APPROVE_FAILED",
+          error: "Failed to approve action",
+        });
+        setError(logAndMapDashboardError(apiError, "action-approve", "ACTION_APPROVE_FAILED"));
+        return;
+      }
       await loadActions();
-    } catch {
-      setError("Failed to approve action");
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "action-approve", "ACTION_APPROVE_FAILED"));
     } finally {
       removeProcessing(actionId);
     }
@@ -289,10 +313,18 @@ export default function ActionsPage() {
   const handleReject = async (actionId: string) => {
     addProcessing(actionId);
     try {
-      await rejectAction(actionId);
+      const res = await rejectAction(actionId);
+      if (!res.ok) {
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "ACTION_REJECT_FAILED",
+          error: "Failed to reject action",
+        });
+        setError(logAndMapDashboardError(apiError, "action-reject", "ACTION_REJECT_FAILED"));
+        return;
+      }
       await loadActions();
-    } catch {
-      setError("Failed to reject action");
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "action-reject", "ACTION_REJECT_FAILED"));
     } finally {
       removeProcessing(actionId);
     }
@@ -301,10 +333,18 @@ export default function ActionsPage() {
   const handleUndo = async (actionId: string) => {
     addProcessing(actionId);
     try {
-      await undoActionRequest(actionId);
+      const res = await undoActionRequest(actionId);
+      if (!res.ok) {
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "ACTION_UNDO_FAILED",
+          error: "Failed to undo action",
+        });
+        setError(logAndMapDashboardError(apiError, "action-undo", "ACTION_UNDO_FAILED"));
+        return;
+      }
       await loadActions();
-    } catch {
-      setError("Failed to undo action");
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "action-undo", "ACTION_UNDO_FAILED"));
     } finally {
       removeProcessing(actionId);
     }
@@ -319,14 +359,17 @@ export default function ActionsPage() {
     try {
       const res = await fetch(`/api/actions/${actionId}/convert-to-draft`, { method: "POST" });
       if (!res.ok) {
-        const body = await res.json();
-        alert(body.error ?? "Failed to convert to draft");
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "ACTION_DRAFT_FAILED",
+          error: "Failed to convert to draft",
+        });
+        window.alert(logAndMapDashboardError(apiError, "action-draft", "ACTION_DRAFT_FAILED"));
         return;
       }
       await loadActions();
       setSelectedAction(null);
-    } catch {
-      alert("Failed to convert to draft");
+    } catch (err) {
+      window.alert(logAndMapDashboardError(err, "action-draft", "ACTION_DRAFT_FAILED"));
     } finally {
       setIsConverting(false);
     }

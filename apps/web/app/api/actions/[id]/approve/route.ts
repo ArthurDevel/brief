@@ -18,6 +18,11 @@ import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supab
 import { getActiveEmailAccountRecord } from "@/lib/email-accounts";
 import { executeAction } from "@dublin/tools";
 import type { ActionResult } from "@dublin/tools";
+import {
+  getDashboardErrorMessage,
+  type DashboardErrorCode,
+} from "@/lib/errors/dashboardErrors";
+import { mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // MAIN HANDLERS
@@ -32,14 +37,14 @@ import type { ActionResult } from "@dublin/tools";
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-): Promise<NextResponse<ActionResult | { error: string }>> {
+): Promise<NextResponse<ActionResult | { code: DashboardErrorCode; error: string }>> {
   const { id: actionId } = await params;
   const cookieStore = await cookies();
   const supabase = createServerSupabaseClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return errorResponse("UNAUTHORIZED", 401);
   }
 
   // Load the action and verify ownership
@@ -50,15 +55,15 @@ export async function POST(
     .single();
 
   if (actionError || !action) {
-    return NextResponse.json({ error: "Action not found" }, { status: 404 });
+    return errorResponse("ACTION_NOT_FOUND", 404);
   }
 
   if (action.user_id !== user.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    return errorResponse("UNAUTHORIZED", 403);
   }
 
   if (action.status !== "pending") {
-    return NextResponse.json({ error: `Action is not pending (status: ${action.status})` }, { status: 400 });
+    return errorResponse("ACTION_ALREADY_HANDLED", 400);
   }
 
   // Load active email account with resolved credentials
@@ -66,7 +71,7 @@ export async function POST(
   const emailAccount = await getActiveEmailAccountRecord(supabase, serviceClient, user.id);
 
   if (!emailAccount) {
-    return NextResponse.json({ error: "No active email account configured" }, { status: 400 });
+    return errorResponse("EMAIL_ACCOUNT_REQUIRED", 400);
   }
 
   try {
@@ -79,7 +84,22 @@ export async function POST(
     const result = await executeAction(actionId, supabase, emailAccount);
     return NextResponse.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to execute action";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("[actions/approve]", error);
+    const { code, message } = mapDashboardErrorDetails(
+      error,
+      "action-approve",
+      "ACTION_EXECUTION_FAILED"
+    );
+    return NextResponse.json({ code, error: message }, { status: 500 });
   }
+}
+
+function errorResponse(
+  code: DashboardErrorCode,
+  status: number
+): NextResponse<{ code: DashboardErrorCode; error: string }> {
+  return NextResponse.json(
+    { code, error: getDashboardErrorMessage(code) },
+    { status }
+  );
 }

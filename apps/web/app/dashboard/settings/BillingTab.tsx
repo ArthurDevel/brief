@@ -18,6 +18,10 @@
 import React, { useEffect, useState } from "react";
 import { Lock, CreditCard, Landmark, Wallet, CircleDollarSign, Check } from "lucide-react";
 import type { UsageInfo, UpgradeResponse } from "@/lib/types";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -61,11 +65,16 @@ export default function BillingTab(): React.ReactElement {
   async function fetchUsage(): Promise<void> {
     try {
       const res = await fetch("/api/billing/usage");
-      if (!res.ok) throw new Error("Failed to fetch usage");
+      if (!res.ok) {
+        throw await buildDashboardErrorFromResponse(res, {
+          code: "BILLING_LOAD_FAILED",
+          error: "Failed to fetch usage",
+        });
+      }
       const data: UsageInfo = await res.json();
       setUsage(data);
-    } catch {
-      setError("Failed to load billing info");
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "settings-billing", "BILLING_LOAD_FAILED"));
     } finally {
       setLoading(false);
     }
@@ -240,13 +249,15 @@ function PaymentModal({
       const data: UpgradeResponse = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error ?? "Upgrade failed");
+        throw {
+          code: "UPGRADE_FAILED",
+          error: data.error ?? "Upgrade failed",
+        };
       }
 
       setSuccess(true);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Upgrade failed";
-      setError(message);
+      setError(logAndMapDashboardError(err, "settings-billing", "UPGRADE_FAILED"));
     } finally {
       setUpgrading(false);
     }

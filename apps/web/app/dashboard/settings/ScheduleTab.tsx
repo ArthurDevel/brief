@@ -16,6 +16,10 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { UserSettings, CallSchedule } from "@/lib/types";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -77,7 +81,12 @@ interface ScheduleFormState {
  */
 async function fetchSettings(): Promise<UserSettings> {
   const res = await fetch("/api/user/settings");
-  if (!res.ok) throw new Error("Failed to load settings");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "SCHEDULE_LOAD_FAILED",
+      error: "Failed to load settings",
+    });
+  }
   return res.json();
 }
 
@@ -93,8 +102,10 @@ async function saveSettings(data: Record<string, unknown>): Promise<UserSettings
     body: JSON.stringify(data),
   });
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error || "Failed to save settings");
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "SCHEDULE_SAVE_FAILED",
+      error: "Failed to save settings",
+    });
   }
   return res.json();
 }
@@ -181,7 +192,7 @@ export default function ScheduleTab() {
       clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSavedSection(null), 1500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save schedule");
+      setError(logAndMapDashboardError(err, "settings-schedule", "SCHEDULE_SAVE_FAILED"));
     }
   }, []);
 
@@ -199,7 +210,7 @@ export default function ScheduleTab() {
           await saveSettings({ callSchedule: schedule });
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load settings");
+        setError(logAndMapDashboardError(err, "settings-schedule", "SCHEDULE_LOAD_FAILED"));
       } finally {
         setLoading(false);
       }

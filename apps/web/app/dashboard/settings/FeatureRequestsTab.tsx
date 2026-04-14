@@ -14,6 +14,11 @@
 
 import { useEffect, useState, useCallback } from "react";
 import type { FeatureRequest } from "@/lib/types";
+import { getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -41,12 +46,17 @@ export default function FeatureRequestsTab() {
   const loadRequests = useCallback(async () => {
     try {
       const res = await fetch("/api/feature-requests");
-      if (!res.ok) throw new Error("Failed to fetch");
+      if (!res.ok) {
+        throw await buildDashboardErrorFromResponse(res, {
+          code: "FEATURE_REQUEST_LOAD_FAILED",
+          error: "Failed to fetch",
+        });
+      }
       const data: FeatureRequest[] = await res.json();
       setRequests(data);
       setError(null);
-    } catch {
-      setError("Failed to load feature requests");
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "settings-feature-requests", "FEATURE_REQUEST_LOAD_FAILED"));
     } finally {
       setLoading(false);
     }
@@ -59,7 +69,10 @@ export default function FeatureRequestsTab() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!description.trim()) return;
+    if (!description.trim()) {
+      setError(getDashboardErrorMessage("FEATURE_REQUEST_EMPTY"));
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
@@ -72,15 +85,26 @@ export default function FeatureRequestsTab() {
       });
 
       if (!res.ok) {
-        const body = await res.json();
-        setError(body.error ?? "Failed to submit feature request");
+        const apiError = await buildDashboardErrorFromResponse(res, {
+          code: "FEATURE_REQUEST_SUBMIT_FAILED",
+          error: "Failed to submit feature request",
+        });
+        setError(
+          logAndMapDashboardError(
+            apiError,
+            "settings-feature-requests",
+            "FEATURE_REQUEST_SUBMIT_FAILED"
+          )
+        );
         return;
       }
 
       setDescription("");
       await loadRequests();
-    } catch {
-      setError("Failed to submit feature request");
+    } catch (err) {
+      setError(
+        logAndMapDashboardError(err, "settings-feature-requests", "FEATURE_REQUEST_SUBMIT_FAILED")
+      );
     } finally {
       setSubmitting(false);
     }
