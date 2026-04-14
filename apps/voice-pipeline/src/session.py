@@ -337,7 +337,8 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
 
     Reads the active email account from user_email_accounts, resolves custom
     Vault secrets when needed, and loads voice/tool/memory/timezone from
-    user_settings.
+    user_settings. If the user has no settings row yet, sensible defaults are
+    used instead.
 
     Args:
         user_id: The user ID to load context for.
@@ -347,21 +348,17 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
         UserContext with email account, preferences, and memory.
 
     Raises:
-        RuntimeError: If user settings are missing or no active email account is found.
+        RuntimeError: If no active email account is found.
     """
     # Step 1: Load user settings (voice, tool approval, timezone -- no email fields)
     settings_response = (
         supabase.table("user_settings")
         .select("*")
         .eq("user_id", user_id)
-        .single()
+        .maybe_single()
         .execute()
     )
-
-    if settings_response.data is None:
-        raise RuntimeError(f"User settings not found for {user_id}")
-
-    settings = cast(dict[str, Any], settings_response.data)
+    settings = cast(dict[str, Any], settings_response.data or {})
 
     # Step 2: Load active email account from user_email_accounts
     account_response = (
