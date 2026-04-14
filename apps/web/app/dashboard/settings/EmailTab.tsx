@@ -19,6 +19,12 @@
 import { useState, useEffect } from "react";
 import type { UserSettings, EmailAccountSummary } from "@/lib/types";
 import { useEmailStatus } from "@/contexts/EmailStatusContext";
+import { getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+  mapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -42,7 +48,12 @@ const PROVIDERS: { id: Provider; label: string }[] = [
  */
 async function fetchSettings(): Promise<UserSettings> {
   const res = await fetch("/api/user/settings");
-  if (!res.ok) throw new Error("Failed to load settings");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "EMAIL_SETTINGS_LOAD_FAILED",
+      error: "Failed to load settings",
+    });
+  }
   return res.json();
 }
 
@@ -58,8 +69,10 @@ async function saveCustomAccount(data: Record<string, unknown>): Promise<EmailAc
     body: JSON.stringify(data),
   });
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error || "Failed to save email account");
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "EMAIL_SAVE_FAILED",
+      error: "Failed to save email account",
+    });
   }
   return res.json();
 }
@@ -76,8 +89,10 @@ async function initiateConnect(provider: string): Promise<string> {
     body: JSON.stringify({ provider }),
   });
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error || "Failed to initiate connection");
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "EMAIL_CONNECT_FAILED",
+      error: "Failed to initiate connection",
+    });
   }
   const data = await res.json();
   return data.url;
@@ -97,8 +112,10 @@ async function testConnection(): Promise<TestResult> {
     method: "POST",
   });
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error || "Connection test failed");
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "EMAIL_VERIFY_FAILED",
+      error: "Connection test failed",
+    });
   }
   return res.json();
 }
@@ -158,7 +175,7 @@ export default function EmailTab() {
           }
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load settings");
+        setError(logAndMapDashboardError(err, "settings-email", "EMAIL_SETTINGS_LOAD_FAILED"));
       } finally {
         setLoading(false);
       }
@@ -200,7 +217,7 @@ export default function EmailTab() {
       const url = await initiateConnect(provider);
       window.open(url, "_blank");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to connect");
+      setError(logAndMapDashboardError(err, "settings-email", "EMAIL_CONNECT_FAILED"));
       setConnecting(false);
     }
   }
@@ -216,7 +233,7 @@ export default function EmailTab() {
     // Require passwords if none stored yet
     const hasExistingPasswords = emailAccount?.hasImapPassword && emailAccount?.hasSmtpPassword;
     if (!hasExistingPasswords && (!imapPassword || !smtpPassword)) {
-      setError("Please enter passwords for both IMAP and SMTP.");
+      setError(getDashboardErrorMessage("EMAIL_PASSWORDS_REQUIRED"));
       setSaving(false);
       return;
     }
@@ -241,13 +258,26 @@ export default function EmailTab() {
       // Step 2: Test connection using stored credentials
       const result = await testConnection();
       if (!result.imap.ok || !result.smtp.ok) {
-        const parts: string[] = [];
-        if (!result.imap.ok) parts.push("receiving emails");
-        if (!result.smtp.ok) parts.push("sending emails");
-        setError(
-          `Your settings were saved, but we could not connect for ${parts.join(" and ")}. `
-          + "Please double-check your credentials."
-        );
+        if (!result.imap.ok && !result.smtp.ok) {
+          console.error("[dashboard-error]", { context: "settings-email", error: result });
+          setError(getDashboardErrorMessage("EMAIL_VERIFY_FAILED"));
+        } else if (!result.imap.ok) {
+          setError(
+            logAndMapDashboardError(
+              result.imap.error ?? result,
+              "settings-email",
+              "EMAIL_INBOX_VERIFY_FAILED"
+            )
+          );
+        } else {
+          setError(
+            logAndMapDashboardError(
+              result.smtp.error ?? result,
+              "settings-email",
+              "EMAIL_SMTP_VERIFY_FAILED"
+            )
+          );
+        }
         setSaving(false);
         return;
       }
@@ -255,7 +285,7 @@ export default function EmailTab() {
       setSaved(true);
       refreshEmailStatus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      setError(logAndMapDashboardError(err, "settings-email", "EMAIL_SAVE_FAILED"));
     } finally {
       setSaving(false);
     }
@@ -491,7 +521,7 @@ function AccountStatusBadge({ account }: { account: EmailAccountSummary }) {
       )}
       {account.lastError && (
         <span className="text-[12px] text-red-600">
-          {account.lastError}
+          {mapDashboardError(account.lastError, "email", "EMAIL_INBOX_CONNECT_FAILED")}
         </span>
       )}
     </div>

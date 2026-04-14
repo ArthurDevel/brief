@@ -21,14 +21,24 @@ import { createImapConnection, closeImapConnection, testSmtpConnection } from "@
 import { retrieveSecret } from "@dublin/tools";
 import { getActiveEmailAccount } from "@/lib/email-accounts";
 import { getAccount } from "@/lib/unipile/client";
+import {
+  getDashboardErrorMessage,
+  type DashboardErrorCode,
+} from "@/lib/errors/dashboardErrors";
+import { mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
 interface TestResult {
-  imap: { ok: boolean; error?: string };
-  smtp: { ok: boolean; error?: string };
+  imap: { ok: boolean; code?: DashboardErrorCode; error?: string };
+  smtp: { ok: boolean; code?: DashboardErrorCode; error?: string };
+}
+
+interface ErrorResponse {
+  code: DashboardErrorCode;
+  error: string;
 }
 
 // ============================================================================
@@ -40,31 +50,36 @@ interface TestResult {
  * @param _request - The incoming request (no body needed)
  * @returns TestResult with per-protocol success/error
  */
-export async function POST(_request: NextRequest): Promise<NextResponse<TestResult | { error: string }>> {
-  const cookieStore = await cookies();
-  const supabase = createServerSupabaseClient(cookieStore);
-  const { data: { user } } = await supabase.auth.getUser();
+export async function POST(_request: NextRequest): Promise<NextResponse<TestResult | ErrorResponse>> {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createServerSupabaseClient(cookieStore);
+    const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+    if (!user) {
+      return errorResponse("UNAUTHORIZED", 401);
+    }
 
-  // Load active email account
-  const account = await getActiveEmailAccount(supabase, user.id);
+    const account = await getActiveEmailAccount(supabase, user.id);
 
-  if (!account) {
-    return NextResponse.json(
-      { error: "No email account configured. Please set up your email first." },
-      { status: 400 }
+    if (!account) {
+      return errorResponse("EMAIL_ACCOUNT_REQUIRED", 400);
+    }
+
+    if (account.connectionType === "unipile") {
+      return testUnipileConnection(account.id, supabase, user.id);
+    }
+
+    return testCustomConnection(supabase, user.id);
+  } catch (err) {
+    console.error("[user/settings/test-connection]", err);
+    const { code, message } = mapDashboardErrorDetails(
+      err,
+      "settings-email",
+      "EMAIL_VERIFY_FAILED"
     );
+    return NextResponse.json({ code, error: message }, { status: 500 });
   }
-
-  // Branch by connection type
-  if (account.connectionType === "unipile") {
-    return testUnipileConnection(account.id, supabase, user.id);
-  }
-
-  return testCustomConnection(supabase, user.id);
 }
 
 // ============================================================================
@@ -82,7 +97,7 @@ async function testUnipileConnection(
   accountId: string,
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
-): Promise<NextResponse<TestResult | { error: string }>> {
+): Promise<NextResponse<TestResult | ErrorResponse>> {
   // Load the unipile_account_id from the database
   const { data: row, error: fetchError } = await supabase
     .from("user_email_accounts")
@@ -92,29 +107,35 @@ async function testUnipileConnection(
     .single();
 
   if (fetchError || !row?.unipile_account_id) {
-    return NextResponse.json(
-      { error: "Unipile account ID not found." },
-      { status: 400 }
-    );
+    console.error("[user/settings/test-connection]", {
+      message: "Missing Unipile account ID",
+      fetchError,
+      accountId,
+      userId,
+    });
+    return errorResponse("EMAIL_CONNECT_FAILED", 400);
   }
 
   try {
     const unipileAccount = await getAccount(row.unipile_account_id);
     const isOk = unipileAccount.status === "connected";
+    const failure = isOk
+      ? undefined
+      : buildProtocolFailure(
+        { error: `Unipile account status: ${unipileAccount.status}` },
+        "EMAIL_VERIFY_FAILED"
+      );
 
     return NextResponse.json({
-      imap: isOk
-        ? { ok: true }
-        : { ok: false, error: `Unipile account status: ${unipileAccount.status}` },
-      smtp: isOk
-        ? { ok: true }
-        : { ok: false, error: `Unipile account status: ${unipileAccount.status}` },
+      imap: isOk ? { ok: true } : failure!,
+      smtp: isOk ? { ok: true } : failure!,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unipile status check failed";
+    console.error("[user/settings/test-connection]", err);
+    const failure = buildProtocolFailure(err, "EMAIL_VERIFY_FAILED");
     return NextResponse.json({
-      imap: { ok: false, error: message },
-      smtp: { ok: false, error: message },
+      imap: failure,
+      smtp: failure,
     });
   }
 }
@@ -128,7 +149,7 @@ async function testUnipileConnection(
 async function testCustomConnection(
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
-): Promise<NextResponse<TestResult | { error: string }>> {
+): Promise<NextResponse<TestResult | ErrorResponse>> {
   // Load custom account details
   const { data: account, error: fetchError } = await supabase
     .from("user_email_accounts")
@@ -141,38 +162,43 @@ async function testCustomConnection(
     .single();
 
   if (fetchError || !account) {
-    return NextResponse.json(
-      { error: "No custom email settings found. Please save your settings first." },
-      { status: 400 }
-    );
+    console.error("[user/settings/test-connection]", {
+      message: "No custom email settings found",
+      fetchError,
+      userId,
+    });
+    return errorResponse("EMAIL_ACCOUNT_REQUIRED", 400);
   }
 
   if (!account.imap_password_secret_id || !account.smtp_password_secret_id) {
-    return NextResponse.json(
-      { error: "Missing stored passwords. Please re-enter your credentials." },
-      { status: 400 }
-    );
+    return errorResponse("EMAIL_PASSWORDS_REQUIRED", 400);
   }
 
-  // Retrieve passwords from Vault
-  const serviceClient = createServiceRoleClient();
-  const [imapPassword, smtpPassword] = await Promise.all([
-    retrieveSecret(serviceClient, account.imap_password_secret_id),
-    retrieveSecret(serviceClient, account.smtp_password_secret_id),
-  ]);
+  try {
+    const serviceClient = createServiceRoleClient();
+    const [imapPassword, smtpPassword] = await Promise.all([
+      retrieveSecret(serviceClient, account.imap_password_secret_id),
+      retrieveSecret(serviceClient, account.smtp_password_secret_id),
+    ]);
 
-  // Test both connections in parallel
-  const [imapResult, smtpResult] = await Promise.all([
-    testImap(account.imap_host, account.imap_port, account.imap_user, imapPassword),
-    testSmtpConnection({
-      host: account.smtp_host,
-      port: account.smtp_port,
-      user: account.smtp_user,
-      password: smtpPassword,
-    }),
-  ]);
+    const [imapResult, smtpResult] = await Promise.all([
+      testImap(account.imap_host, account.imap_port, account.imap_user, imapPassword),
+      testSmtpConnection({
+        host: account.smtp_host,
+        port: account.smtp_port,
+        user: account.smtp_user,
+        password: smtpPassword,
+      }),
+    ]);
 
-  return NextResponse.json({ imap: imapResult, smtp: smtpResult });
+    return NextResponse.json({
+      imap: imapResult.ok ? { ok: true } : buildProtocolFailure(imapResult.error, "EMAIL_INBOX_VERIFY_FAILED"),
+      smtp: smtpResult.ok ? { ok: true } : buildProtocolFailure(smtpResult.error, "EMAIL_SMTP_VERIFY_FAILED"),
+    });
+  } catch (err) {
+    console.error("[user/settings/test-connection]", err);
+    return errorResponse("EMAIL_VERIFY_FAILED", 500);
+  }
 }
 
 /**
@@ -196,4 +222,23 @@ async function testImap(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "IMAP connection failed" };
   }
+}
+
+function errorResponse(
+  code: DashboardErrorCode,
+  status: number
+): NextResponse<ErrorResponse> {
+  return NextResponse.json(
+    { code, error: getDashboardErrorMessage(code) },
+    { status }
+  );
+}
+
+function buildProtocolFailure(
+  error: unknown,
+  fallbackCode: DashboardErrorCode
+): { ok: false; code: DashboardErrorCode; error: string } {
+  console.error("[user/settings/test-connection]", error);
+  const { code, message } = mapDashboardErrorDetails(error, "settings-email", fallbackCode);
+  return { ok: false, code, error: message };
 }
