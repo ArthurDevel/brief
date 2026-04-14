@@ -362,7 +362,11 @@ def load_user_context(user_id: str, supabase: Client) -> UserContext:
         .maybe_single()
         .execute()
     )
-    settings = cast(dict[str, Any], settings_response.data or {})
+    if settings_response is None:
+        settings: dict[str, Any] = {}
+    else:
+        settings_data = settings_response.data
+        settings = cast(dict[str, Any], settings_data or {})
 
     # Step 2: Load active email account from user_email_accounts
     account_response = (
