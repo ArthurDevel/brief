@@ -507,7 +507,15 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
     _mark_startup_event(pre_session_log_lines, f"[startup] WebRTC JWT verified: user_id={user_id}")
 
     _mark_startup_event(pre_session_log_lines, f"[startup] WebRTC loading user context: user_id={user_id}")
-    user_context = load_user_context(user_id, supabase)
+    try:
+        user_context = load_user_context(user_id, supabase)
+    except Exception as exc:
+        logger.error("[server] WebRTC startup failed for user %s: %s", user_id, exc)
+        try:
+            await connection.pc.close()
+        except Exception:
+            logger.exception("[server] Failed to close WebRTC peer connection after startup error")
+        return
     _mark_startup_event(
         pre_session_log_lines,
         (
@@ -793,7 +801,7 @@ async def trigger_call(request: Request) -> JSONResponse:
         supabase.table("user_settings")
         .select("phone")
         .eq("user_id", user_id)
-        .single()
+        .maybe_single()
         .execute()
     )
 
