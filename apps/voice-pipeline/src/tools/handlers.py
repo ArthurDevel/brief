@@ -427,24 +427,28 @@ def _handle_batch_move(
             message=f"Moved 0 of 0 emails to {folder} (0 failed)",
         )
 
-    # Validate folder exists once before the loop
-    loop = asyncio.get_event_loop()
     if email_ctx.connection_type == "unipile":
         account_id = email_ctx.unipile_account_id
         if not account_id:
             raise RuntimeError("Unipile account has no account_id")
 
-        folders = loop.run_until_complete(unipile_client.list_folders(account_id))
-        folder_paths = [f.path for f in folders]
-        if not any(p.lower() == folder.lower() for p in folder_paths):
-            raise ValueError(
-                f'Folder "{folder}" does not exist. Available folders: {", ".join(folder_paths)}'
-            )
+        # Pipecat runs tool handlers on worker threads without an event loop.
+        # Create a fresh loop for the batch Unipile calls, matching the normal dispatch path.
+        loop = asyncio.new_event_loop()
+        try:
+            folders = loop.run_until_complete(unipile_client.list_folders(account_id))
+            folder_paths = [f.path for f in folders]
+            if not any(p.lower() == folder.lower() for p in folder_paths):
+                raise ValueError(
+                    f'Folder "{folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+                )
 
-        # Batch move via Unipile -- resolves source folder once, one PUT per email
-        move_results = loop.run_until_complete(
-            unipile_client.batch_move_to_folder(account_id, email_ids, folder, source_folder, email_ctx.provider)
-        )
+            # Batch move via Unipile -- resolves source folder once, one PUT per email
+            move_results = loop.run_until_complete(
+                unipile_client.batch_move_to_folder(account_id, email_ids, folder, source_folder, email_ctx.provider)
+            )
+        finally:
+            loop.close()
 
         # Store each result as an individual action row in the DB
         succeeded = 0

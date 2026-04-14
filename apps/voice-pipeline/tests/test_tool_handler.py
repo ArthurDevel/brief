@@ -422,6 +422,97 @@ class TestMoveToFolder:
         assert inserted_row["undo_recipe"]["params"]["to"] == "INBOX"
 
 
+class TestBatchMoveToFolder:
+    """batch_move_to_folder should work from worker threads with no pre-set event loop."""
+
+    def test_unipile_batch_move_uses_its_own_event_loop(self, monkeypatch):
+        """The Unipile batch move handler must not rely on asyncio.get_event_loop()."""
+        from src.tools.handlers import handle_tool_call, ActionInput
+
+        email_ctx = EmailClientContext(
+            connection_type="unipile",
+            provider="gmail",
+            unipile_account_id="acct-1",
+        )
+
+        mock_supabase = MagicMock()
+
+        inserted_rows: list[dict] = []
+
+        def capture_insert(row):
+            inserted_rows.append(row)
+            mock_response = MagicMock()
+            mock_response.data = [{"id": f"action-{len(inserted_rows)}"}]
+            mock_chain = MagicMock()
+            mock_chain.execute = MagicMock(return_value=mock_response)
+            return mock_chain
+
+        mock_supabase.table.return_value.insert = capture_insert
+
+        async def fake_list_folders(account_id: str):
+            assert account_id == "acct-1"
+            return [MagicMock(path="Dev/Github")]
+
+        async def fake_batch_move(account_id: str, email_ids: list[str], folder: str, source_folder: str, provider: str):
+            assert account_id == "acct-1"
+            assert email_ids == ["email-1", "email-2"]
+            assert folder == "Dev/Github"
+            assert source_folder == "INBOX"
+            assert provider == "gmail"
+            return [
+                {
+                    "email_id": "email-1",
+                    "succeeded": True,
+                    "undo_recipe": {"operation": "unipile_move_email", "params": {"email_id": "email-1"}},
+                },
+                {
+                    "email_id": "email-2",
+                    "succeeded": True,
+                    "undo_recipe": {"operation": "unipile_move_email", "params": {"email_id": "email-2"}},
+                },
+            ]
+
+        monkeypatch.setattr("src.tools.handlers.unipile_client.list_folders", fake_list_folders)
+        monkeypatch.setattr("src.tools.handlers.unipile_client.batch_move_to_folder", fake_batch_move)
+
+        result_holder: dict[str, object] = {}
+        error_holder: list[BaseException] = []
+
+        def run_in_worker_thread():
+            try:
+                result_holder["result"] = handle_tool_call(
+                    input=ActionInput(
+                        user_id="test-user",
+                        session_id="test-session",
+                        tool_name="batch_move_to_folder",
+                        arguments={"email_ids": ["email-1", "email-2"], "folder": "Dev/Github"},
+                    ),
+                    user_config={},
+                    email_ctx=email_ctx,
+                    supabase=mock_supabase,
+                )
+            except BaseException as exc:  # pragma: no cover - exercised only on failure
+                error_holder.append(exc)
+
+        worker = threading.Thread(target=run_in_worker_thread, name="batch-move-worker")
+        worker.start()
+        worker.join()
+
+        assert not error_holder
+        result = result_holder["result"]
+        assert result.status == "executed"
+        assert result.result == {
+            "total": 2,
+            "succeeded": 2,
+            "failed": 0,
+            "errors": [],
+            "actionIds": ["action-1", "action-2"],
+        }
+        assert len(inserted_rows) == 2
+        assert inserted_rows[0]["arguments"]["email_id"] == "email-1"
+        assert inserted_rows[1]["arguments"]["email_id"] == "email-2"
+
+
 class TestWhatCanYouDo:
     """what_can_you_do should return capabilities markdown."""
 
