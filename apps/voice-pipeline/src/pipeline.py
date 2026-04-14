@@ -19,6 +19,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from collections.abc import Awaitable, Callable
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -42,7 +43,7 @@ from supabase import Client
 from src.audio.normalizer import AudioNormalizerProcessor
 from src.audio.recorder import write_wav, upload_recording
 from src.audio.speed import AudioSpeedProcessor
-from src.audio.startup_tone import StartupToneInputMonitorProcessor, StartupToneProcessor
+from src.audio.startup_tone import FirstAssistantAudioNotifierProcessor
 from src.config import LLM_MODEL, Settings
 from src.cost_tracker import CostTracker
 from src.langfuse_observer import LangfuseObserver
@@ -67,7 +68,6 @@ class PipelineResult:
     task: PipelineTask
     stt: DeepgramFluxSTTService
     audio_buffer: AudioBufferProcessor | None
-    startup_tone: StartupToneProcessor
     narration_http_session: dict[str, aiohttp.ClientSession | None]
 
 
@@ -128,12 +128,14 @@ def create_pipeline(
     settings: Settings,
     email_ctx: EmailClientContext,
     recording_enabled: bool = False,
+    on_first_assistant_audio: Callable[[], Awaitable[None]] | None = None,
 ) -> PipelineResult:
     """Build the full Pipecat pipeline with STT, LLM, TTS, and speed control.
 
     Pipeline chain:
         transport.input() -> watchdog -> stt -> user_agg -> llm -> tts
-        -> speed -> normalizer -> transport.output() -> [audio_buffer] -> assistant_agg
+        -> speed -> normalizer -> assistant_audio_notifier -> transport.output()
+        -> [audio_buffer] -> assistant_agg
 
     Args:
         transport: The Pipecat transport (WebRTC or Twilio).
@@ -147,6 +149,8 @@ def create_pipeline(
         settings: Application settings.
         email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
         recording_enabled: Whether to capture audio via AudioBufferProcessor.
+        on_first_assistant_audio: Optional callback fired on the first outbound
+            assistant audio frame before it reaches the transport output.
 
     Returns:
         PipelineResult with the configured task, STT service, audio buffer, and
@@ -198,12 +202,9 @@ def create_pipeline(
         config=normalizer_config,
         sample_rate=sample_rate,
     )
-    startup_tone = StartupToneProcessor(
-        enabled=settings.startup_tone_enabled,
-        sample_rate=sample_rate,
-        num_channels=num_channels,
+    assistant_audio_notifier = FirstAssistantAudioNotifierProcessor(
+        on_first_audio=on_first_assistant_audio,
     )
-    startup_tone_input_monitor = StartupToneInputMonitorProcessor(startup_tone)
     logger.info("[startup] Audio processors initialized")
 
     # -- Fetch email count for greeting --
@@ -410,13 +411,12 @@ def create_pipeline(
         transport.input(),
         watchdog,
         stt,
-        startup_tone_input_monitor,
         user_aggregator,
         llm,
         tts,
         speed_processor,
         normalizer,
-        startup_tone,
+        assistant_audio_notifier,
         transport.output(),
     ]
     if audio_buffer is not None:
@@ -442,7 +442,6 @@ def create_pipeline(
         task=task,
         stt=stt,
         audio_buffer=audio_buffer,
-        startup_tone=startup_tone,
         narration_http_session=narration_http_session,
     )
 

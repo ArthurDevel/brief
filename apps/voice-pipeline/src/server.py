@@ -66,6 +66,7 @@ from src.langfuse_client import shutdown_langfuse_client
 from src.langfuse_observer import LangfuseObserver
 from src.tracked_services import UsageTracker
 from src.pipeline import create_pipeline, PipelineResult
+from src.audio.startup_tone import TwilioProgressBeepPlayer
 from src.scheduler import fetch_company_phones, start_scheduler
 from src.session import build_email_account, end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
@@ -321,6 +322,7 @@ async def _setup_pipeline_session(
     supabase,
     transport_type,
     pre_session_log_lines: list[str] | None = None,
+    on_first_assistant_audio=None,
 ):
     """Set up a pipeline session: create email client context, cost tracker, and pipeline.
 
@@ -330,6 +332,8 @@ async def _setup_pipeline_session(
         settings: App settings.
         supabase: Supabase client.
         transport_type: "webrtc" or "twilio".
+        on_first_assistant_audio: Optional callback fired before the first
+            outbound assistant audio frame reaches the transport output.
 
     Returns:
         Tuple of (pipeline_result, session, cost_tracker, langfuse_observer, email_ctx).
@@ -382,6 +386,7 @@ async def _setup_pipeline_session(
             settings=settings,
             email_ctx=email_ctx,
             recording_enabled=settings.recording_enabled,
+            on_first_assistant_audio=on_first_assistant_audio,
         )
         logger.info("[startup] Pipecat pipeline created")
 
@@ -413,7 +418,6 @@ async def _start_connected_session(pipeline_result: PipelineResult, task, log_pr
     logger.info("[%s] Client connected, sending greeting", log_prefix)
     if pipeline_result.audio_buffer:
         await pipeline_result.audio_buffer.start_recording()
-    await pipeline_result.startup_tone.start()
     await task.queue_frames([LLMRunFrame()])
 
 
@@ -599,7 +603,6 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        await pipeline_result.startup_tone.stop("session_end")
         await cancel_stt_tasks(pipeline_result.stt)
         await _cleanup_session(
             email_ctx, cost_tracker, langfuse_observer, session, supabase, settings,
@@ -1226,6 +1229,15 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         stream_sid, call_sid, user_id,
     )
 
+    progress_beep = TwilioProgressBeepPlayer(websocket=websocket, stream_sid=stream_sid)
+    pipeline_result: PipelineResult | None = None
+    session = None
+    cost_tracker = None
+    langfuse_observer = None
+    email_ctx = None
+
+    await progress_beep.start()
+
     _mark_startup_event(pre_session_log_lines, "[startup] Loading settings")
     settings = load_settings()
     _mark_startup_event(pre_session_log_lines, "[startup] Settings loaded")
@@ -1236,68 +1248,79 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
 
     logger.info("[twilio] Media stream connected for user %s", user_id)
 
-    _mark_startup_event(pre_session_log_lines, f"[startup] Loading user context: user_id={user_id}")
-    user_context = load_user_context(user_id, supabase)
-    _mark_startup_event(
-        pre_session_log_lines,
-        (
-            "[startup] User context loaded: "
-            f"connection_type={user_context.email_account.connection_type}, "
-            f"provider={user_context.email_account.provider}"
-        ),
-    )
-
-    # TwilioFrameSerializer handles mulaw 8kHz <-> PCM16 transcoding via SOXR
-    _mark_startup_event(pre_session_log_lines, "[startup] Creating Twilio serializer")
-    serializer = TwilioFrameSerializer(
-        stream_sid=stream_sid,
-        call_sid=call_sid,
-        params=TwilioFrameSerializer.InputParams(auto_hang_up=False),
-    )
-    _mark_startup_event(pre_session_log_lines, "[startup] Twilio serializer created")
-
-    _mark_startup_event(pre_session_log_lines, "[startup] Creating FastAPI WebSocket transport")
-    transport = FastAPIWebsocketTransport(
-        websocket=websocket,
-        params=FastAPIWebsocketParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            serializer=serializer,
-        ),
-    )
-    _mark_startup_event(pre_session_log_lines, "[startup] FastAPI WebSocket transport created")
-
-    _mark_startup_event(pre_session_log_lines, "[startup] Setting up pipeline session")
-    pipeline_result, session, cost_tracker, langfuse_observer, email_ctx = await _setup_pipeline_session(
-        transport,
-        user_context,
-        settings,
-        supabase,
-        transport_type="twilio",
-        pre_session_log_lines=pre_session_log_lines,
-    )
-    logger.info("[startup] Pipeline session setup complete")
-    task = pipeline_result.task
-
-    @transport.event_handler("on_client_connected")
-    async def on_client_connected(transport_instance, client):
-        await _start_connected_session(pipeline_result, task, "twilio")
-
-    @transport.event_handler("on_client_disconnected")
-    async def on_client_disconnected(transport_instance, client):
-        logger.info("[twilio] Client disconnected, cancelling pipeline")
-        await task.cancel()
-
     try:
+        _mark_startup_event(pre_session_log_lines, f"[startup] Loading user context: user_id={user_id}")
+        user_context = load_user_context(user_id, supabase)
+        _mark_startup_event(
+            pre_session_log_lines,
+            (
+                "[startup] User context loaded: "
+                f"connection_type={user_context.email_account.connection_type}, "
+                f"provider={user_context.email_account.provider}"
+            ),
+        )
+
+        # TwilioFrameSerializer handles mulaw 8kHz <-> PCM16 transcoding via SOXR
+        _mark_startup_event(pre_session_log_lines, "[startup] Creating Twilio serializer")
+        serializer = TwilioFrameSerializer(
+            stream_sid=stream_sid,
+            call_sid=call_sid,
+            params=TwilioFrameSerializer.InputParams(auto_hang_up=False),
+        )
+        _mark_startup_event(pre_session_log_lines, "[startup] Twilio serializer created")
+
+        _mark_startup_event(pre_session_log_lines, "[startup] Creating FastAPI WebSocket transport")
+        transport = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                serializer=serializer,
+            ),
+        )
+        _mark_startup_event(pre_session_log_lines, "[startup] FastAPI WebSocket transport created")
+
+        _mark_startup_event(pre_session_log_lines, "[startup] Setting up pipeline session")
+        pipeline_result, session, cost_tracker, langfuse_observer, email_ctx = await _setup_pipeline_session(
+            transport,
+            user_context,
+            settings,
+            supabase,
+            transport_type="twilio",
+            pre_session_log_lines=pre_session_log_lines,
+            on_first_assistant_audio=lambda: progress_beep.stop(
+                "assistant_audio",
+                clear_twilio_buffer=True,
+            ),
+        )
+        logger.info("[startup] Pipeline session setup complete")
+        task = pipeline_result.task
+
+        @transport.event_handler("on_client_connected")
+        async def on_client_connected(transport_instance, client):
+            await _start_connected_session(pipeline_result, task, "twilio")
+
+        @transport.event_handler("on_client_disconnected")
+        async def on_client_disconnected(transport_instance, client):
+            logger.info("[twilio] Client disconnected, cancelling pipeline")
+            await task.cancel()
+
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        await pipeline_result.startup_tone.stop("session_end")
-        await cancel_stt_tasks(pipeline_result.stt)
-        await _cleanup_session(
-            email_ctx, cost_tracker, langfuse_observer, session, supabase, settings,
-            narration_http_session=pipeline_result.narration_http_session,
-        )
+        await progress_beep.stop("session_end")
+        if pipeline_result is not None:
+            await cancel_stt_tasks(pipeline_result.stt)
+        if (
+            email_ctx is not None
+            and cost_tracker is not None
+            and langfuse_observer is not None
+            and session is not None
+        ):
+            await _cleanup_session(
+                email_ctx, cost_tracker, langfuse_observer, session, supabase, settings,
+                narration_http_session=pipeline_result.narration_http_session if pipeline_result else None,
+            )
 
 
 # ============================================================================
