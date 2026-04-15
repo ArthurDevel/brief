@@ -11,8 +11,8 @@
 
 "use client";
 
-import { Suspense, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Brain, Calendar, CreditCard, Lightbulb, Mail, Settings, Volume2 } from "lucide-react";
 import GeneralTab from "./GeneralTab";
 import EmailTab from "./EmailTab";
@@ -46,11 +46,21 @@ type TabId = (typeof TABS)[number]["id"];
  * Inner component that reads search params (requires Suspense boundary).
  */
 function SettingsContent() {
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") as TabId | null;
-  const [activeTab, setActiveTab] = useState<TabId>(
-    initialTab && TABS.some((t) => t.id === initialTab) ? initialTab : "general"
-  );
+  const tabParam = searchParams.get("tab") as TabId | null;
+  const activeTab = tabParam && TABS.some((t) => t.id === tabParam) ? tabParam : "general";
+
+  function handleTabClick(tabId: TabId) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", tabId);
+
+    const nextQuery = params.toString();
+    const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
+
+    router.push(nextUrl);
+  }
 
   return (
     <div className="flex-1 flex flex-col" style={{ padding: 0 }}>
@@ -62,7 +72,8 @@ function SettingsContent() {
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabClick(tab.id)}
+              type="button"
               style={{
                 padding: "6px 14px",
                 background: activeTab === tab.id ? "var(--btn-primary-bg)" : "var(--bg-main)",

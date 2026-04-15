@@ -3,6 +3,7 @@ import type { EmailAccountSummary } from "@/lib/types";
 import { UnipileApiError } from "@/lib/unipile/client";
 import {
   normalizeConnectIntent,
+  resolveSuccessRedirectUrl,
   resolveConnectMode,
   shouldRetryReconnectAsCreate,
 } from "../connect/logic";
@@ -108,5 +109,27 @@ describe("shouldRetryReconnectAsCreate", () => {
     );
 
     expect(shouldRetryReconnectAsCreate(error, "reconnect")).toBe(false);
+  });
+});
+
+describe("resolveSuccessRedirectUrl", () => {
+  const appUrl = "https://app.example.com";
+
+  it("preserves the settings query string when the return URL is valid", () => {
+    expect(
+      resolveSuccessRedirectUrl("/dashboard/settings?tab=email&foo=bar", appUrl)
+    ).toBe("https://app.example.com/dashboard/settings?tab=email&foo=bar");
+  });
+
+  it("falls back to the email tab when the path is not the settings page", () => {
+    expect(resolveSuccessRedirectUrl("/dashboard", appUrl)).toBe(
+      "https://app.example.com/dashboard/settings?tab=email"
+    );
+  });
+
+  it("falls back to the email tab for cross-origin URLs", () => {
+    expect(resolveSuccessRedirectUrl("https://evil.example.com/dashboard/settings?tab=email", appUrl)).toBe(
+      "https://app.example.com/dashboard/settings?tab=email"
+    );
   });
 });

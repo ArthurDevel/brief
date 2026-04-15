@@ -28,6 +28,7 @@ import {
 import { mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
 import {
   normalizeConnectIntent,
+  resolveSuccessRedirectUrl,
   resolveConnectMode,
   shouldRetryReconnectAsCreate,
 } from "./logic";
@@ -71,6 +72,7 @@ export async function POST(
     const body = await request.json();
     const provider = body.provider as string;
     const intent = normalizeConnectIntent(body.intent);
+    const returnTo = body.returnTo;
 
     if (!provider || !PROVIDER_MAP[provider]) {
       return errorResponse("EMAIL_CONNECT_FAILED", 400);
@@ -121,7 +123,10 @@ export async function POST(
       reconnectAccountId: connectMode.reconnectAccountId,
     });
 
-    const successRedirectUrl = `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/settings`;
+    const successRedirectUrl = resolveSuccessRedirectUrl(
+      returnTo,
+      process.env.NEXT_PUBLIC_APP_URL!
+    );
 
     const link = await createHostedAuthLinkWithFallback({
       type: connectMode.type,
