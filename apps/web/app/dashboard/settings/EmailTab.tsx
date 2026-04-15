@@ -51,6 +51,8 @@ const PROVIDERS: { id: Provider; label: string }[] = [
   { id: "custom", label: "Custom" },
 ];
 
+const VIDEO_BUCKET_BASE = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/videos`;
+
 // ============================================================================
 // API HELPERS
 // ============================================================================
@@ -518,6 +520,24 @@ export default function EmailTab() {
           )}
         </div>
       )}
+
+      <section className="settings-panel overflow-hidden">
+        <h2>Securing your connection through Unipile</h2>
+        <p className={SETTINGS_SECTION_COPY}>
+          A short video explaining how Unipile handles your inbox connection securely.
+        </p>
+        <div className="max-w-2xl border border-zinc-200 bg-black">
+          <video
+            controls
+            playsInline
+            poster={`${VIDEO_BUCKET_BASE}/brewdock-unipile-thumbnail.jpg`}
+            className="w-full"
+          >
+            <source src={`${VIDEO_BUCKET_BASE}/brewdock-unipile.mp4`} type="video/mp4" />
+            Your browser does not support the video tag.
+          </video>
+        </div>
+      </section>
     </div>
   );
 }
