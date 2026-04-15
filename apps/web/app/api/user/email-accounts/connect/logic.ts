@@ -53,3 +53,27 @@ export function shouldRetryReconnectAsCreate(
     error.body.toLowerCase().includes("account not found")
   );
 }
+
+export function resolveSuccessRedirectUrl(
+  value: unknown,
+  appUrl: string
+): string {
+  const fallbackUrl = new URL("/dashboard/settings?tab=email", appUrl);
+
+  if (typeof value !== "string" || value.length === 0) {
+    return fallbackUrl.toString();
+  }
+
+  try {
+    const appOrigin = new URL(appUrl).origin;
+    const candidateUrl = new URL(value, appUrl);
+
+    if (candidateUrl.origin !== appOrigin || candidateUrl.pathname !== "/dashboard/settings") {
+      return fallbackUrl.toString();
+    }
+
+    return candidateUrl.toString();
+  } catch {
+    return fallbackUrl.toString();
+  }
+}

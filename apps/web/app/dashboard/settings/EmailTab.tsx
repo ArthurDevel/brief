@@ -97,12 +97,13 @@ async function saveCustomAccount(data: Record<string, unknown>): Promise<EmailAc
  */
 async function initiateConnect(
   provider: string,
-  intent: ConnectIntent
+  intent: ConnectIntent,
+  returnTo: string
 ): Promise<string> {
   const res = await fetch("/api/user/email-accounts/connect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider, intent }),
+    body: JSON.stringify({ provider, intent, returnTo }),
   });
   if (!res.ok) {
     throw await buildDashboardErrorFromResponse(res, {
@@ -231,7 +232,7 @@ export default function EmailTab() {
     setError(null);
 
     try {
-      const url = await initiateConnect(provider, intent);
+      const url = await initiateConnect(provider, intent, window.location.href);
       window.open(url, "_blank");
     } catch (err) {
       setError(logAndMapDashboardError(err, "settings-email", "EMAIL_CONNECT_FAILED"));
