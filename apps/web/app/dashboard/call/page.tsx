@@ -12,7 +12,7 @@
 
 import Link from "next/link";
 import { useState, useEffect, useCallback } from "react";
-import { Smartphone, Monitor, QrCode, UserPlus, PhoneOutgoing } from "lucide-react";
+import { ChevronRight, Monitor, PhoneOutgoing, QrCode, Smartphone, UserPlus } from "lucide-react";
 import * as QRCode from "qrcode";
 import type { UserSettings, CompanyPhone, UserPhone } from "@/lib/types";
 import { useEmailStatus } from "@/contexts/EmailStatusContext";
@@ -79,6 +79,8 @@ export default function CallPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
+  const [phoneSectionOpen, setPhoneSectionOpen] = useState(false);
+  const [browserSectionOpen, setBrowserSectionOpen] = useState(false);
   const [callMeStatus, setCallMeStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [callMeError, setCallMeError] = useState<string | null>(null);
   const [browserCallError, setBrowserCallError] = useState<string | null>(null);
@@ -250,126 +252,159 @@ export default function CallPage() {
         <div className="flex flex-col gap-6">
 
           {/* Phone card */}
-          <section className="flex flex-col gap-4 p-6 md:p-8 border border-[var(--border-color)] bg-[var(--bg-surface)]">
-            <div className="w-12 h-12 bg-blue-100/60 flex items-center justify-center shrink-0">
-              <Smartphone className="w-5 h-5 text-blue-600" strokeWidth={2.5} />
-            </div>
+          <section className="flex flex-col gap-4 border border-[var(--border-color)] bg-[var(--bg-surface)] p-6 md:p-8">
+            <button
+              type="button"
+              onClick={() => setPhoneSectionOpen((prev) => !prev)}
+              aria-expanded={phoneSectionOpen}
+              className="flex w-full items-center justify-between gap-4 bg-transparent p-0 text-left"
+            >
+              <span className="flex min-w-0 items-center gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center bg-blue-100/60">
+                  <Smartphone className="h-5 w-5 text-blue-600" strokeWidth={2.5} />
+                </span>
+                <span className="text-lg font-bold text-[var(--text-primary)]">Call from your phone</span>
+              </span>
+              <ChevronRight
+                className={`h-5 w-5 shrink-0 text-[var(--text-secondary)] transition-transform ${
+                  phoneSectionOpen ? "rotate-90" : ""
+                }`}
+                strokeWidth={2.5}
+              />
+            </button>
 
-            <div className="flex flex-col">
-              <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">Call from your phone</h3>
-
-              {!userPhone ? (
-                <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
-                  Add your phone number in{" "}
-                  <a href="/dashboard/settings" className="text-[var(--text-primary)] underline">Settings</a>{" "}
-                  to get a number you can call directly.
-                </p>
-              ) : matchedCompanyPhone && qrDataUrl ? (
-                <>
-                  {/* Desktop: always show QR */}
-                  <div className="hidden md:block">
-                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
-                      Scan this QR code to save the number to your contacts, then call it anytime.
+            {phoneSectionOpen && (
+              <div className="flex flex-col">
+                  {!userPhone ? (
+                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
+                      Add your phone number in{" "}
+                      <a href="/dashboard/settings" className="text-[var(--text-primary)] underline">Settings</a>{" "}
+                      to get a number you can call directly.
                     </p>
-                    <div className="flex flex-col items-start gap-2">
-                      <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
-                      <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
-                    </div>
-                  </div>
-
-                  {/* Mobile: buttons + toggleable QR */}
-                  <div className="md:hidden">
-                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
-                      Save the number to your contacts, then call it anytime.
-                    </p>
-                    <div className="flex flex-col gap-3 mb-4 max-w-[300px]">
-                      <button
-                        onClick={downloadVcard}
-                        className="flex items-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-4 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition"
-                      >
-                        <UserPlus className="w-4 h-4" />
-                        Add to Contacts
-                      </button>
-                      <button
-                        onClick={() => setShowQr((prev) => !prev)}
-                        className="flex items-center gap-2 border border-[var(--border-color)] bg-[var(--bg-surface)] text-[var(--text-primary)] px-4 py-2.5 text-[13px] font-semibold cursor-pointer hover:bg-[var(--bg-hover)] transition"
-                      >
-                        <QrCode className="w-4 h-4" />
-                        {showQr ? "Hide QR" : "Show QR"}
-                      </button>
-                    </div>
-                    {showQr && (
-                      <div className="flex flex-col items-start gap-2">
-                        <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                  ) : matchedCompanyPhone && qrDataUrl ? (
+                    <>
+                      {/* Desktop: always show QR */}
+                      <div className="hidden md:block">
+                        <p className="mb-5 text-[15px] font-medium leading-relaxed text-[var(--text-secondary)]">
+                          Scan this QR code to save the number to your contacts, then call it anytime.
+                        </p>
+                        <div className="flex flex-col items-start gap-2">
+                          <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                          <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
+                        </div>
                       </div>
-                    )}
-                    <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
-                  </div>
 
-                  {/* Call me button */}
-                  <div className="mt-5 pt-5 border-t border-[var(--border-color)]">
-                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-3">
-                      Or have your assistant call you right now.
-                    </p>
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={triggerCallMe}
-                        disabled={callMeStatus === "loading" || callMeStatus === "success"}
-                        className="flex items-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-4 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <PhoneOutgoing className="w-4 h-4" />
-                        {callMeStatus === "loading" ? "Calling..." : callMeStatus === "success" ? "Call initiated" : "Call me"}
-                      </button>
-                      {callMeStatus === "success" && (
-                        <span className="text-[13px] font-medium text-green-600">Your phone should ring shortly.</span>
-                      )}
-                    </div>
-                    {callMeStatus === "error" && callMeError && (
-                      <p className="mt-2 text-[13px] font-medium text-red-600">{callMeError}</p>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm font-medium text-red-600 mb-2">
-                    Your country is not yet supported.
-                  </p>
-                  <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
-                    Phone calls are currently available in:{" "}
-                    {companyPhones.length > 0
-                      ? companyPhones.map((p) => p.label).join(", ")
-                      : "no countries configured yet"}
-                    .
-                  </p>
-                </>
-              )}
-            </div>
+                      {/* Mobile: buttons + toggleable QR */}
+                      <div className="md:hidden">
+                        <p className="mb-5 text-[15px] font-medium leading-relaxed text-[var(--text-secondary)]">
+                          Save the number to your contacts, then call it anytime.
+                        </p>
+                        <div className="mb-4 flex max-w-[300px] flex-col gap-3">
+                          <button
+                            onClick={downloadVcard}
+                            className="flex items-center gap-2 border-none bg-[var(--btn-primary-bg)] px-4 py-2.5 text-[13px] font-semibold text-[var(--btn-primary-text)] cursor-pointer transition hover:bg-[var(--btn-primary-hover)]"
+                          >
+                            <UserPlus className="h-4 w-4" />
+                            Add to Contacts
+                          </button>
+                          <button
+                            onClick={() => setShowQr((prev) => !prev)}
+                            className="flex items-center gap-2 border border-[var(--border-color)] bg-[var(--bg-surface)] px-4 py-2.5 text-[13px] font-semibold text-[var(--text-primary)] cursor-pointer transition hover:bg-[var(--bg-hover)]"
+                          >
+                            <QrCode className="h-4 w-4" />
+                            {showQr ? "Hide QR" : "Show QR"}
+                          </button>
+                        </div>
+                        {showQr && (
+                          <div className="flex flex-col items-start gap-2">
+                            <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                          </div>
+                        )}
+                        <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
+                      </div>
+
+                      {/* Call me button */}
+                      <div className="mt-5 border-t border-[var(--border-color)] pt-5">
+                        <p className="mb-3 text-[15px] font-medium leading-relaxed text-[var(--text-secondary)]">
+                          Or have your assistant call you right now.
+                        </p>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={triggerCallMe}
+                            disabled={callMeStatus === "loading" || callMeStatus === "success"}
+                            className="flex items-center gap-2 border-none bg-[var(--btn-primary-bg)] px-4 py-2.5 text-[13px] font-semibold text-[var(--btn-primary-text)] cursor-pointer transition hover:bg-[var(--btn-primary-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <PhoneOutgoing className="h-4 w-4" />
+                            {callMeStatus === "loading" ? "Calling..." : callMeStatus === "success" ? "Call initiated" : "Call me"}
+                          </button>
+                          {callMeStatus === "success" && (
+                            <span className="text-[13px] font-medium text-green-600">Your phone should ring shortly.</span>
+                          )}
+                        </div>
+                        {callMeStatus === "error" && callMeError && (
+                          <p className="mt-2 text-[13px] font-medium text-red-600">{callMeError}</p>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="mb-2 text-sm font-medium text-red-600">
+                        Your country is not yet supported.
+                      </p>
+                      <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
+                        Phone calls are currently available in:{" "}
+                        {companyPhones.length > 0
+                          ? companyPhones.map((p) => p.label).join(", ")
+                          : "no countries configured yet"}
+                        .
+                      </p>
+                    </>
+                  )}
+              </div>
+            )}
           </section>
 
           {/* Browser call card */}
-          <section className="flex flex-col gap-4 p-6 md:p-8 border border-[var(--border-color)] bg-[var(--bg-surface)]">
-            <div className="w-12 h-12 bg-purple-100/60 flex items-center justify-center shrink-0">
-              <Monitor className="w-5 h-5 text-purple-600" strokeWidth={2.5} />
-            </div>
+          <section className="flex flex-col gap-4 border border-[var(--border-color)] bg-[var(--bg-surface)] p-6 md:p-8">
+            <button
+              type="button"
+              onClick={() => setBrowserSectionOpen((prev) => !prev)}
+              aria-expanded={browserSectionOpen}
+              className="flex w-full items-center justify-between gap-4 bg-transparent p-0 text-left"
+            >
+              <span className="flex min-w-0 items-center gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center bg-purple-100/60">
+                  <Monitor className="h-5 w-5 text-purple-600" strokeWidth={2.5} />
+                </span>
+                <span className="text-lg font-bold text-[var(--text-primary)]">Call from your browser</span>
+              </span>
+              <ChevronRight
+                className={`h-5 w-5 shrink-0 text-[var(--text-secondary)] transition-transform ${
+                  browserSectionOpen ? "rotate-90" : ""
+                }`}
+                strokeWidth={2.5}
+              />
+            </button>
 
-            <div className="flex flex-col">
-              <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">Call from your browser</h3>
-              <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
-                Start a browser call.
-              </p>
+            {browserSectionOpen && (
+              <div className="flex flex-col">
+                  <p className="mb-5 text-[15px] font-medium leading-relaxed text-[var(--text-secondary)]">
+                    Start a browser call.
+                  </p>
 
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  onClick={openBrowserCall}
-                  className="flex items-center justify-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-5 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition"
-                >
-                  Start browser call
-                </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={openBrowserCall}
+                      className="flex items-center justify-center gap-2 border-none bg-[var(--btn-primary-bg)] px-5 py-2.5 text-[13px] font-semibold text-[var(--btn-primary-text)] cursor-pointer transition hover:bg-[var(--btn-primary-hover)]"
+                    >
+                      Start browser call
+                    </button>
+                  </div>
+                  {browserCallError && (
+                    <p className="mt-2 text-[13px] font-medium text-red-600">{browserCallError}</p>
+                  )}
               </div>
-              {browserCallError && (
-                <p className="mt-2 text-[13px] font-medium text-red-600">{browserCallError}</p>
-              )}
-            </div>
+            )}
           </section>
 
         </div>
