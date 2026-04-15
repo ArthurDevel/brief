@@ -91,6 +91,10 @@ export default function EmailStatusBanner(): React.ReactElement | null {
     return null;
   }
 
+  if (pathname === "/dashboard/call") {
+    return null;
+  }
+
   if (pathname === "/dashboard") {
     if (isLoadingOverviewSettings) {
       return null;

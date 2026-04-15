@@ -10,10 +10,13 @@
 
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect, useCallback } from "react";
 import { Smartphone, Monitor, QrCode, UserPlus, PhoneOutgoing } from "lucide-react";
 import * as QRCode from "qrcode";
 import type { UserSettings, CompanyPhone, UserPhone } from "@/lib/types";
+import { useEmailStatus } from "@/contexts/EmailStatusContext";
+import { getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
 import {
   buildDashboardErrorFromResponse,
   logAndMapDashboardError,
@@ -64,6 +67,8 @@ async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
 // ============================================================================
 
 export default function CallPage() {
+  const { status: emailStatus } = useEmailStatus();
+
   // Data state
   const [userPhone, setUserPhone] = useState<UserPhone | null>(null);
   const [companyPhones, setCompanyPhones] = useState<CompanyPhone[]>([]);
@@ -76,6 +81,13 @@ export default function CallPage() {
   const [showQr, setShowQr] = useState(false);
   const [callMeStatus, setCallMeStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [callMeError, setCallMeError] = useState<string | null>(null);
+  const [browserCallError, setBrowserCallError] = useState<string | null>(null);
+
+  const hasConnectedInbox = emailStatus === "connected";
+  const isInboxStatusLoading = emailStatus === null;
+  const inboxRequiredMessage = emailStatus === "connected"
+    ? ""
+    : "We couldn't connect to your inbox. Go to Settings to connect it.";
 
   // Fetch user settings and company phones on mount
   useEffect(() => {
@@ -146,6 +158,12 @@ export default function CallPage() {
    * Triggers an outbound call from the voice pipeline to the user's phone.
    */
   const triggerCallMe = useCallback(async () => {
+    if (!hasConnectedInbox) {
+      setCallMeStatus("error");
+      setCallMeError(inboxRequiredMessage);
+      return;
+    }
+
     setCallMeStatus("loading");
     setCallMeError(null);
 
@@ -163,15 +181,21 @@ export default function CallPage() {
       setCallMeStatus("error");
       setCallMeError(logAndMapDashboardError(err, "call-trigger", "CALL_TRIGGER_FAILED"));
     }
-  }, []);
+  }, [hasConnectedInbox, inboxRequiredMessage]);
 
   /**
    * Opens the standalone browser-call screen in a new tab.
    * This must happen directly in the click handler so the browser treats it as a user-initiated tab open.
    */
   const openBrowserCall = useCallback(() => {
+    if (!hasConnectedInbox) {
+      setBrowserCallError(inboxRequiredMessage);
+      return;
+    }
+
+    setBrowserCallError(null);
     window.open("/call", "_blank", "noopener,noreferrer");
-  }, []);
+  }, [hasConnectedInbox, inboxRequiredMessage]);
 
   // ============================================================================
   // RENDER
@@ -185,12 +209,42 @@ export default function CallPage() {
       </div>
 
       <div className="page-content">
-        {loading ? (
+        {loading || isInboxStatusLoading ? (
           <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
         ) : loadError ? (
           <div className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {loadError}
           </div>
+        ) : !hasConnectedInbox ? (
+          <section className="settings-panel">
+            <div className="max-w-2xl">
+              <h2 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 8px 0", letterSpacing: "-0.02em" }}>
+                Connect your inbox first
+              </h2>
+              <p style={{ fontSize: 15, color: "var(--text-secondary)", margin: "0 0 18px 0", lineHeight: 1.5 }}>
+                {inboxRequiredMessage} Once your inbox is connected, you’ll be able to call from your phone or start a browser call here.
+              </p>
+              <div className="flex flex-wrap items-center gap-4">
+                <Link
+                  href="/dashboard/settings?tab=email"
+                  style={{
+                    background: "var(--btn-primary-bg)",
+                    color: "var(--btn-primary-text)",
+                    padding: "10px 16px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    textDecoration: "none",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                  className="hover:opacity-90 transition-opacity"
+                >
+                  Connect inbox <span style={{ fontSize: 16 }}>&rsaquo;</span>
+                </Link>
+              </div>
+            </div>
+          </section>
         ) : (
           <>
         <div className="flex flex-col gap-6">
@@ -312,6 +366,9 @@ export default function CallPage() {
                   Start browser call
                 </button>
               </div>
+              {browserCallError && (
+                <p className="mt-2 text-[13px] font-medium text-red-600">{browserCallError}</p>
+              )}
             </div>
           </section>
 

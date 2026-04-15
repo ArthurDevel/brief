@@ -13,7 +13,8 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase/client";
+import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
+import { getActiveEmailAccount } from "@/lib/email-accounts";
 import {
   getDashboardErrorMessage,
   type DashboardErrorCode,
@@ -126,6 +127,20 @@ export async function POST(request: NextRequest): Promise<NextResponse<TriggerCa
 
     if (!userId) {
       return errorResponse("UNAUTHORIZED", 401, corsHeaders);
+    }
+
+    const emailLookupClient = user ? supabase : createServiceRoleClient();
+    const emailAccount = await getActiveEmailAccount(emailLookupClient, userId);
+    if (!emailAccount) {
+      return errorResponse("EMAIL_ACCOUNT_REQUIRED", 400, corsHeaders);
+    }
+
+    if (emailAccount.status !== "connected") {
+      if (emailAccount.status === "reconnect_required") {
+        return errorResponse("EMAIL_RECONNECT_REQUIRED", 400, corsHeaders);
+      }
+
+      return errorResponse("EMAIL_INBOX_CONNECT_FAILED", 400, corsHeaders);
     }
 
     const response = await fetch(`${VOICE_PIPELINE_URL}/trigger-call`, {
