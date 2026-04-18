@@ -18,7 +18,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { EmailStatusProvider } from "@/contexts/EmailStatusContext";
 import { createBrowserClient } from "@/lib/supabase/client";
 import EmailStatusBanner from "./EmailStatusBanner";
-import { Home, Phone, Activity, Clock, Settings, Menu, User, LogOut, Shield } from "lucide-react";
+import { Home, Phone, Activity, Clock, Settings, Menu, User, LogOut, Shield, MessageCircle } from "lucide-react";
 import { checkIsAdmin } from "@/app/admin/actions";
 
 // ============================================================================
@@ -170,10 +170,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               {isUserMenuOpen && (
                 <>
                   {isAdmin && (
-                    <Link href="/admin/transactional" className="sidebar-user-logout" style={{ textDecoration: "none" }}>
-                      <Shield size={14} strokeWidth={1.75} />
-                      Admin
-                    </Link>
+                    <>
+                      <Link href="/admin/transactional" className="sidebar-user-logout" style={{ textDecoration: "none" }}>
+                        <Shield size={14} strokeWidth={1.75} />
+                        Admin
+                      </Link>
+                      <Link href="/whatsapp" className="sidebar-user-logout" style={{ textDecoration: "none" }}>
+                        <MessageCircle size={14} strokeWidth={1.75} />
+                        WhatsApp
+                      </Link>
+                    </>
                   )}
                   <button className="sidebar-user-logout" onClick={handleLogout}>
                     <LogOut size={14} strokeWidth={1.75} />
