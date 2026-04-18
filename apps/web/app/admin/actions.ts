@@ -10,15 +10,10 @@
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import { getCookieOptions } from "@/lib/supabase/client";
+import { isAdminUserId } from "@/lib/admin";
 
 // ============================================================================
 // CONSTANTS
-// ============================================================================
-
-const ADMIN_USER_IDS = (process.env.ADMIN_USER_IDS || "").split(",").filter(Boolean);
-
-// ============================================================================
-// MAIN ACTIONS
 // ============================================================================
 
 /**
@@ -47,5 +42,5 @@ export async function checkIsAdmin(): Promise<boolean> {
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return false;
-  return ADMIN_USER_IDS.includes(user.id);
+  return isAdminUserId(user.id);
 }

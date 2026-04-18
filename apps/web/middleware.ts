@@ -26,6 +26,7 @@ const PUBLIC_ROUTES = [
   "/api/cron/engagement-emails",
   "/review/session",
   "/api/session-review",
+  "/api/whatsapp/webhook",
 ];
 
 /** User IDs allowed to access /admin/* routes. */
@@ -120,8 +121,9 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Block non-admin users from /admin/* routes
-  if (user && pathname.startsWith("/admin") && !ADMIN_USER_IDS.includes(user.id)) {
+  // Block non-admin users from privileged routes
+  const isPrivilegedRoute = pathname.startsWith("/admin") || pathname.startsWith("/whatsapp");
+  if (user && isPrivilegedRoute && !ADMIN_USER_IDS.includes(user.id)) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);
