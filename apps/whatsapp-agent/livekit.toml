@@ -1,0 +1,7 @@
+# This app is intended for LiveKit Cloud deployment.
+# Create the actual deployment config with:
+#   lk agent create apps/whatsapp-agent
+# Then keep the generated values in this file committed for future deploys.
+
+[agent]
+name = "whatsapp-composio-agent"

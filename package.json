@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev:web": "pnpm --filter @dublin/web dev",
+    "dev:whatsapp": "pnpm --filter @dublin/whatsapp-server dev",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -8,8 +8,8 @@ for f in "$CONDUCTOR_ROOT_PATH"/.env*(.N); do
     ln -sf "$f" .
 done
 
-# Symlink .env* files from subdirectories (apps/voice-pipeline/, apps/web/)
-for dir in apps/voice-pipeline apps/web; do
+# Symlink .env* files from subdirectories
+for dir in apps/voice-pipeline apps/web apps/whatsapp-server apps/whatsapp-agent; do
     if [ -d "$CONDUCTOR_ROOT_PATH/$dir" ]; then
         mkdir -p "$dir"
         for f in "$CONDUCTOR_ROOT_PATH/$dir"/.env*(.N); do
