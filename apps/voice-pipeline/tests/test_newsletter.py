@@ -36,7 +36,8 @@ from src.newsletter import (
     generate_daily_summary_for_user,
     get_opted_in_users,
 )
-from src.session import ImapConfig
+from src.session import EmailAccount, ImapConfig
+from src.tools.email_client import EmailClientContext
 from src.tools.handlers import _dispatch_tool, _handle_get_newsletter_summary
 
 
@@ -53,6 +54,16 @@ FAKE_IMAP_CONFIG = ImapConfig(
     port=993,
     user="test@example.com",
     password="secret",
+)
+
+FAKE_EMAIL_ACCOUNT = EmailAccount(
+    provider="custom",
+    connection_type="imap_smtp",
+    email_address="test@example.com",
+    unipile_account_id=None,
+    status="connected",
+    imap_config=FAKE_IMAP_CONFIG,
+    smtp_config=None,
 )
 
 FAKE_NEWSLETTER_CONFIG = NewsletterConfig(
@@ -85,32 +96,71 @@ FAKE_EMAILS = [
 # HELPERS
 # ============================================================================
 
-def _mock_supabase_for_opted_in(rows: list[dict]) -> MagicMock:
-    """Create a mock Supabase client that returns the given rows for get_opted_in_users."""
-    mock_client = MagicMock()
-    mock_execute = MagicMock()
-    mock_execute.data = rows
+def _mock_supabase_for_opted_in(
+    settings_rows: list[dict],
+    email_accounts: dict[str, list[dict]] | None = None,
+) -> MagicMock:
+    """Create a mock Supabase client for get_opted_in_users.
 
-    chain = mock_client.table.return_value.select.return_value.not_.is_.return_value
-    chain.execute.return_value = mock_execute
+    Args:
+        settings_rows: Rows returned by the user_settings query.
+        email_accounts: Map of user_id -> account rows from user_email_accounts.
+            If None, all users get a default connected custom account.
+    """
+    mock_client = MagicMock()
+
+    default_account_row = {
+        "id": "acc-1",
+        "provider": "custom",
+        "connection_type": "imap_smtp",
+        "email_address": "user@example.com",
+        "unipile_account_id": None,
+        "status": "connected",
+        "imap_host": "imap.example.com",
+        "imap_port": 993,
+        "imap_user": "user@example.com",
+        "imap_password_secret_id": "secret-id",
+        "smtp_host": "smtp.example.com",
+        "smtp_port": 587,
+        "smtp_user": "user@example.com",
+        "smtp_password_secret_id": "smtp-secret-id",
+    }
+
+    def table_router(table_name: str) -> MagicMock:
+        mock_table = MagicMock()
+        if table_name == "user_settings":
+            mock_table.select.return_value.not_.is_.return_value.execute.return_value = MagicMock(
+                data=settings_rows
+            )
+        elif table_name == "user_email_accounts":
+            # The .eq("user_id", ...) chain captures the user_id
+            def eq_user_id(col: str, value: str) -> MagicMock:
+                if email_accounts is not None:
+                    account_rows = email_accounts.get(value, [])
+                else:
+                    account_rows = [default_account_row]
+                inner = MagicMock()
+                inner.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+                    data=account_rows
+                )
+                return inner
+            mock_table.select.return_value.eq.side_effect = eq_user_id
+        return mock_table
+
+    mock_client.table.side_effect = table_router
     return mock_client
 
 
 def _make_user_settings_row(
     user_id: str,
     newsletter_config: dict | None,
-    has_imap: bool = True,
     country_code: str = "US",
     timezone: str | None = None,
 ) -> dict[str, Any]:
-    """Build a fake user_settings row."""
+    """Build a fake user_settings row (no legacy IMAP fields)."""
     return {
         "user_id": user_id,
         "newsletter_config": newsletter_config,
-        "imap_host": "imap.example.com" if has_imap else None,
-        "imap_port": 993 if has_imap else None,
-        "imap_user": "user@example.com" if has_imap else None,
-        "imap_password_secret_id": "secret-id" if has_imap else None,
         "phone": {"number": "+15550001111", "countryCode": country_code},
         "call_schedule": {"timezone": timezone} if timezone else None,
     }
@@ -180,18 +230,36 @@ def _mock_supabase_for_handler(
 # ============================================================================
 
 @patch("src.newsletter.retrieve_secret", return_value="fake-password")
-def test_get_opted_in_users_filters_by_enabled_and_imap(mock_secret: MagicMock) -> None:
-    """Only users with enabled=true and valid IMAP credentials are returned."""
+def test_get_opted_in_users_filters_by_enabled_and_email_account(mock_secret: MagicMock) -> None:
+    """Only users with enabled=true and an active email account are returned."""
     rows = [
-        _make_user_settings_row("user-enabled-with-creds", {"enabled": True, "newsletters": ["a@x.com"]}, has_imap=True),
-        _make_user_settings_row("user-enabled-no-creds", {"enabled": True, "newsletters": ["b@x.com"]}, has_imap=False),
-        _make_user_settings_row("user-disabled", {"enabled": False, "newsletters": ["c@x.com"]}, has_imap=True),
+        _make_user_settings_row("user-enabled-with-account", {"enabled": True, "newsletters": ["a@x.com"]}),
+        _make_user_settings_row("user-enabled-no-account", {"enabled": True, "newsletters": ["b@x.com"]}),
+        _make_user_settings_row("user-disabled", {"enabled": False, "newsletters": ["c@x.com"]}),
     ]
 
-    result = get_opted_in_users(_mock_supabase_for_opted_in(rows))
+    # user-enabled-no-account has no active email account row
+    mock_supabase = _mock_supabase_for_opted_in(
+        settings_rows=rows,
+        email_accounts={
+            "user-enabled-with-account": [{
+                "id": "acc-1", "provider": "custom", "connection_type": "imap_smtp",
+                "email_address": "user@example.com", "unipile_account_id": None,
+                "status": "connected",
+                "imap_host": "imap.example.com", "imap_port": 993,
+                "imap_user": "user@example.com", "imap_password_secret_id": "secret-id",
+                "smtp_host": "smtp.example.com", "smtp_port": 587,
+                "smtp_user": "user@example.com", "smtp_password_secret_id": "smtp-secret-id",
+            }],
+            "user-enabled-no-account": [],
+            "user-disabled": [],
+        },
+    )
+
+    result = get_opted_in_users(mock_supabase)
 
     assert len(result) == 1
-    assert result[0].user_id == "user-enabled-with-creds"
+    assert result[0].user_id == "user-enabled-with-account"
     assert result[0].newsletter_config.enabled is True
 
 
@@ -207,7 +275,7 @@ async def test_generate_summary_returns_no_newsletters_message_when_no_emails(
     """Returns NO_NEWSLETTERS_MESSAGE when no emails are found."""
     user = OptedInUser(
         user_id=FAKE_USER_ID,
-        imap_config=FAKE_IMAP_CONFIG,
+        email_account=FAKE_EMAIL_ACCOUNT,
         newsletter_config=FAKE_NEWSLETTER_CONFIG,
         timezone="UTC",
     )
@@ -229,7 +297,7 @@ async def test_generate_summary_returns_summary_with_sources_when_emails_found(
     """Returns LLM summary with source references (message IDs) when emails are found."""
     user = OptedInUser(
         user_id=FAKE_USER_ID,
-        imap_config=FAKE_IMAP_CONFIG,
+        email_account=FAKE_EMAIL_ACCOUNT,
         newsletter_config=FAKE_NEWSLETTER_CONFIG,
         timezone="UTC",
     )
@@ -253,7 +321,7 @@ async def test_generate_summary_returns_none_when_already_exists(
     """Returns None (skipped) when a summary already exists for that user + date."""
     user = OptedInUser(
         user_id=FAKE_USER_ID,
-        imap_config=FAKE_IMAP_CONFIG,
+        email_account=FAKE_EMAIL_ACCOUNT,
         newsletter_config=FAKE_NEWSLETTER_CONFIG,
         timezone="UTC",
     )
@@ -288,11 +356,11 @@ async def test_background_job_uses_user_timezone_for_yesterday(
     from src.newsletter import run_daily_newsletter_job
 
     user_nz = OptedInUser(
-        user_id="user-nz", imap_config=FAKE_IMAP_CONFIG,
+        user_id="user-nz", email_account=FAKE_EMAIL_ACCOUNT,
         newsletter_config=FAKE_NEWSLETTER_CONFIG, timezone="Pacific/Auckland",
     )
     user_hi = OptedInUser(
-        user_id="user-hi", imap_config=FAKE_IMAP_CONFIG,
+        user_id="user-hi", email_account=FAKE_EMAIL_ACCOUNT,
         newsletter_config=FAKE_NEWSLETTER_CONFIG, timezone="Pacific/Honolulu",
     )
 
@@ -332,8 +400,12 @@ def test_get_newsletter_summary_returns_summary_and_marks_listened() -> None:
     result, undo, msg_id = _dispatch_tool(
         tool_name="get_newsletter_summary",
         args={},
-        imap_holder={"client": MagicMock(), "config": FAKE_IMAP_CONFIG},
-        smtp_config=MagicMock(),
+        email_ctx=EmailClientContext(
+            connection_type="imap_smtp",
+            provider="custom",
+            imap_holder={"client": MagicMock(), "config": FAKE_IMAP_CONFIG},
+            smtp_config=MagicMock(),
+        ),
         supabase=mock_supabase,
         user_id=FAKE_USER_ID,
     )
@@ -381,8 +453,12 @@ def test_set_newsletter_config_merges_partial_update() -> None:
     result, undo, msg_id = _dispatch_tool(
         tool_name="set_newsletter_config",
         args={"enabled": True},
-        imap_holder={"client": MagicMock(), "config": FAKE_IMAP_CONFIG},
-        smtp_config=MagicMock(),
+        email_ctx=EmailClientContext(
+            connection_type="imap_smtp",
+            provider="custom",
+            imap_holder={"client": MagicMock(), "config": FAKE_IMAP_CONFIG},
+            smtp_config=MagicMock(),
+        ),
         supabase=mock_supabase,
         user_id=FAKE_USER_ID,
     )

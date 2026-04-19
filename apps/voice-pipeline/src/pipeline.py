@@ -19,11 +19,12 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from collections.abc import Awaitable, Callable
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import aiohttp
-from pipecat.frames.frames import InputAudioRawFrame, LLMMessagesFrame, TTSAudioRawFrame
+from pipecat.frames.frames import InputAudioRawFrame, TTSAudioRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -42,14 +43,16 @@ from supabase import Client
 from src.audio.normalizer import AudioNormalizerProcessor
 from src.audio.recorder import write_wav, upload_recording
 from src.audio.speed import AudioSpeedProcessor
+from src.audio.thinking_indicator import ThinkingCueProcessor
+from src.audio.startup_tone import FirstAssistantAudioNotifierProcessor
 from src.config import LLM_MODEL, Settings
 from src.cost_tracker import CostTracker
 from src.langfuse_observer import LangfuseObserver
 from src.tracked_services import TrackedDeepgramTTSService, TrackedOpenAILLMService, UsageTracker
 from src.prompt import build_system_prompt
-from src.session import ActiveSession, SessionMetadata, SmtpConfig, UserContext, get_last_session_end_time
+from src.session import ActiveSession, SessionMetadata, UserContext, get_last_session_end_time
 from src.tools.definitions import get_tool_definitions
-from src.tools.email_client import count_emails_since, count_unread_emails
+from src.tools.email_client import EmailClientContext, count_emails_since, count_unread_emails
 from src.tools.handlers import ActionInput, handle_tool_call
 
 
@@ -91,12 +94,14 @@ TOOL_NARRATIONS: dict[str, str] = {
     "read_email": "Reading that email.",
     "read_thread": "Pulling up the thread.",
     "search_emails": "Searching your emails.",
+    "read_calendar": "Checking your calendar.",
     "draft_email": "Drafting that email.",
     "send_email": "Sending that email.",
     "archive_email": "Archiving that email.",
     "delete_email": "Deleting that email.",
     "batch_archive_emails": "Archiving those emails.",
     "batch_delete_emails": "Deleting those emails.",
+    "batch_move_to_folder": "Moving those emails.",
     "mark_as_read": "Marking that as read.",
     "reply_email": "Sending that reply.",
     "move_to_folder": "Moving that email.",
@@ -122,14 +127,16 @@ def create_pipeline(
     audio_config: dict[str, Any],
     supabase: Client,
     settings: Settings,
-    imap_holder: dict[str, Any],
+    email_ctx: EmailClientContext,
     recording_enabled: bool = False,
+    on_first_assistant_audio: Callable[[], Awaitable[None]] | None = None,
 ) -> PipelineResult:
     """Build the full Pipecat pipeline with STT, LLM, TTS, and speed control.
 
     Pipeline chain:
         transport.input() -> watchdog -> stt -> user_agg -> llm -> tts
-        -> speed -> normalizer -> transport.output() -> [audio_buffer] -> assistant_agg
+        -> speed -> normalizer -> assistant_audio_notifier -> transport.output()
+        -> [audio_buffer] -> assistant_agg
 
     Args:
         transport: The Pipecat transport (WebRTC or Twilio).
@@ -141,9 +148,10 @@ def create_pipeline(
         audio_config: Dict with "sample_rate" and "num_channels" keys.
         supabase: Supabase client for DB operations.
         settings: Application settings.
-        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}
-            for IMAP operations with reconnect support.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
         recording_enabled: Whether to capture audio via AudioBufferProcessor.
+        on_first_assistant_audio: Optional callback fired on the first outbound
+            assistant audio frame before it reaches the transport output.
 
     Returns:
         PipelineResult with the configured task, STT service, audio buffer, and
@@ -153,19 +161,24 @@ def create_pipeline(
     num_channels = audio_config.get("num_channels", 1)
 
     # -- STT (Deepgram Flux -- handles turn detection natively) --
+    logger.info("[startup] Initializing Deepgram Flux STT service")
     stt = DeepgramFluxSTTService(
         api_key=settings.deepgram_api_key,
     )
+    logger.info("[startup] Deepgram Flux STT service initialized")
 
     # -- LLM (OpenRouter, OpenAI-compatible) --
+    logger.info("[startup] Initializing OpenRouter LLM service: model=%s", LLM_MODEL)
     llm = TrackedOpenAILLMService(
         usage_tracker=usage_tracker,
         api_key=settings.openrouter_api_key,
         model=LLM_MODEL,
         base_url="https://openrouter.ai/api/v1",
     )
+    logger.info("[startup] OpenRouter LLM service initialized")
 
     # -- TTS (Deepgram with markdown filtering) --
+    logger.info("[startup] Initializing Deepgram TTS service: voice=%s sample_rate=%s", user_context.voice_preference, sample_rate)
     tts = TrackedDeepgramTTSService(
         usage_tracker=usage_tracker,
         api_key=settings.deepgram_api_key,
@@ -173,14 +186,17 @@ def create_pipeline(
         sample_rate=sample_rate,
         text_filter=MarkdownTextFilter(),
     )
+    logger.info("[startup] Deepgram TTS service initialized")
 
     # -- Speed processor (WSOLA) --
+    logger.info("[startup] Initializing audio processors: speed=%s", user_context.voice_speed)
     speed_config = {"speed": user_context.voice_speed}
     speed_processor = AudioSpeedProcessor(
         config=speed_config,
         sample_rate=sample_rate,
         num_channels=num_channels,
     )
+    thinking_indicator = ThinkingCueProcessor()
 
     # -- Audio normalizer (RMS normalization with peak limiting) --
     normalizer_config = {"enabled": True}
@@ -188,36 +204,58 @@ def create_pipeline(
         config=normalizer_config,
         sample_rate=sample_rate,
     )
+    assistant_audio_notifier = FirstAssistantAudioNotifierProcessor(
+        on_first_audio=on_first_assistant_audio,
+    )
+    logger.info("[startup] Audio processors initialized")
 
     # -- Fetch email count for greeting --
     email_context: str | None = None
     last_ended_at: datetime | None = None
     try:
+        logger.info("[startup] Loading last completed session end time")
         last_ended_at = get_last_session_end_time(session.user_id, supabase)
-        if last_ended_at is None:
-            count = count_unread_emails(imap_holder["client"])
-            if count > 0:
-                email_context = f"This is the user's first call. They have {count} unread emails in their inbox."
+        logger.info("[startup] Last completed session end time loaded: present=%s", last_ended_at is not None)
+
+        # Email count for greeting is only available for custom IMAP accounts.
+        # Unipile accounts skip this -- the greeting will not mention email counts.
+        if email_ctx.connection_type == "imap_smtp" and email_ctx.imap_holder is not None:
+            imap_client_for_count = email_ctx.imap_holder["client"]
+            if last_ended_at is None:
+                logger.info("[startup] Counting unread emails for first-call greeting")
+                count = count_unread_emails(imap_client_for_count)
+                logger.info("[startup] Unread email count complete: count=%d", count)
+                if count > 0:
+                    email_context = f"This is the user's first call. They have {count} unread emails in their inbox."
+                else:
+                    email_context = "This is the user's first call. They have no unread emails."
             else:
-                email_context = "This is the user's first call. They have no unread emails."
+                # Convert last_ended_at to the user's local timezone before comparing
+                # against Gmail's naive local-time envelope dates. Without this,
+                # the UTC hour (e.g. 18:21) would be compared against local-time
+                # envelope dates (e.g. 11:25), incorrectly filtering out all emails.
+                since_for_count = last_ended_at
+                if user_context.timezone is not None:
+                    since_for_count = last_ended_at.astimezone(ZoneInfo(user_context.timezone))
+                logger.info("[startup] Counting emails since last call for greeting")
+                count = count_emails_since(imap_client_for_count, since_for_count)
+                logger.info("[startup] New email count complete: count=%d", count)
+                if count > 0:
+                    email_context = f"You have {count} new emails since the last call."
+                else:
+                    email_context = "No new emails since the last call."
         else:
-            # Convert last_ended_at to the user's local timezone before comparing
-            # against Gmail's naive local-time envelope dates. Without this,
-            # the UTC hour (e.g. 18:21) would be compared against local-time
-            # envelope dates (e.g. 11:25), incorrectly filtering out all emails.
-            since_for_count = last_ended_at
-            if user_context.timezone is not None:
-                since_for_count = last_ended_at.astimezone(ZoneInfo(user_context.timezone))
-            count = count_emails_since(imap_holder["client"], since_for_count)
-            if count > 0:
-                email_context = f"You have {count} new emails since the last call."
+            # Unipile account: set a basic context based on whether this is the first call
+            if last_ended_at is None:
+                email_context = "This is the user's first call."
             else:
-                email_context = "No new emails since the last call."
+                email_context = None
     except Exception:
         logger.warning("[pipeline] Failed to fetch email count for greeting, skipping")
 
     # -- Check for unlistened newsletter summary --
     try:
+        logger.info("[startup] Checking newsletter summary state")
         if user_context.timezone is not None:
             nl_tz = ZoneInfo(user_context.timezone)
         else:
@@ -238,6 +276,7 @@ def create_pipeline(
                 email_context += f" {nl_line}"
             else:
                 email_context = nl_line
+        logger.info("[startup] Newsletter summary check complete: present=%s", bool(nl_response.data))
     except Exception:
         logger.warning("[pipeline] Failed to check newsletter summary, skipping")
 
@@ -253,10 +292,11 @@ def create_pipeline(
 
     session_metadata = SessionMetadata(
         current_datetime=current_dt_str,
-        user_email=user_context.imap_config.user,
+        user_email=user_context.email_account.email_address or "",
         last_call_datetime=last_call_dt_str,
     )
 
+    logger.info("[startup] Building system prompt")
     system_prompt = build_system_prompt(
         user_context.memory_entries,
         user_context.tool_approval_config,
@@ -265,8 +305,11 @@ def create_pipeline(
         session_metadata=session_metadata,
     )
     langfuse_observer.set_system_prompt(system_prompt)
+    logger.info("[startup] System prompt built: chars=%d", len(system_prompt))
 
+    logger.info("[startup] Loading tool definitions")
     tools = get_tool_definitions()
+    logger.info("[startup] Tool definitions loaded: count=%d", len(tools))
 
     messages: list[Any] = [{"role": "system", "content": system_prompt}]
     # Convert OpenAI-format tool dicts to FunctionSchema objects.
@@ -305,8 +348,8 @@ def create_pipeline(
             tool_name=tool_name,
             session=session,
             user_context=user_context,
-            imap_holder=imap_holder,
-            imap_lock=imap_lock,
+            email_ctx=email_ctx,
+            email_lock=imap_lock,
             supabase=supabase,
             langfuse_observer=langfuse_observer,
             deepgram_api_key=settings.deepgram_api_key,
@@ -315,6 +358,7 @@ def create_pipeline(
             narration_http_session=narration_http_session,
             openrouter_api_key=settings.openrouter_api_key,
         )
+    logger.info("[startup] Function handlers registered: count=%d", len(tool_names))
 
     # -- Audio idle watchdog (cancels pipeline if audio frames stop arriving) --
     async def _on_audio_idle(processor: IdleFrameProcessor) -> None:
@@ -372,8 +416,10 @@ def create_pipeline(
         user_aggregator,
         llm,
         tts,
+        thinking_indicator,
         speed_processor,
         normalizer,
+        assistant_audio_notifier,
         transport.output(),
     ]
     if audio_buffer is not None:
@@ -381,6 +427,7 @@ def create_pipeline(
     pipeline_chain.append(assistant_aggregator)
 
     pipeline = Pipeline(pipeline_chain)
+    logger.info("[startup] Pipeline chain assembled: processors=%d", len(pipeline_chain))
 
     task = PipelineTask(
         pipeline,
@@ -389,9 +436,10 @@ def create_pipeline(
             audio_out_sample_rate=sample_rate,
             enable_metrics=True,
             enable_usage_metrics=True,
-            observers=[cost_tracker, langfuse_observer],
         ),
+        observers=[cost_tracker, langfuse_observer],
     )
+    logger.info("[startup] Pipeline task created")
 
     return PipelineResult(
         task=task,
@@ -482,8 +530,8 @@ def _register_tool_handler(
     tool_name: str,
     session: ActiveSession,
     user_context: UserContext,
-    imap_holder: dict[str, Any],
-    imap_lock: asyncio.Lock,
+    email_ctx: EmailClientContext,
+    email_lock: asyncio.Lock,
     supabase: Client,
     langfuse_observer: LangfuseObserver,
     deepgram_api_key: str,
@@ -495,12 +543,13 @@ def _register_tool_handler(
     """Register a single function call handler on the LLM service.
 
     The handler wraps handle_tool_call in asyncio.to_thread() since
-    IMAP operations are synchronous. An asyncio.Lock serializes IMAP
-    access (imapclient is not thread-safe). A timeout ensures the handler
-    returns an error before pipecat's hardcoded "COMPLETED" fires.
+    email operations may be synchronous (IMAP). An asyncio.Lock serializes
+    access (imapclient is not thread-safe, and Unipile benefits from
+    serialized access too). A timeout ensures the handler returns an error
+    before pipecat's hardcoded "COMPLETED" fires.
 
     The timeout_secs on register_function() is a safety net (20s) that
-    accounts for lock wait time + IMAP timeout. The manual asyncio.wait_for()
+    accounts for lock wait time + operation timeout. The manual asyncio.wait_for()
     inside the lock (8s) remains the primary timeout mechanism.
 
     If a narration phrase is configured in TOOL_NARRATIONS for this tool,
@@ -513,9 +562,9 @@ def _register_tool_handler(
         llm: The LLM service to register the handler on.
         tool_name: The tool name to register.
         session: Active session for action input.
-        user_context: User context for approval config and SMTP config.
-        imap_holder: Mutable IMAP client holder.
-        imap_lock: Shared asyncio.Lock to serialize IMAP access.
+        user_context: User context for approval config.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
+        email_lock: Shared asyncio.Lock to serialize email access.
         supabase: Supabase client.
         langfuse_observer: Observer for Langfuse tracing.
         deepgram_api_key: Deepgram API key for HTTP TTS narration.
@@ -558,16 +607,16 @@ def _register_tool_handler(
                 arguments=args,
             )
 
-            # Lock serializes IMAP access (imapclient is not thread-safe).
+            # Lock serializes email access (imapclient is not thread-safe,
+            # and Unipile benefits from serialized access too).
             # Timeout ensures we return an error before pipecat sends "COMPLETED".
-            async with imap_lock:
+            async with email_lock:
                 action_result = await asyncio.wait_for(
                     asyncio.to_thread(
                         handle_tool_call,
                         action_input,
                         user_context.tool_approval_config,
-                        imap_holder,
-                        user_context.smtp_config,
+                        email_ctx,
                         supabase,
                     ),
                     timeout=TOOL_CALL_TIMEOUT_SECS,

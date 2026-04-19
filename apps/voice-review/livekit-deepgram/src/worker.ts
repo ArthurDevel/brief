@@ -16,10 +16,12 @@ import { VAD } from "@livekit/agents-plugin-silero";
 import { getEnv } from "./lib/env.js";
 import {
   AGENT_NAME,
+  buildGreetingInstructions,
+  buildSystemPrompt,
   DEFAULT_SPEED,
   DEFAULT_VOICE,
   SAMPLE_RATE,
-  SYSTEM_PROMPT,
+  ConversationMode,
   SessionConfig
 } from "./shared/constants.js";
 import { ProcessedDeepgramTTS } from "./tts/processedDeepgramTts.js";
@@ -31,14 +33,18 @@ interface WorkerUserData {
 function parseConfig(metadata: string): SessionConfig {
   try {
     const parsed = JSON.parse(metadata) as Partial<SessionConfig>;
+    const mode: ConversationMode = parsed.mode === "demo" ? "demo" : "chat";
     return {
       voice: typeof parsed.voice === "string" && parsed.voice ? parsed.voice : DEFAULT_VOICE,
-      speed: typeof parsed.speed === "number" ? parsed.speed : DEFAULT_SPEED
+      speed: typeof parsed.speed === "number" ? parsed.speed : DEFAULT_SPEED,
+      mode,
+      demoBrief: typeof parsed.demoBrief === "string" ? parsed.demoBrief.trim() : undefined
     };
   } catch {
     return {
       voice: DEFAULT_VOICE,
-      speed: DEFAULT_SPEED
+      speed: DEFAULT_SPEED,
+      mode: "chat"
     };
   }
 }
@@ -78,7 +84,7 @@ async function entry(ctx: JobContext): Promise<void> {
   });
 
   const agent = new voice.Agent({
-    instructions: SYSTEM_PROMPT
+    instructions: buildSystemPrompt(config)
   });
 
   const closed = new Promise<void>((resolve) => {
@@ -93,7 +99,7 @@ async function entry(ctx: JobContext): Promise<void> {
 
   await ctx.waitForParticipant();
   session.generateReply({
-    instructions: "Greet the user briefly and invite them to test the voice."
+    instructions: buildGreetingInstructions(config)
   });
 
   await closed;

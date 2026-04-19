@@ -47,12 +47,14 @@ const HEADER_STYLE =
  * @param actions - List of actions taken during the session (already filtered, no read-only)
  * @param sessionId - The session ID, used for building dashboard links
  * @param baseUrl - The app base URL (e.g. https://app.example.com)
+ * @param reviewUrl - Short-lived public review URL for this session
  * @returns HTML string ready to send
  */
 export function buildSessionSummaryHtml(
   actions: ActionRow[],
   sessionId: string,
-  baseUrl: string
+  baseUrl: string,
+  reviewUrl: string
 ): string {
   const sessionUrl = `${baseUrl}/dashboard/sessions/${sessionId}`;
 
@@ -66,10 +68,10 @@ export function buildSessionSummaryHtml(
           <td style="padding:0 40px 24px 40px;">
             <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
               <td style="padding-right:8px;">
-                <a href="${sessionUrl}?action=approve&actionId=all" style="${BUTTON_STYLE_APPROVE}">Approve All</a>
+                <a href="${reviewUrl}" style="${BUTTON_STYLE_APPROVE}">Approve All</a>
               </td>
               <td>
-                <a href="${sessionUrl}?action=reject&actionId=all" style="${BUTTON_STYLE_DECLINE}">Decline All</a>
+                <a href="${reviewUrl}" style="${BUTTON_STYLE_DECLINE}">Decline All</a>
               </td>
             </tr></table>
           </td>
@@ -88,7 +90,7 @@ export function buildSessionSummaryHtml(
         ${bulkButtons}
         <tr>
           <td style="padding:0 40px 32px 40px;">
-            ${buildActionTable(pendingActions, sessionUrl, true)}
+            ${buildActionTable(pendingActions, reviewUrl, true)}
           </td>
         </tr>`
       : "";
@@ -177,8 +179,8 @@ export function buildSessionSummaryHtml(
               <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                 <tr>
                   <td style="background-color:#000000;">
-                    <a href="${sessionUrl}" target="_blank" style="${BUTTON_STYLE_PRIMARY}">
-                      View on dashboard &#8594;
+                    <a href="${reviewUrl}" target="_blank" style="${BUTTON_STYLE_PRIMARY}">
+                      Review session &#8594;
                     </a>
                   </td>
                 </tr>
@@ -212,7 +214,7 @@ export function buildSessionSummaryHtml(
                 Do your email while you drive.
               </p>
               <p style="margin:0; font-family:${FONT_FAMILY}; font-size:11px; font-weight:400; color:#a1a1aa; line-height:1.5;">
-                BrewDock Inc., 123 Main Street, Suite 100, San Francisco, CA 94105
+                BrewDock Inc., 2 Marina Blvd B300, San Francisco, CA 94123
               </p>
             </td>
           </tr>
@@ -234,20 +236,20 @@ export function buildSessionSummaryHtml(
 /**
  * Builds an HTML table for a list of actions.
  * @param actions - Actions to render
- * @param sessionUrl - Base session dashboard URL
+ * @param reviewUrl - Short-lived public review URL
  * @param showButtons - Whether to show approve/decline buttons (for pending) or status text
  * @returns HTML table string
  */
 function buildActionTable(
   actions: ActionRow[],
-  sessionUrl: string,
+  reviewUrl: string,
   showButtons: boolean
 ): string {
   const rows = actions
     .map((action) => {
       const label = TOOL_LABELS[action.toolName] ?? action.toolName;
       const lastCol = showButtons
-        ? buildActionButtons(sessionUrl, action.id)
+        ? buildActionButtons(reviewUrl, action.id)
         : `<span style="font-family:${FONT_FAMILY}; font-size:12px; font-weight:600; color:#71717a; text-transform:uppercase; letter-spacing:0.05em;">${action.status}</span>`;
 
       return `
@@ -280,14 +282,25 @@ function buildActionTable(
 
 /**
  * Builds approve/decline button HTML for a pending action.
- * @param sessionUrl - The base session dashboard URL
+ * @param reviewUrl - Short-lived public review URL
  * @param actionId - The action ID
  * @returns HTML string with two buttons
  */
-function buildActionButtons(sessionUrl: string, actionId: string): string {
-  const approveUrl = `${sessionUrl}?action=approve&actionId=${actionId}`;
-  const declineUrl = `${sessionUrl}?action=reject&actionId=${actionId}`;
+function buildActionButtons(reviewUrl: string, actionId: string): string {
+  const approveUrl = buildFocusedReviewUrl(reviewUrl, actionId);
+  const declineUrl = buildFocusedReviewUrl(reviewUrl, actionId);
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td><a href="${approveUrl}" style="${BUTTON_STYLE_APPROVE}">Approve</a></td></tr><tr><td style="padding-top:4px;"><a href="${declineUrl}" style="${BUTTON_STYLE_DECLINE}">Decline</a></td></tr></table>`;
+}
+
+/**
+ * Adds a focus action ID to a review URL without making the email link mutate data.
+ * @param reviewUrl - Base review URL including token
+ * @param actionId - Action ID to focus on the review page
+ * @returns Review URL with focusActionId query param
+ */
+function buildFocusedReviewUrl(reviewUrl: string, actionId: string): string {
+  const separator = reviewUrl.includes("?") ? "&" : "?";
+  return `${reviewUrl}${separator}focusActionId=${encodeURIComponent(actionId)}`;
 }
 
 /**

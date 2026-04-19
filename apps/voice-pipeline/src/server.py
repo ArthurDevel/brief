@@ -18,6 +18,7 @@ import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, cast
 from urllib.parse import quote
 
@@ -33,7 +34,7 @@ from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
 from pipecat.transports.base_transport import TransportParams
-from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
+from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
@@ -59,16 +60,18 @@ from src.auth.twilio_auth import (
     lookup_user_by_phone,
     verify_pin,
 )
+from src.audio.thinking_indicator import ThinkingIndicatorMixer
 from src.config import load_settings
 from src.cost_tracker import CostTracker
 from src.langfuse_client import shutdown_langfuse_client
 from src.langfuse_observer import LangfuseObserver
 from src.tracked_services import UsageTracker
 from src.pipeline import create_pipeline, PipelineResult
+from src.audio.startup_tone import TwilioProgressBeepPlayer
 from src.scheduler import fetch_company_phones, start_scheduler
-from src.session import end_session, load_user_context, start_session
+from src.session import build_email_account, end_session, load_user_context, start_session
 from src.supabase_client import create_service_client
-from src.tools.email_client import close_imap_connection, create_imap_connection
+from src.tools.email_client import close_imap_connection, create_imap_connection, create_email_client_context, EmailClientContext
 from src.tools import contact_sync
 from src import session_logger
 
@@ -98,6 +101,12 @@ _webrtc_handler: SmallWebRTCRequestHandler | None = None
 
 # Track sessions that are currently in a pipeline so we can finalize them on shutdown
 _live_pipeline_sessions: dict[str, dict[str, Any]] = {}  # db_session_id -> cleanup info
+
+# Twilio webhooks before <Connect><Stream> do not have a DB session id yet.
+# Buffer their startup markers by CallSid and splice them into the session log
+# when /twilio-stream receives the matching start event.
+_twilio_pre_stream_logs: dict[str, list[str]] = {}
+MAX_TWILIO_PRE_STREAM_LOG_BUFFERS = 200
 
 
 # ============================================================================
@@ -247,35 +256,114 @@ async def cancel_stt_tasks(stt: DeepgramFluxSTTService) -> None:
     logger.info("[server] Cancelled %d dangling STT task(s)", len(tasks))
 
 
+def _validate_browser_call_prerequisites(user_id: str, supabase: Any) -> tuple[bool, str | None]:
+    """Validate browser-call prerequisites before allocating a WebRTC session.
+
+    Returns:
+        Tuple of (is_valid, error_code). error_code is a stable frontend code.
+    """
+    account_response = (
+        supabase.table("user_email_accounts")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    account_rows = cast(list[dict[str, Any]], account_response.data or []) if account_response else []
+    if not account_rows:
+        return False, "EMAIL_ACCOUNT_REQUIRED"
+
+    try:
+        build_email_account(account_rows[0], supabase)
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        if "credentials not configured" in message:
+            return False, "EMAIL_PASSWORDS_REQUIRED"
+        return False, "CALL_START_FAILED"
+
+    return True, None
+
+
 # ============================================================================
 # BOT HANDLER (shared by WebRTC and Twilio)
 # ============================================================================
 
-async def _setup_pipeline_session(transport, user_context, settings, supabase, transport_type):
-    """Set up a pipeline session: create session, IMAP connection, cost tracker, and pipeline.
+def _mark_startup_event(lines: list[str], message: str) -> None:
+    """Record an early startup marker for later session-log upload."""
+    lines.append(session_logger.make_log_line(
+        level="INFO",
+        module="server",
+        message=message,
+        timestamp=datetime.now(timezone.utc),
+    ))
+    logger.info(message)
+
+
+def _mark_twilio_call_event(call_sid: str, message: str) -> None:
+    """Record a Twilio pre-stream marker keyed by CallSid."""
+    if call_sid:
+        if call_sid not in _twilio_pre_stream_logs and len(_twilio_pre_stream_logs) >= MAX_TWILIO_PRE_STREAM_LOG_BUFFERS:
+            _twilio_pre_stream_logs.pop(next(iter(_twilio_pre_stream_logs)), None)
+        lines = _twilio_pre_stream_logs.setdefault(call_sid, [])
+        lines.append(session_logger.make_log_line(
+            level="INFO",
+            module="server",
+            message=message,
+            timestamp=datetime.now(timezone.utc),
+        ))
+    logger.info(message)
+
+
+async def _setup_pipeline_session(
+    transport,
+    user_context,
+    settings,
+    supabase,
+    transport_type,
+    pre_session_log_lines: list[str] | None = None,
+    on_first_assistant_audio=None,
+):
+    """Set up a pipeline session: create email client context, cost tracker, and pipeline.
 
     Args:
         transport: Pipecat transport (SmallWebRTC or FastAPIWebsocketTransport).
-        user_context: Loaded user context with IMAP/SMTP config.
+        user_context: Loaded user context with email_account.
         settings: App settings.
         supabase: Supabase client.
         transport_type: "webrtc" or "twilio".
+        on_first_assistant_audio: Optional callback fired before the first
+            outbound assistant audio frame reaches the transport output.
 
     Returns:
-        Tuple of (pipeline_result, session, cost_tracker, langfuse_observer, imap_holder).
+        Tuple of (pipeline_result, session, cost_tracker, langfuse_observer, email_ctx).
     """
     session = start_session(user_context.user_id, supabase)
     session_logger.start(session.session_id)
+    if pre_session_log_lines:
+        session_logger.append_lines(session.session_id, pre_session_log_lines)
+    logger.info("[startup] DB session created and session log capture started: session_id=%s", session.session_id)
     usage_tracker = UsageTracker()
     cost_tracker = CostTracker(usage_tracker)
     langfuse_observer = LangfuseObserver(session, transport_type, voice=user_context.voice_preference)
+    logger.info("[startup] Starting Langfuse trace")
     langfuse_observer.start_trace()
+    logger.info("[startup] Langfuse trace started")
 
-    imap_client = create_imap_connection(user_context.imap_config)
-    imap_holder = {
-        "client": imap_client,
-        "config": user_context.imap_config,
-    }
+    # Build provider-aware email client context
+    # For custom accounts: opens IMAP connection. For Unipile: just stores account_id.
+    account = user_context.email_account
+    imap_holder: dict[str, Any] | None = None
+    if account.connection_type == "imap_smtp" and account.imap_config:
+        logger.info("[startup] Opening IMAP connection: host=%s user=%s", account.imap_config.host, account.imap_config.user)
+        imap_client = create_imap_connection(account.imap_config)
+        logger.info("[startup] IMAP connection opened")
+        imap_holder = {"client": imap_client, "config": account.imap_config}
+
+    logger.info("[startup] Creating email client context: connection_type=%s", account.connection_type)
+    email_ctx = create_email_client_context(account, imap_holder=imap_holder)
+    logger.info("[startup] Email client context created")
 
     try:
         # Sample rate depends on transport: 8kHz for Twilio (mulaw native),
@@ -286,6 +374,7 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             "num_channels": 1,
         }
 
+        logger.info("[startup] Creating Pipecat pipeline")
         pipeline_result = create_pipeline(
             transport=transport,
             user_context=user_context,
@@ -296,34 +385,45 @@ async def _setup_pipeline_session(transport, user_context, settings, supabase, t
             audio_config=audio_config,
             supabase=supabase,
             settings=settings,
-            imap_holder=imap_holder,
+            email_ctx=email_ctx,
             recording_enabled=settings.recording_enabled,
+            on_first_assistant_audio=on_first_assistant_audio,
         )
+        logger.info("[startup] Pipecat pipeline created")
 
         # Register so lifespan shutdown can finalize if the process is killed
         _live_pipeline_sessions[session.session_id] = {
             "session": session,
             "cost_tracker": cost_tracker,
             "langfuse_observer": langfuse_observer,
-            "imap_holder": imap_holder,
+            "email_ctx": email_ctx,
             "supabase": supabase,
             "settings": settings,
             "narration_http_session": pipeline_result.narration_http_session,
         }
 
-        return pipeline_result, session, cost_tracker, langfuse_observer, imap_holder
+        return pipeline_result, session, cost_tracker, langfuse_observer, email_ctx
 
     except Exception:
         session_logger.stop(session.session_id)
-        try:
-            close_imap_connection(imap_client)
-        except Exception as exc:
-            logger.warning("[server] Error closing IMAP on setup failure: %s", exc)
+        if imap_holder and imap_holder.get("client"):
+            try:
+                close_imap_connection(imap_holder["client"])
+            except Exception as exc:
+                logger.warning("[server] Error closing IMAP on setup failure: %s", exc)
         raise
 
 
+async def _start_connected_session(pipeline_result: PipelineResult, task, log_prefix: str) -> None:
+    """Start optional session side-effects, then queue the first assistant turn."""
+    logger.info("[%s] Client connected, sending greeting", log_prefix)
+    if pipeline_result.audio_buffer:
+        await pipeline_result.audio_buffer.start_recording()
+    await task.queue_frames([LLMRunFrame()])
+
+
 async def _cleanup_session(
-    imap_holder,
+    email_ctx: EmailClientContext,
     cost_tracker,
     langfuse_observer,
     session,
@@ -337,7 +437,7 @@ async def _cleanup_session(
     Closes the narration HTTP session if one was created.
 
     Args:
-        imap_holder: Mutable IMAP client holder.
+        email_ctx: Provider-aware email client context (holds IMAP holder for custom accounts).
         cost_tracker: Cost tracker for the session.
         langfuse_observer: Langfuse observer for the session.
         session: Active session to finalize.
@@ -345,10 +445,12 @@ async def _cleanup_session(
         settings: App settings (for OpenRouter API key).
         narration_http_session: Mutable dict holding the shared aiohttp session, or None.
     """
-    try:
-        close_imap_connection(imap_holder["client"])
-    except BaseException as exc:
-        logger.warning("[server] Error closing IMAP connection: %s", exc)
+    # Close IMAP connection if this was a custom account
+    if email_ctx.connection_type == "imap_smtp" and email_ctx.imap_holder:
+        try:
+            close_imap_connection(email_ctx.imap_holder["client"])
+        except BaseException as exc:
+            logger.warning("[server] Error closing IMAP connection: %s", exc)
 
     try:
         await cost_tracker.fetch_llm_costs(settings.openrouter_api_key)
@@ -387,12 +489,25 @@ async def _cleanup_session(
         await session_logger.upload_session_logs(session.session_id, log_text, supabase)
 
     # Incremental contact sync (fire-and-forget, never blocks cleanup)
-    if imap_holder.get("config"):
-        try:
-            contact_sync.incremental_sync(imap_holder["config"], session.user_id, supabase)
+    # Loads the active email account from user_email_accounts to support both
+    # custom (IMAP) and Unipile accounts.
+    try:
+        from src.session import build_email_account
+        account_response = (
+            supabase.table("user_email_accounts")
+            .select("*")
+            .eq("user_id", session.user_id)
+            .eq("is_active", True)
+            .limit(1)
+            .execute()
+        )
+        account_rows = cast(list[dict[str, Any]], account_response.data or [])
+        if account_rows:
+            email_account = build_email_account(account_rows[0], supabase)
+            contact_sync.incremental_sync(email_account, session.user_id, supabase)
             logger.info("[server] Incremental contact sync completed for user %s", session.user_id)
-        except Exception as exc:
-            logger.warning("[server] Incremental contact sync failed for user %s: %s", session.user_id, exc)
+    except Exception as exc:
+        logger.warning("[server] Incremental contact sync failed for user %s: %s", session.user_id, exc)
 
     _live_pipeline_sessions.pop(session.session_id, None)
 
@@ -410,42 +525,76 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
         connection: SmallWebRTCConnection from the request handler.
         body: requestData from the WebRTC offer (contains token).
     """
+    pre_session_log_lines: list[str] = []
+    _mark_startup_event(pre_session_log_lines, "[startup] WebRTC bot handler entered")
+
     token = body.get("token", "")
     if not token:
         logger.error("[server] WebRTC: no token in requestData")
         return
 
+    _mark_startup_event(pre_session_log_lines, "[startup] WebRTC loading settings")
     settings = load_settings()
-    supabase = create_service_client(settings)
+    _mark_startup_event(pre_session_log_lines, "[startup] WebRTC settings loaded")
 
+    _mark_startup_event(pre_session_log_lines, "[startup] WebRTC creating Supabase service client")
+    supabase = create_service_client(settings)
+    _mark_startup_event(pre_session_log_lines, "[startup] WebRTC Supabase service client created")
+
+    _mark_startup_event(pre_session_log_lines, "[startup] WebRTC verifying JWT")
     user_id = verify_token(token, supabase)
     if not user_id:
         logger.error("[server] WebRTC: invalid JWT")
         return
 
     logger.info("[server] WebRTC client authenticated: user %s", user_id)
+    _mark_startup_event(pre_session_log_lines, f"[startup] WebRTC JWT verified: user_id={user_id}")
 
-    user_context = load_user_context(user_id, supabase)
+    _mark_startup_event(pre_session_log_lines, f"[startup] WebRTC loading user context: user_id={user_id}")
+    try:
+        user_context = load_user_context(user_id, supabase)
+    except Exception as exc:
+        logger.error("[server] WebRTC startup failed for user %s: %s", user_id, exc)
+        try:
+            await connection.pc.close()
+        except Exception:
+            logger.exception("[server] Failed to close WebRTC peer connection after startup error")
+        return
+    _mark_startup_event(
+        pre_session_log_lines,
+        (
+            "[startup] WebRTC user context loaded: "
+            f"connection_type={user_context.email_account.connection_type}, "
+            f"provider={user_context.email_account.provider}"
+        ),
+    )
 
+    _mark_startup_event(pre_session_log_lines, "[startup] WebRTC creating transport")
     transport = SmallWebRTCTransport(
         webrtc_connection=connection,
         params=TransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            audio_out_mixer=ThinkingIndicatorMixer(),
         ),
     )
+    _mark_startup_event(pre_session_log_lines, "[startup] WebRTC transport created")
 
-    pipeline_result, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
-        transport, user_context, settings, supabase, transport_type="webrtc"
+    _mark_startup_event(pre_session_log_lines, "[startup] WebRTC setting up pipeline session")
+    pipeline_result, session, cost_tracker, langfuse_observer, email_ctx = await _setup_pipeline_session(
+        transport,
+        user_context,
+        settings,
+        supabase,
+        transport_type="webrtc",
+        pre_session_log_lines=pre_session_log_lines,
     )
+    logger.info("[startup] WebRTC pipeline session setup complete")
     task = pipeline_result.task
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport_instance, client):
-        logger.info("[server] WebRTC client connected, sending greeting")
-        if pipeline_result.audio_buffer:
-            await pipeline_result.audio_buffer.start_recording()
-        await task.queue_frames([LLMRunFrame()])
+        await _start_connected_session(pipeline_result, task, "server")
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport_instance, client):
@@ -458,7 +607,7 @@ async def _webrtc_bot(connection: SmallWebRTCConnection, body: dict) -> None:
     finally:
         await cancel_stt_tasks(pipeline_result.stt)
         await _cleanup_session(
-            imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
+            email_ctx, cost_tracker, langfuse_observer, session, supabase, settings,
             narration_http_session=pipeline_result.narration_http_session,
         )
 
@@ -532,7 +681,7 @@ async def lifespan(app: FastAPI):
         logger.info("[server] Finalizing orphaned session %s on shutdown", sid)
         try:
             await _cleanup_session(
-                info["imap_holder"],
+                info["email_ctx"],
                 info["cost_tracker"],
                 info["langfuse_observer"],
                 info["session"],
@@ -572,7 +721,10 @@ async def health() -> JSONResponse:
 # ============================================================================
 
 def _run_contact_sync(user_id: str, mode: str = "full") -> None:
-    """Background task: load IMAP config from DB/Vault and run contact sync.
+    """Background task: load email account from user_email_accounts and run contact sync.
+
+    Resolves the active email account (custom or Unipile) and passes it to
+    the provider-aware contact sync functions.
 
     Args:
         user_id: The user to sync contacts for.
@@ -583,40 +735,29 @@ def _run_contact_sync(user_id: str, mode: str = "full") -> None:
         settings = load_settings()
         supabase = create_service_client(settings)
 
-        # Load IMAP config from DB + Vault (same pattern as load_user_context)
-        settings_response = (
-            supabase.table("user_settings")
-            .select("imap_host, imap_port, imap_user, imap_password_secret_id")
+        # Load active email account from user_email_accounts
+        from src.session import build_email_account
+        account_response = (
+            supabase.table("user_email_accounts")
+            .select("*")
             .eq("user_id", user_id)
-            .single()
+            .eq("is_active", True)
+            .limit(1)
             .execute()
         )
 
-        if not settings_response.data:
-            logger.error("[server] sync-contacts: no settings found for user %s", user_id)
+        account_rows = cast(list[dict[str, Any]], account_response.data or [])
+        if not account_rows:
+            logger.error("[server] sync-contacts: no active email account for user %s", user_id)
             return
 
-        row = cast(dict[str, Any], settings_response.data)
-        if not row.get("imap_password_secret_id"):
-            logger.error("[server] sync-contacts: no IMAP credentials for user %s", user_id)
-            return
-
-        from src.tools.vault import retrieve_secret
-        imap_password = retrieve_secret(supabase, str(row["imap_password_secret_id"]))
-
-        from src.session import ImapConfig
-        imap_config = ImapConfig(
-            host=str(row["imap_host"]),
-            port=int(row["imap_port"]),
-            user=str(row["imap_user"]),
-            password=imap_password,
-        )
+        email_account = build_email_account(account_rows[0], supabase)
 
         if mode == "incremental":
-            count = contact_sync.incremental_sync(imap_config, user_id, supabase)
+            count = contact_sync.incremental_sync(email_account, user_id, supabase)
             logger.info("[server] Incremental contact sync completed for user %s: %d contacts", user_id, count)
         else:
-            count = contact_sync.full_sync(imap_config, user_id, supabase)
+            count = contact_sync.full_sync(email_account, user_id, supabase)
             logger.info("[server] Full contact sync completed for user %s: %d contacts", user_id, count)
 
     except Exception as exc:
@@ -702,14 +843,18 @@ async def trigger_call(request: Request) -> JSONResponse:
         supabase.table("user_settings")
         .select("phone")
         .eq("user_id", user_id)
-        .single()
+        .maybe_single()
         .execute()
     )
 
-    if not response.data:
+    if response is None:
         return JSONResponse({"success": False, "error": "no_phone_configured"})
 
-    row = cast(dict[str, Any], response.data)
+    response_data = response.data
+    if response_data is None:
+        return JSONResponse({"success": False, "error": "no_phone_configured"})
+
+    row = cast(dict[str, Any], response_data)
     phone = row.get("phone")
     if not phone or not phone.get("number") or not phone.get("countryCode"):
         return JSONResponse({"success": False, "error": "no_phone_configured"})
@@ -773,6 +918,19 @@ async def webrtc_start(request: Request) -> JSONResponse:
     user_id = verify_token(token, supabase)
     if not user_id:
         return JSONResponse({"error": "Invalid token"}, status_code=401)
+
+    prerequisites_ok, prerequisite_error_code = _validate_browser_call_prerequisites(
+        user_id, supabase
+    )
+    if not prerequisites_ok:
+        status_code = 400 if prerequisite_error_code != "CALL_START_FAILED" else 500
+        return JSONResponse(
+            {
+                "code": prerequisite_error_code,
+                "error": prerequisite_error_code,
+            },
+            status_code=status_code,
+        )
 
     if not check_usage_limit(user_id, supabase):
         return JSONResponse({"error": "Monthly call limit reached", "code": "LIMIT_REACHED"}, status_code=403)
@@ -868,13 +1026,17 @@ async def twilio_voice(request: Request) -> Response:
     """
     form = await request.form()
     caller_phone = str(form.get("From", ""))
+    call_sid = str(form.get("CallSid", ""))
+    _mark_twilio_call_event(call_sid, f"[startup] Incoming call webhook received: call_sid={call_sid}, from={caller_phone}")
 
     settings = load_settings()
     supabase = create_service_client(settings)
+    _mark_twilio_call_event(call_sid, "[startup] Incoming call settings and Supabase client ready")
 
     logger.info("[twilio] Incoming call from %s", caller_phone)
 
     user_record = lookup_user_by_phone(caller_phone, supabase)
+    _mark_twilio_call_event(call_sid, f"[startup] Caller lookup complete: found={user_record is not None}")
 
     if user_record is None:
         logger.info("[twilio] Unknown caller %s, rejecting", caller_phone)
@@ -896,6 +1058,7 @@ async def twilio_voice(request: Request) -> Response:
         twiml = build_twiml_reject("You have reached your monthly call limit. Goodbye.")
         return Response(content=twiml, media_type="text/xml")
 
+    _mark_twilio_call_event(call_sid, f"[startup] Returning PIN gather TwiML: user_id={user_record['user_id']}")
     twiml = build_twiml_gather_pin(user_record["user_id"], attempt=1)
     logger.info("[twilio] Returning TwiML:\n%s", twiml)
     return Response(content=twiml, media_type="text/xml")
@@ -906,8 +1069,10 @@ async def twilio_verify_pin(request: Request) -> Response:
     """Verify the caller's PIN and connect to the media stream."""
     form = await request.form()
     digits = str(form.get("Digits", ""))
+    call_sid = str(form.get("CallSid", ""))
     user_id = request.query_params.get("userId", "")
     attempt = int(request.query_params.get("attempt", "1"))
+    _mark_twilio_call_event(call_sid, f"[startup] PIN verification webhook received: call_sid={call_sid}, user_id={user_id}, attempt={attempt}")
 
     if not user_id:
         twiml = build_twiml_reject("Authentication error. Goodbye.")
@@ -915,6 +1080,7 @@ async def twilio_verify_pin(request: Request) -> Response:
 
     settings = load_settings()
     supabase = create_service_client(settings)
+    _mark_twilio_call_event(call_sid, "[startup] PIN verification settings and Supabase client ready")
 
     pin_response = (
         supabase.table("user_settings")
@@ -932,6 +1098,7 @@ async def twilio_verify_pin(request: Request) -> Response:
     pin_hash = str(pin_data["pin_hash"])
 
     if verify_pin(digits, pin_hash):
+        _mark_twilio_call_event(call_sid, f"[startup] PIN verified: user_id={user_id}")
         stream_url = f"wss://{request.url.hostname}/twilio-stream"
 
         public_url = settings.public_url
@@ -941,6 +1108,7 @@ async def twilio_verify_pin(request: Request) -> Response:
             stream_url = f"{ws_scheme}://{host}/twilio-stream"
 
         logger.info("[twilio] PIN verified for user %s, connecting stream", user_id)
+        _mark_twilio_call_event(call_sid, f"[startup] Returning stream TwiML after PIN verification: user_id={user_id}")
         twiml = build_twiml_connect(stream_url, user_id)
         return Response(content=twiml, media_type="text/xml")
 
@@ -955,6 +1123,7 @@ async def twilio_verify_pin(request: Request) -> Response:
         return Response(content=twiml, media_type="text/xml")
 
     logger.info("[twilio] Incorrect PIN for user %s, attempt %d", user_id, attempt)
+    _mark_twilio_call_event(call_sid, f"[startup] PIN verification failed: user_id={user_id}, attempt={attempt}")
     twiml = build_twiml_gather_pin(user_id, attempt=next_attempt)
     return Response(content=twiml, media_type="text/xml")
 
@@ -997,7 +1166,9 @@ async def twilio_scheduled_call(request: Request) -> Response:
         return Response(content=twiml, media_type="text/xml")
 
     # Parse form data (Twilio sends application/x-www-form-urlencoded)
-    await request.form()
+    form = await request.form()
+    call_sid = str(form.get("CallSid", ""))
+    _mark_twilio_call_event(call_sid, f"[startup] Scheduled/outbound call answer webhook received: call_sid={call_sid}, user_id={user_id}")
 
     # Build stream URL from settings.public_url (same logic as verify-pin)
     stream_url = f"wss://{request.url.hostname}/twilio-stream"
@@ -1009,6 +1180,7 @@ async def twilio_scheduled_call(request: Request) -> Response:
         stream_url = f"{ws_scheme}://{host}/twilio-stream"
 
     logger.info("[twilio] Scheduled call answered for user %s, connecting stream", user_id)
+    _mark_twilio_call_event(call_sid, f"[startup] Returning stream TwiML for scheduled/outbound call: user_id={user_id}")
     twiml = build_twiml_connect(stream_url, user_id)
     return Response(content=twiml, media_type="text/xml")
 
@@ -1023,16 +1195,31 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
     userId is passed via <Parameter> in TwiML. Twilio delivers it in
     the "start" event's customParameters, available via call_data["body"].
     """
+    pre_session_log_lines: list[str] = []
+
+    _mark_startup_event(pre_session_log_lines, "[startup] Twilio stream handler entered")
     await websocket.accept()
+    _mark_startup_event(pre_session_log_lines, "[startup] Twilio WebSocket accepted")
 
     # parse_telephony_websocket reads the "connected" and "start" messages,
     # returning (transport_type, call_data). After this call, subsequent
     # messages flow through the transport's receive loop.
+    _mark_startup_event(pre_session_log_lines, "[startup] Waiting for Twilio connected/start messages")
     _transport_type, call_data = await parse_telephony_websocket(websocket)
     stream_sid: str = call_data.get("stream_id", "")
     call_sid: str = call_data.get("call_id", "")
     body: dict[str, Any] = call_data.get("body", {})
     user_id: str = body.get("userId", "")
+
+    if call_sid:
+        earlier_lines = _twilio_pre_stream_logs.pop(call_sid, [])
+        if earlier_lines:
+            pre_session_log_lines = earlier_lines + pre_session_log_lines
+
+    _mark_startup_event(
+        pre_session_log_lines,
+        f"[startup] Parsed Twilio stream metadata: stream_sid={stream_sid}, call_sid={call_sid}, user_id={user_id}",
+    )
 
     if not user_id:
         logger.error("[twilio] No userId in stream start message")
@@ -1044,56 +1231,99 @@ async def twilio_stream_ws(websocket: WebSocket) -> None:
         stream_sid, call_sid, user_id,
     )
 
+    progress_beep = TwilioProgressBeepPlayer(websocket=websocket, stream_sid=stream_sid)
+    pipeline_result: PipelineResult | None = None
+    session = None
+    cost_tracker = None
+    langfuse_observer = None
+    email_ctx = None
+
+    await progress_beep.start()
+
+    _mark_startup_event(pre_session_log_lines, "[startup] Loading settings")
     settings = load_settings()
+    _mark_startup_event(pre_session_log_lines, "[startup] Settings loaded")
+
+    _mark_startup_event(pre_session_log_lines, "[startup] Creating Supabase service client")
     supabase = create_service_client(settings)
+    _mark_startup_event(pre_session_log_lines, "[startup] Supabase service client created")
 
     logger.info("[twilio] Media stream connected for user %s", user_id)
 
-    user_context = load_user_context(user_id, supabase)
-
-    # TwilioFrameSerializer handles mulaw 8kHz <-> PCM16 transcoding via SOXR
-    serializer = TwilioFrameSerializer(
-        stream_sid=stream_sid,
-        call_sid=call_sid,
-        params=TwilioFrameSerializer.InputParams(auto_hang_up=False),
-    )
-
-    transport = FastAPIWebsocketTransport(
-        websocket=websocket,
-        params=FastAPIWebsocketParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            vad_enabled=False,
-            serializer=serializer,
-        ),
-    )
-
-    pipeline_result, session, cost_tracker, langfuse_observer, imap_holder = await _setup_pipeline_session(
-        transport, user_context, settings, supabase, transport_type="twilio"
-    )
-    task = pipeline_result.task
-
-    @transport.event_handler("on_client_connected")
-    async def on_client_connected(transport_instance, client):
-        logger.info("[twilio] Client connected, sending greeting")
-        if pipeline_result.audio_buffer:
-            await pipeline_result.audio_buffer.start_recording()
-        await task.queue_frames([LLMRunFrame()])
-
-    @transport.event_handler("on_client_disconnected")
-    async def on_client_disconnected(transport_instance, client):
-        logger.info("[twilio] Client disconnected, cancelling pipeline")
-        await task.cancel()
-
     try:
+        _mark_startup_event(pre_session_log_lines, f"[startup] Loading user context: user_id={user_id}")
+        user_context = load_user_context(user_id, supabase)
+        _mark_startup_event(
+            pre_session_log_lines,
+            (
+                "[startup] User context loaded: "
+                f"connection_type={user_context.email_account.connection_type}, "
+                f"provider={user_context.email_account.provider}"
+            ),
+        )
+
+        # TwilioFrameSerializer handles mulaw 8kHz <-> PCM16 transcoding via SOXR
+        _mark_startup_event(pre_session_log_lines, "[startup] Creating Twilio serializer")
+        serializer = TwilioFrameSerializer(
+            stream_sid=stream_sid,
+            call_sid=call_sid,
+            params=TwilioFrameSerializer.InputParams(auto_hang_up=False),
+        )
+        _mark_startup_event(pre_session_log_lines, "[startup] Twilio serializer created")
+
+        _mark_startup_event(pre_session_log_lines, "[startup] Creating FastAPI WebSocket transport")
+        transport = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                audio_out_mixer=ThinkingIndicatorMixer(),
+                serializer=serializer,
+            ),
+        )
+        _mark_startup_event(pre_session_log_lines, "[startup] FastAPI WebSocket transport created")
+
+        _mark_startup_event(pre_session_log_lines, "[startup] Setting up pipeline session")
+        pipeline_result, session, cost_tracker, langfuse_observer, email_ctx = await _setup_pipeline_session(
+            transport,
+            user_context,
+            settings,
+            supabase,
+            transport_type="twilio",
+            pre_session_log_lines=pre_session_log_lines,
+            on_first_assistant_audio=lambda: progress_beep.stop(
+                "assistant_audio",
+                clear_twilio_buffer=True,
+            ),
+        )
+        logger.info("[startup] Pipeline session setup complete")
+        task = pipeline_result.task
+
+        @transport.event_handler("on_client_connected")
+        async def on_client_connected(transport_instance, client):
+            await _start_connected_session(pipeline_result, task, "twilio")
+
+        @transport.event_handler("on_client_disconnected")
+        async def on_client_disconnected(transport_instance, client):
+            logger.info("[twilio] Client disconnected, cancelling pipeline")
+            await task.cancel()
+
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
     finally:
-        await cancel_stt_tasks(pipeline_result.stt)
-        await _cleanup_session(
-            imap_holder, cost_tracker, langfuse_observer, session, supabase, settings,
-            narration_http_session=pipeline_result.narration_http_session,
-        )
+        await progress_beep.stop("session_end")
+        if pipeline_result is not None:
+            await cancel_stt_tasks(pipeline_result.stt)
+        if (
+            email_ctx is not None
+            and cost_tracker is not None
+            and langfuse_observer is not None
+            and session is not None
+        ):
+            await _cleanup_session(
+                email_ctx, cost_tracker, langfuse_observer, session, supabase, settings,
+                narration_http_session=pipeline_result.narration_http_session if pipeline_result else None,
+            )
 
 
 # ============================================================================

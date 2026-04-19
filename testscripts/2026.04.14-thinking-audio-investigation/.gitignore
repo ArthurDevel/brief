@@ -1,0 +1,7 @@
+/.env
+/.env.example
+/input/*
+!/input/.gitkeep
+/output/*
+!/output/.gitkeep
+/__pycache__/

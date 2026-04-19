@@ -25,11 +25,13 @@ from zoneinfo import ZoneInfo
 
 from supabase import Client
 
-from src.session import ImapConfig, SmtpConfig, _timezone_from_country_code
+from src.session import ImapConfig, _timezone_from_country_code
 from src.tools.classification import classify_action
 from src.tools.contact_matcher import rank_contacts
 from src.tools.definitions import CAPABILITIES_MARKDOWN
 from src.tools import email_client
+from src.tools import unipile_client
+from src.tools.email_client import EmailClientContext
 from src.tools.markdown_formatter import format_email_summaries, format_email, format_folders, format_thread
 
 logger = logging.getLogger(__name__)
@@ -91,21 +93,19 @@ class UndoResult:
 def handle_tool_call(
     input: ActionInput,
     user_config: dict[str, str],
-    imap_holder: dict[str, Any],
-    smtp_config: SmtpConfig,
+    email_ctx: EmailClientContext,
     supabase: Client,
 ) -> ActionResult:
     """Main entry point for processing a tool call from the voice pipeline.
 
     Classifies the action, then either queues as pending or executes immediately.
-    Writes the action to the DB in both cases.
+    Writes the action to the DB in both cases. Routes through the provider-aware
+    email client context so handlers do not need to know which provider is used.
 
     Args:
         input: The tool call input (user_id, session_id, tool_name, arguments).
         user_config: User's per-tool classification overrides.
-        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}
-            so with_reconnect can swap the client on failure.
-        smtp_config: SMTP configuration for sending emails.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
         supabase: Supabase client for DB operations.
 
     Returns:
@@ -113,9 +113,11 @@ def handle_tool_call(
     """
     # Intercept batch tools before the normal classify/dispatch flow
     if input.tool_name == "batch_archive_emails":
-        return _handle_batch_archive(input, imap_holder, smtp_config, supabase)
+        return _handle_batch_archive(input, email_ctx, supabase)
     if input.tool_name == "batch_delete_emails":
         return _handle_batch_delete(input, supabase)
+    if input.tool_name == "batch_move_to_folder":
+        return _handle_batch_move(input, email_ctx, supabase)
 
     classification = classify_action(input.tool_name, user_config)
     requires_approval = classification == "mutating_queued"
@@ -124,14 +126,13 @@ def handle_tool_call(
         return _insert_pending_action(input, supabase)
 
     # Execute immediately (read_only or mutating_auto)
-    return _execute_and_store(input, imap_holder, smtp_config, supabase)
+    return _execute_and_store(input, email_ctx, supabase)
 
 
 def execute_action(
     action_id: str,
     supabase: Client,
-    imap_holder: dict[str, Any],
-    smtp_config: SmtpConfig,
+    email_ctx: EmailClientContext,
 ) -> ActionResult:
     """Execute a pending/approved action by ID (called by dashboard approve flow).
 
@@ -140,8 +141,7 @@ def execute_action(
     Args:
         action_id: The action row ID to execute.
         supabase: Supabase client for DB operations.
-        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}.
-        smtp_config: SMTP configuration for sending emails.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
 
     Returns:
         ActionResult with the outcome.
@@ -172,8 +172,7 @@ def execute_action(
     result, undo_recipe, _ = _dispatch_tool(
         tool_name=action["tool_name"],
         args=action["arguments"],
-        imap_holder=imap_holder,
-        smtp_config=smtp_config,
+        email_ctx=email_ctx,
         supabase=supabase,
         user_id=action["user_id"],
         session_id=None,
@@ -214,7 +213,7 @@ def execute_action(
 def undo_action(
     action_id: str,
     supabase: Client,
-    imap_holder: dict[str, Any],
+    email_ctx: EmailClientContext,
 ) -> UndoResult:
     """Reverse an executed action using its stored undo recipe.
 
@@ -223,7 +222,7 @@ def undo_action(
     Args:
         action_id: The action row ID to undo.
         supabase: Supabase client for DB operations.
-        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
 
     Returns:
         UndoResult indicating success or failure.
@@ -267,7 +266,7 @@ def undo_action(
             )
 
     # Dispatch the undo operation
-    _dispatch_undo(recipe, imap_holder, supabase)
+    _dispatch_undo(recipe, email_ctx, supabase)
 
     # Update the action status
     update_response = (
@@ -289,8 +288,7 @@ def undo_action(
 
 def _handle_batch_archive(
     input: ActionInput,
-    imap_holder: dict[str, Any],
-    smtp_config: SmtpConfig,
+    email_ctx: EmailClientContext,
     supabase: Client,
 ) -> ActionResult:
     """Fan out a batch archive request into individual archive_email actions.
@@ -301,8 +299,7 @@ def _handle_batch_archive(
 
     Args:
         input: The batch action input containing email_ids in arguments.
-        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}.
-        smtp_config: SMTP configuration for sending emails.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
         supabase: Supabase client for DB operations.
 
     Returns:
@@ -327,7 +324,7 @@ def _handle_batch_archive(
             arguments={"email_id": email_id, "source_folder": source_folder},
         )
         try:
-            result = _execute_and_store(individual_input, imap_holder, smtp_config, supabase)
+            result = _execute_and_store(individual_input, email_ctx, supabase)
             action_ids.append(result.action_id)
             if not first_action_id:
                 first_action_id = result.action_id
@@ -398,6 +395,139 @@ def _handle_batch_delete(
     )
 
 
+def _handle_batch_move(
+    input: ActionInput,
+    email_ctx: EmailClientContext,
+    supabase: Client,
+) -> ActionResult:
+    """Move multiple emails to a folder in a single batch.
+
+    For Unipile accounts: resolves the source folder once, then makes one PUT
+    call per email (no per-email folder validation or re-dispatching).
+    For IMAP accounts: falls back to individual _execute_and_store calls.
+
+    Args:
+        input: The batch action input containing email_ids, folder, and optional source_folder.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
+        supabase: Supabase client for DB operations.
+
+    Returns:
+        ActionResult with summary counts and all created action IDs.
+    """
+    email_ids: list[str] = input.arguments.get("email_ids", [])
+    folder: str = input.arguments["folder"]
+    source_folder: str = input.arguments.get("source_folder", "INBOX")
+
+    total = len(email_ids)
+    if total == 0:
+        return ActionResult(
+            action_id="",
+            status="executed",
+            result={"total": 0, "succeeded": 0, "failed": 0, "errors": [], "actionIds": []},
+            message=f"Moved 0 of 0 emails to {folder} (0 failed)",
+        )
+
+    if email_ctx.connection_type == "unipile":
+        account_id = email_ctx.unipile_account_id
+        if not account_id:
+            raise RuntimeError("Unipile account has no account_id")
+
+        # Pipecat runs tool handlers on worker threads without an event loop.
+        # Create a fresh loop for the batch Unipile calls, matching the normal dispatch path.
+        loop = asyncio.new_event_loop()
+        try:
+            folders = loop.run_until_complete(unipile_client.list_folders(account_id))
+            folder_paths = [f.path for f in folders]
+            if not any(p.lower() == folder.lower() for p in folder_paths):
+                raise ValueError(
+                    f'Folder "{folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+                )
+
+            # Batch move via Unipile -- resolves source folder once, one PUT per email
+            move_results = loop.run_until_complete(
+                unipile_client.batch_move_to_folder(account_id, email_ids, folder, source_folder, email_ctx.provider)
+            )
+        finally:
+            loop.close()
+
+        # Store each result as an individual action row in the DB
+        succeeded = 0
+        failed = 0
+        errors: list[str] = []
+        action_ids: list[str] = []
+        first_action_id = ""
+
+        for item in move_results:
+            if item["succeeded"]:
+                undo_recipe_data = item["undo_recipe"]
+                response = (
+                    supabase.table("actions")
+                    .insert({
+                        "user_id": input.user_id,
+                        "session_id": input.session_id,
+                        "tool_name": "move_to_folder",
+                        "arguments": {"email_id": item["email_id"], "folder": folder, "source_folder": source_folder},
+                        "result": {"moved": True},
+                        "status": "executed",
+                        "requires_approval": False,
+                        "undo_recipe": undo_recipe_data,
+                        "undo_deadline": None,
+                        "executed_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    .execute()
+                )
+                if response.data:
+                    data = cast(list[dict[str, Any]], response.data)
+                    action_id = data[0]["id"]
+                    action_ids.append(action_id)
+                    if not first_action_id:
+                        first_action_id = action_id
+                succeeded += 1
+            else:
+                failed += 1
+                errors.append(f"email_id={item['email_id']}: {item.get('error', 'unknown')}")
+                logger.warning("Batch move failed for email_id=%s: %s", item["email_id"], item.get("error"))
+
+        return ActionResult(
+            action_id=first_action_id or "",
+            status="executed",
+            result={"total": total, "succeeded": succeeded, "failed": failed, "errors": errors, "actionIds": action_ids},
+            message=f"Moved {succeeded} of {total} emails to {folder} ({failed} failed)",
+        )
+
+    # IMAP fallback: fan out into individual _execute_and_store calls
+    succeeded = 0
+    failed = 0
+    errors = []
+    action_ids = []
+    first_action_id = ""
+
+    for email_id in email_ids:
+        individual_input = ActionInput(
+            user_id=input.user_id,
+            session_id=input.session_id,
+            tool_name="move_to_folder",
+            arguments={"email_id": email_id, "folder": folder, "source_folder": source_folder},
+        )
+        try:
+            result = _execute_and_store(individual_input, email_ctx, supabase)
+            action_ids.append(result.action_id)
+            if not first_action_id:
+                first_action_id = result.action_id
+            succeeded += 1
+        except Exception as e:
+            failed += 1
+            errors.append(f"email_id={email_id}: {e}")
+            logger.warning("Batch move failed for email_id=%s: %s", email_id, e)
+
+    return ActionResult(
+        action_id=first_action_id or "",
+        status="executed",
+        result={"total": total, "succeeded": succeeded, "failed": failed, "errors": errors, "actionIds": action_ids},
+        message=f"Moved {succeeded} of {total} emails to {folder} ({failed} failed)",
+    )
+
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -444,16 +574,14 @@ def _insert_pending_action(input: ActionInput, supabase: Client) -> ActionResult
 
 def _execute_and_store(
     input: ActionInput,
-    imap_holder: dict[str, Any],
-    smtp_config: SmtpConfig,
+    email_ctx: EmailClientContext,
     supabase: Client,
 ) -> ActionResult:
     """Dispatch a tool call and store the result + undo recipe in the DB.
 
     Args:
         input: The action input.
-        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}.
-        smtp_config: SMTP configuration.
+        email_ctx: Provider-aware email client context (IMAP/SMTP or Unipile).
         supabase: Supabase client.
 
     Returns:
@@ -465,8 +593,7 @@ def _execute_and_store(
     result, undo_recipe, message_id = _dispatch_tool(
         tool_name=input.tool_name,
         args=input.arguments,
-        imap_holder=imap_holder,
-        smtp_config=smtp_config,
+        email_ctx=email_ctx,
         supabase=supabase,
         user_id=input.user_id,
         session_id=input.session_id,
@@ -517,22 +644,21 @@ def _execute_and_store(
 def _dispatch_tool(
     tool_name: str,
     args: dict[str, Any],
-    imap_holder: dict[str, Any],
-    smtp_config: SmtpConfig,
+    email_ctx: EmailClientContext,
     supabase: Client,
     user_id: str,
     session_id: str | None = None,
 ) -> tuple[dict[str, Any], UndoRecipe | None, str | None]:
     """Dispatch a tool call to the appropriate handler.
 
-    Routes to email_client functions or Supabase inserts for memory/feature requests.
-    IMAP operations use with_reconnect for connection resilience.
+    Routes to email_client (IMAP/SMTP), unipile_client, or Supabase inserts
+    for memory/feature requests. Provider selection is based on
+    email_ctx.connection_type.
 
     Args:
         tool_name: The tool to execute.
         args: The tool arguments.
-        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}.
-        smtp_config: SMTP configuration.
+        email_ctx: Provider-aware email client context.
         supabase: Supabase client.
         user_id: The user ID (for memory/feature request operations).
         session_id: The session ID for filtering pending actions, or None to skip filtering.
@@ -544,6 +670,28 @@ def _dispatch_tool(
     Raises:
         ValueError: If tool_name is unknown.
     """
+    if tool_name == "read_calendar":
+        return {
+            "implemented": False,
+            "message": "I can't check your calendar yet.",
+            "instruction": (
+                "Tell the user that calendar support is not available yet, and "
+                "ask whether they want to send feedback to the developers using "
+                "submit_feature_request."
+            ),
+            "feedback_tool_name": "submit_feature_request",
+        }, None, None
+
+    # For Unipile accounts, delegate email operations to the Unipile client
+    if email_ctx.connection_type == "unipile":
+        return _dispatch_tool_unipile(tool_name, args, email_ctx, supabase, user_id, session_id)
+
+    # Custom (imap_smtp) account path -- existing IMAP/SMTP logic
+    imap_holder = email_ctx.imap_holder
+    smtp_config = email_ctx.smtp_config
+    if imap_holder is None or smtp_config is None:
+        raise RuntimeError("imap_holder and smtp_config are required for imap_smtp accounts")
+
     config: ImapConfig = imap_holder["config"]
 
     if tool_name == "list_inbox":
@@ -679,6 +827,200 @@ def _dispatch_tool(
         )
         return {"sent": True}, None, None
 
+    if tool_name == "list_folders":
+        folders = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.list_folders(c),
+        )
+        return {"folders": [{"path": f.path, "name": f.name, "special_use": f.special_use} for f in folders]}, None, None
+
+    if tool_name == "move_to_folder":
+        source_folder = args.get("source_folder", "INBOX")
+        target_folder = args["folder"]
+
+        # Validate folder exists before attempting move (both Gmail and IMAP silently accept invalid folders)
+        folders = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.list_folders(c),
+        )
+        folder_paths = [f.path for f in folders]
+        if not any(p.lower() == target_folder.lower() for p in folder_paths):
+            raise ValueError(
+                f'Folder "{target_folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+            )
+
+        recipe_data, message_id = email_client.with_reconnect(
+            imap_holder, config,
+            lambda c: email_client.move_email_to_folder(c, args["email_id"], target_folder, source_folder),
+        )
+        return {"moved": True}, UndoRecipe(**recipe_data), message_id
+
+    # Non-email tools: same for both providers
+    return _dispatch_non_email_tool(tool_name, args, supabase, user_id, session_id)
+
+
+def _dispatch_tool_unipile(
+    tool_name: str,
+    args: dict[str, Any],
+    email_ctx: EmailClientContext,
+    supabase: Client,
+    user_id: str,
+    session_id: str | None = None,
+) -> tuple[dict[str, Any], UndoRecipe | None, str | None]:
+    """Dispatch an email tool call through the Unipile client.
+
+    Runs async Unipile operations via asyncio.get_event_loop().run_until_complete().
+
+    Args:
+        tool_name: The tool to execute.
+        args: The tool arguments.
+        email_ctx: Unipile email client context.
+        supabase: Supabase client.
+        user_id: The user ID.
+        session_id: The session ID for filtering, or None.
+
+    Returns:
+        Tuple of (result dict, UndoRecipe or None, message_id or None).
+
+    Raises:
+        ValueError: If tool_name is unknown.
+    """
+    account_id = email_ctx.unipile_account_id
+    if not account_id:
+        raise RuntimeError("unipile_account_id is required for Unipile dispatch")
+
+    # Pipecat runs tool handlers on worker threads without an event loop.
+    # Create a fresh loop for running async Unipile calls.
+    loop = asyncio.new_event_loop()
+
+    try:
+        if tool_name == "list_inbox":
+            limit = args.get("limit", 20)
+            emails = loop.run_until_complete(unipile_client.list_inbox(account_id, limit))
+
+            # Filter out emails with pending removal actions in this session
+            if session_id is not None:
+                pending_ids = _fetch_pending_email_ids(session_id, supabase)
+                filtered = [e for e in emails if e.id not in pending_ids]
+                filtered = filtered[:limit]
+                markdown = format_email_summaries(filtered, "Inbox")
+
+                sends = _fetch_queued_sends(session_id, supabase)
+                if sends:
+                    markdown += "\n\n" + _format_queued_sends(sends)
+
+                return {"markdown": markdown}, None, None
+
+            return {"markdown": format_email_summaries(emails, "Inbox")}, None, None
+
+        if tool_name == "read_email":
+            result = loop.run_until_complete(unipile_client.read_email(account_id, args["email_id"]))
+            return {"markdown": format_email(result)}, None, None
+
+        if tool_name == "read_thread":
+            # TODO: Implement Unipile thread reading
+            raise NotImplementedError("read_thread is not yet implemented for Unipile accounts")
+
+        if tool_name == "search_emails":
+            emails = loop.run_until_complete(unipile_client.search_emails(account_id, args["query"]))
+
+            if session_id is not None:
+                pending_ids = _fetch_pending_email_ids(session_id, supabase)
+                filtered = [e for e in emails if e.id not in pending_ids]
+                return {"markdown": format_email_summaries(filtered, "Search Results")}, None, None
+
+            return {"markdown": format_email_summaries(emails, "Search Results")}, None, None
+
+        if tool_name == "mark_as_read":
+            # TODO: Implement Unipile mark_as_read
+            raise NotImplementedError("mark_as_read is not yet implemented for Unipile accounts")
+
+        if tool_name == "archive_email":
+            source_folder = args.get("source_folder", "INBOX")
+            undo_recipe_data, message_id = loop.run_until_complete(
+                unipile_client.archive_email(account_id, args["email_id"], source_folder, email_ctx.provider)
+            )
+            recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
+            return {"archived": True}, recipe, message_id
+
+        if tool_name == "delete_email":
+            source_folder = args.get("source_folder", "INBOX")
+            undo_recipe_data, message_id = loop.run_until_complete(
+                unipile_client.delete_email(account_id, args["email_id"], source_folder, email_ctx.provider)
+            )
+            recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
+            return {"deleted": True}, recipe, message_id
+
+        if tool_name == "draft_email":
+            undo_recipe_data = loop.run_until_complete(
+                unipile_client.save_draft(account_id, args["to"], args["subject"], args["body"])
+            )
+            recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
+            draft_id = undo_recipe_data.get("params", {}).get("draft_id", "") if undo_recipe_data else ""
+            return {"drafted": True, "draft_id": draft_id}, recipe, None
+
+        if tool_name == "send_email":
+            loop.run_until_complete(
+                unipile_client.send_email(account_id, args["to"], args["subject"], args["body"])
+            )
+            return {"sent": True}, None, None
+
+        if tool_name == "reply_email":
+            # TODO: Implement Unipile reply with threading
+            raise NotImplementedError("reply_email is not yet implemented for Unipile accounts")
+
+        if tool_name == "list_folders":
+            folders = loop.run_until_complete(unipile_client.list_folders(account_id))
+            return {"folders": [{"path": f.path, "name": f.name, "special_use": f.special_use} for f in folders]}, None, None
+
+        if tool_name == "move_to_folder":
+            source_folder = args.get("source_folder", "INBOX")
+            target_folder = args["folder"]
+
+            # Validate folder exists before attempting move (Unipile silently accepts invalid folders)
+            folders = loop.run_until_complete(unipile_client.list_folders(account_id))
+            folder_paths = [f.path for f in folders]
+            if not any(p.lower() == target_folder.lower() for p in folder_paths):
+                raise ValueError(
+                    f'Folder "{target_folder}" does not exist. Available folders: {", ".join(folder_paths)}'
+                )
+
+            undo_recipe_data, message_id = loop.run_until_complete(
+                unipile_client.move_to_folder(account_id, args["email_id"], target_folder, source_folder, email_ctx.provider)
+            )
+            recipe = UndoRecipe(**undo_recipe_data) if undo_recipe_data else None
+            return {"moved": True}, recipe, message_id
+
+        # Non-email tools: same for both providers
+        return _dispatch_non_email_tool(tool_name, args, supabase, user_id, session_id)
+    finally:
+        loop.close()
+
+
+def _dispatch_non_email_tool(
+    tool_name: str,
+    args: dict[str, Any],
+    supabase: Client,
+    user_id: str,
+    session_id: str | None = None,
+) -> tuple[dict[str, Any], UndoRecipe | None, str | None]:
+    """Dispatch non-email tool calls (memory, feature requests, contacts, etc.).
+
+    These tools work the same regardless of email provider.
+
+    Args:
+        tool_name: The tool to execute.
+        args: The tool arguments.
+        supabase: Supabase client.
+        user_id: The user ID.
+        session_id: The session ID (unused but kept for signature consistency).
+
+    Returns:
+        Tuple of (result dict, UndoRecipe or None, message_id or None).
+
+    Raises:
+        ValueError: If tool_name is unknown.
+    """
     if tool_name == "save_memory":
         result, recipe = _handle_save_memory(supabase, user_id, args["content"])
         return result, recipe, None
@@ -702,23 +1044,6 @@ def _dispatch_tool(
             None,
         )
 
-    if tool_name == "list_folders":
-        folders = email_client.with_reconnect(
-            imap_holder, config,
-            lambda c: email_client.list_folders(c),
-        )
-        return {"markdown": format_folders(folders)}, None, None
-
-    if tool_name == "move_to_folder":
-        source_folder = args.get("source_folder", "INBOX")
-        recipe_data, message_id = email_client.with_reconnect(
-            imap_holder, config,
-            lambda c: email_client.move_email_to_folder(
-                c, args["email_id"], args["folder"], source_folder
-            ),
-        )
-        return {"moved": True}, UndoRecipe(**recipe_data), message_id
-
     if tool_name == "what_can_you_do":
         return ({"markdown": CAPABILITIES_MARKDOWN}, None, None)
 
@@ -735,24 +1060,54 @@ def _dispatch_tool(
 
 def _dispatch_undo(
     recipe: UndoRecipe,
-    imap_holder: dict[str, Any],
+    email_ctx: EmailClientContext,
     supabase: Client,
 ) -> None:
     """Dispatch an undo operation based on the undo recipe.
 
     Args:
         recipe: The undo recipe describing what to reverse.
-        imap_holder: Mutable dict {"client": IMAPClient, "config": ImapConfig}.
+        email_ctx: Provider-aware email client context.
         supabase: Supabase client (for memory/feature request undos).
 
     Raises:
         ValueError: If the undo operation is unknown.
     """
-    config: ImapConfig = imap_holder["config"]
+    # Unipile-specific undo operations
+    if recipe.operation == "unipile_move_email":
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                unipile_client.undo_move_email(
+                    account_id=recipe.params["account_id"],
+                    email_id=recipe.params["email_id"],
+                    to_folders=recipe.params["to_folders"],
+                    rfc_message_id=recipe.params.get("rfc_message_id"),
+                )
+            )
+        finally:
+            loop.close()
+        return
 
+    if recipe.operation == "unipile_delete_draft":
+        loop = asyncio.new_event_loop()
+        try:
+            account_id = recipe.params["account_id"]
+            loop.run_until_complete(
+                unipile_client._request("DELETE", f"/api/v1/emails/{recipe.params['draft_id']}", params={"account_id": account_id})
+            )
+        finally:
+            loop.close()
+        return
+
+    # IMAP-based undo operations (custom accounts)
     if recipe.operation == "move_email":
+        if email_ctx.connection_type != "imap_smtp" or email_ctx.imap_holder is None:
+            raise RuntimeError("IMAP holder required for move_email undo")
+        imap_holder = email_ctx.imap_holder
+        config: ImapConfig = imap_holder["config"]
+
         if "message_id" in recipe.params:
-            # New path: search by Message-ID header for reliable undo
             email_client.with_reconnect(
                 imap_holder, config,
                 lambda c: email_client.move_email(
@@ -763,8 +1118,6 @@ def _dispatch_undo(
                 ),
             )
         elif "email_id" in recipe.params:
-            # Backwards-compat: old recipes stored UID as email_id.
-            # Use direct UID-based move since move_email now expects Message-ID.
             email_client.with_reconnect(
                 imap_holder, config,
                 lambda c: _move_email_by_uid(
@@ -779,6 +1132,10 @@ def _dispatch_undo(
         return
 
     if recipe.operation == "delete_draft":
+        if email_ctx.connection_type != "imap_smtp" or email_ctx.imap_holder is None:
+            raise RuntimeError("IMAP holder required for delete_draft undo")
+        imap_holder = email_ctx.imap_holder
+        config = imap_holder["config"]
         email_client.with_reconnect(
             imap_holder, config,
             lambda c: email_client.delete_draft(c, recipe.params["draft_uid"]),

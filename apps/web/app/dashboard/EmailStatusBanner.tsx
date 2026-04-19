@@ -3,17 +3,19 @@
 /**
  * EmailStatusBanner.tsx
  *
- * Presentational banner that warns the user when their email is not configured
- * or the connection is broken.
+ * Presentational banner that warns the user when their email is not configured,
+ * the connection is broken, or a reconnection is required.
  * - Reads email status from EmailStatusContext
  * - Shows a red banner with actionable link to settings
  * - Hidden on the settings page and when status is loading or connected
  */
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEmailStatus } from "@/contexts/EmailStatusContext";
+import { getDashboardOnboardingState } from "@/lib/dashboard-onboarding";
+import type { UserSettings } from "@/lib/types";
 
 const SETTINGS_EMAIL_URL = "/dashboard/settings?tab=email";
 
@@ -25,6 +27,10 @@ const STATUS_MESSAGES: Record<string, { text: string; linkText: string }> = {
   error: {
     text: "Could not connect to your email account.",
     linkText: "Check your settings",
+  },
+  reconnect_required: {
+    text: "Your email account needs to be reconnected.",
+    linkText: "Reconnect now",
   },
 };
 
@@ -41,6 +47,41 @@ const STATUS_MESSAGES: Record<string, { text: string; linkText: string }> = {
 export default function EmailStatusBanner(): React.ReactElement | null {
   const { status } = useEmailStatus();
   const pathname = usePathname();
+  const [settings, setSettings] = useState<UserSettings | null>(null);
+  const [isLoadingOverviewSettings, setIsLoadingOverviewSettings] = useState(false);
+
+  useEffect(() => {
+    if (pathname !== "/dashboard" || !status || status === "connected") {
+      setSettings(null);
+      setIsLoadingOverviewSettings(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingOverviewSettings(true);
+
+    void fetch("/api/user/settings")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: UserSettings | null) => {
+        if (!cancelled) {
+          setSettings(data);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSettings(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingOverviewSettings(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, status]);
 
   if (!status || status === "connected") {
     return null;
@@ -48,6 +89,20 @@ export default function EmailStatusBanner(): React.ReactElement | null {
 
   if (pathname.startsWith("/dashboard/settings")) {
     return null;
+  }
+
+  if (pathname === "/dashboard/call") {
+    return null;
+  }
+
+  if (pathname === "/dashboard") {
+    if (isLoadingOverviewSettings) {
+      return null;
+    }
+
+    if (settings && !getDashboardOnboardingState(settings, status).isComplete) {
+      return null;
+    }
   }
 
   const message = STATUS_MESSAGES[status];

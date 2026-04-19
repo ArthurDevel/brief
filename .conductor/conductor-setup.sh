@@ -19,6 +19,11 @@ for dir in apps/voice-pipeline apps/web apps/whatsapp-server apps/whatsapp-agent
     fi
 done
 
+# Install workspace JS dependencies from the repo root
+if [ -f "package.json" ] && [ -f "pnpm-lock.yaml" ]; then
+    pnpm install
+fi
+
 # Install Python venv for voice-pipeline
 if [ -d "apps/voice-pipeline" ]; then
     cd apps/voice-pipeline

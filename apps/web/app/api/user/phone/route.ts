@@ -15,6 +15,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
 import type { UserPhone } from "@/lib/types";
 
+const UNIQUE_VIOLATION_CODE = "23505";
+
 // ============================================================================
 // MAIN HANDLERS
 // ============================================================================
@@ -65,6 +67,16 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     );
 
   if (error) {
+    if (error.code === UNIQUE_VIOLATION_CODE) {
+      return NextResponse.json(
+        {
+          code: "PHONE_ALREADY_IN_USE",
+          error: "This phone number is already used by another account. Please use another number.",
+        },
+        { status: 409 }
+      );
+    }
+
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 

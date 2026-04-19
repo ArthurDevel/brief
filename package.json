@@ -7,10 +7,15 @@
     "dev:web": "pnpm --filter @dublin/web dev",
     "dev:whatsapp": "pnpm --filter @dublin/whatsapp-server dev",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "node --env-file=.env.test.local node_modules/vitest/vitest.mjs run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
+    "@types/nodemailer": "^6.4.17",
+    "dotenv": "^17.4.1",
+    "imapflow": "^1.0.171",
     "jsdom": "^29.0.1",
+    "nodemailer": "^6.9.16",
     "typescript": "^5.7.3",
     "vitest": "^4.1.0"
   }

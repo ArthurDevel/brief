@@ -17,19 +17,42 @@ import pytest
 from pipecat.services.llm_service import FunctionCallParams
 
 from src.pipeline import _register_tool_handler
-from src.session import ActiveSession, SmtpConfig, UserContext, MemoryEntry
+from src.session import ActiveSession, EmailAccount, SmtpConfig, UserContext, MemoryEntry
+from src.tools.email_client import EmailClientContext
 
 
 # ============================================================================
 # HELPERS
 # ============================================================================
 
+def _make_email_account() -> EmailAccount:
+    """Create a minimal EmailAccount for testing."""
+    return EmailAccount(
+        provider="custom",
+        connection_type="imap_smtp",
+        email_address="test@localhost",
+        unipile_account_id=None,
+        status="connected",
+        imap_config=None,
+        smtp_config=None,
+    )
+
+
+def _make_email_ctx() -> EmailClientContext:
+    """Create a minimal EmailClientContext for testing (custom/imap_smtp)."""
+    return EmailClientContext(
+        connection_type="imap_smtp",
+        provider="custom",
+        imap_holder={"client": MagicMock(), "config": MagicMock()},
+        smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+    )
+
+
 def _make_user_context() -> UserContext:
     """Create a minimal UserContext for testing."""
     return UserContext(
         user_id="test-user",
-        imap_config=MagicMock(),
-        smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+        email_account=_make_email_account(),
         voice_preference="aura-2-andromeda-en",
         voice_speed=1.2,
         tool_approval_config={},
@@ -62,14 +85,15 @@ def _capture_handler(tool_name: str, **kwargs):
         tool_name=tool_name,
         session=kwargs.get("session", _make_session()),
         user_context=kwargs.get("user_context", _make_user_context()),
-        imap_holder=kwargs.get("imap_holder", {"client": MagicMock(), "config": MagicMock()}),
-        imap_lock=kwargs.get("imap_lock", asyncio.Lock()),
+        email_ctx=kwargs.get("email_ctx", _make_email_ctx()),
+        email_lock=kwargs.get("email_lock", asyncio.Lock()),
         supabase=kwargs.get("supabase", MagicMock()),
         langfuse_observer=kwargs.get("langfuse_observer", MagicMock()),
         deepgram_api_key=kwargs.get("deepgram_api_key", "test-key"),
         tts_sample_rate=kwargs.get("tts_sample_rate", 16000),
         tts_voice=kwargs.get("tts_voice", "aura-asteria-en"),
         narration_http_session=kwargs.get("narration_http_session", {"session": None}),
+        openrouter_api_key=kwargs.get("openrouter_api_key", "test-openrouter-key"),
     )
 
     return captured[tool_name]
@@ -240,8 +264,7 @@ class TestMessageIdInArguments:
         result = handle_tool_call(
             input=ActionInput(user_id="test-user", session_id="test-session", tool_name="archive_email", arguments={"email_id": "42"}),
             user_config={},
-            imap_holder={"client": MagicMock(), "config": MagicMock()},
-            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            email_ctx=_make_email_ctx(),
             supabase=mock_supabase,
         )
 
@@ -269,8 +292,7 @@ class TestMessageIdInArguments:
         result = handle_tool_call(
             input=ActionInput(user_id="test-user", session_id="test-session", tool_name="delete_email", arguments={"email_id": "99"}),
             user_config={"delete_email": "mutating_auto"},
-            imap_holder={"client": MagicMock(), "config": MagicMock()},
-            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            email_ctx=_make_email_ctx(),
             supabase=mock_supabase,
         )
 
@@ -292,13 +314,203 @@ class TestMessageIdInArguments:
         result = handle_tool_call(
             input=ActionInput(user_id="test-user", session_id="test-session", tool_name="mark_as_read", arguments={"email_id": "10"}),
             user_config={},
-            imap_holder={"client": MagicMock(), "config": MagicMock()},
-            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            email_ctx=_make_email_ctx(),
             supabase=mock_supabase,
         )
 
         assert result.status == "executed"
         assert "message_id" not in inserted_row["arguments"]
+
+
+class TestListFolders:
+    """list_folders should dispatch through handle_tool_call and return folder data."""
+
+    def test_returns_folder_list(self, monkeypatch):
+        """list_folders via handle_tool_call should return folders from _dispatch_tool."""
+        from src.tools.handlers import handle_tool_call, ActionInput
+
+        monkeypatch.setattr(
+            "src.tools.handlers._dispatch_tool",
+            lambda **kwargs: (
+                {"folders": [
+                    {"path": "[Gmail]/Trash", "name": "Trash", "special_use": "\\Trash"},
+                    {"path": "Work", "name": "Work", "special_use": None},
+                ]},
+                None,
+                None,
+            ),
+        )
+
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.insert.return_value.execute.return_value.data = [
+            {"id": "fake-action-id"}
+        ]
+
+        result = handle_tool_call(
+            input=ActionInput(
+                user_id="test-user",
+                session_id="test-session",
+                tool_name="list_folders",
+                arguments={},
+            ),
+            user_config={},
+            email_ctx=_make_email_ctx(),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert result.result is not None
+        assert len(result.result["folders"]) == 2
+        assert result.result["folders"][0]["path"] == "[Gmail]/Trash"
+        assert result.result["folders"][1]["name"] == "Work"
+
+
+class TestMoveToFolder:
+    """move_to_folder should dispatch through handle_tool_call, return undo recipe,
+    and store message_id in the action arguments."""
+
+    def _make_mock_supabase(self, inserted_row: dict) -> MagicMock:
+        """Create a mock Supabase client that captures the inserted row."""
+        mock_supabase = MagicMock()
+
+        def capture_insert(row):
+            inserted_row.update(row)
+            mock_response = MagicMock()
+            mock_response.data = [{"id": "action-1"}]
+            mock_chain = MagicMock()
+            mock_chain.execute = MagicMock(return_value=mock_response)
+            return mock_chain
+
+        mock_supabase.table.return_value.insert = capture_insert
+        return mock_supabase
+
+    def test_move_to_folder_returns_undo_recipe_and_stores_message_id(self, monkeypatch):
+        """move_to_folder should return moved:True, undo recipe, and merge message_id."""
+        from src.tools.handlers import handle_tool_call, ActionInput, UndoRecipe
+
+        monkeypatch.setattr(
+            "src.tools.handlers._dispatch_tool",
+            lambda **kwargs: (
+                {"moved": True},
+                UndoRecipe(operation="move_email", params={"message_id": "<move-test@example.com>", "from": "Dev/Github", "to": "INBOX"}),
+                "<move-test@example.com>",
+            ),
+        )
+
+        inserted_row: dict = {}
+        mock_supabase = self._make_mock_supabase(inserted_row)
+
+        result = handle_tool_call(
+            input=ActionInput(
+                user_id="test-user",
+                session_id="test-session",
+                tool_name="move_to_folder",
+                arguments={"email_id": "55", "folder": "Dev/Github"},
+            ),
+            user_config={},
+            email_ctx=_make_email_ctx(),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert result.result is not None
+        assert result.result["moved"] is True
+        assert inserted_row["arguments"]["message_id"] == "<move-test@example.com>"
+        assert inserted_row["arguments"]["email_id"] == "55"
+        assert inserted_row["undo_recipe"]["operation"] == "move_email"
+        assert inserted_row["undo_recipe"]["params"]["from"] == "Dev/Github"
+        assert inserted_row["undo_recipe"]["params"]["to"] == "INBOX"
+
+
+class TestBatchMoveToFolder:
+    """batch_move_to_folder should work from worker threads with no pre-set event loop."""
+
+    def test_unipile_batch_move_uses_its_own_event_loop(self, monkeypatch):
+        """The Unipile batch move handler must not rely on asyncio.get_event_loop()."""
+        from src.tools.handlers import handle_tool_call, ActionInput
+
+        email_ctx = EmailClientContext(
+            connection_type="unipile",
+            provider="gmail",
+            unipile_account_id="acct-1",
+        )
+
+        mock_supabase = MagicMock()
+
+        inserted_rows: list[dict] = []
+
+        def capture_insert(row):
+            inserted_rows.append(row)
+            mock_response = MagicMock()
+            mock_response.data = [{"id": f"action-{len(inserted_rows)}"}]
+            mock_chain = MagicMock()
+            mock_chain.execute = MagicMock(return_value=mock_response)
+            return mock_chain
+
+        mock_supabase.table.return_value.insert = capture_insert
+
+        async def fake_list_folders(account_id: str):
+            assert account_id == "acct-1"
+            return [MagicMock(path="Dev/Github")]
+
+        async def fake_batch_move(account_id: str, email_ids: list[str], folder: str, source_folder: str, provider: str):
+            assert account_id == "acct-1"
+            assert email_ids == ["email-1", "email-2"]
+            assert folder == "Dev/Github"
+            assert source_folder == "INBOX"
+            assert provider == "gmail"
+            return [
+                {
+                    "email_id": "email-1",
+                    "succeeded": True,
+                    "undo_recipe": {"operation": "unipile_move_email", "params": {"email_id": "email-1"}},
+                },
+                {
+                    "email_id": "email-2",
+                    "succeeded": True,
+                    "undo_recipe": {"operation": "unipile_move_email", "params": {"email_id": "email-2"}},
+                },
+            ]
+
+        monkeypatch.setattr("src.tools.handlers.unipile_client.list_folders", fake_list_folders)
+        monkeypatch.setattr("src.tools.handlers.unipile_client.batch_move_to_folder", fake_batch_move)
+
+        result_holder: dict[str, object] = {}
+        error_holder: list[BaseException] = []
+
+        def run_in_worker_thread():
+            try:
+                result_holder["result"] = handle_tool_call(
+                    input=ActionInput(
+                        user_id="test-user",
+                        session_id="test-session",
+                        tool_name="batch_move_to_folder",
+                        arguments={"email_ids": ["email-1", "email-2"], "folder": "Dev/Github"},
+                    ),
+                    user_config={},
+                    email_ctx=email_ctx,
+                    supabase=mock_supabase,
+                )
+            except BaseException as exc:  # pragma: no cover - exercised only on failure
+                error_holder.append(exc)
+
+        worker = threading.Thread(target=run_in_worker_thread, name="batch-move-worker")
+        worker.start()
+        worker.join()
+
+        assert not error_holder
+        result = result_holder["result"]
+        assert result.status == "executed"
+        assert result.result == {
+            "total": 2,
+            "succeeded": 2,
+            "failed": 0,
+            "errors": [],
+            "actionIds": ["action-1", "action-2"],
+        }
+        assert len(inserted_rows) == 2
+        assert inserted_rows[0]["arguments"]["email_id"] == "email-1"
+        assert inserted_rows[1]["arguments"]["email_id"] == "email-2"
 
 
 class TestWhatCanYouDo:
@@ -323,8 +535,7 @@ class TestWhatCanYouDo:
                 arguments={},
             ),
             user_config={},
-            imap_holder={"client": MagicMock(), "config": MagicMock()},
-            smtp_config=SmtpConfig(host="", port=0, user="", password=""),
+            email_ctx=_make_email_ctx(),
             supabase=mock_supabase,
         )
 
@@ -332,3 +543,35 @@ class TestWhatCanYouDo:
         assert result.result is not None
         assert "archive" in result.result["markdown"].lower()
         assert "read" in result.result["markdown"].lower()
+
+
+class TestReadCalendar:
+    """read_calendar should return placeholder guidance."""
+
+    def test_returns_placeholder_feedback_instruction(self):
+        """handle_tool_call with read_calendar returns a stub response
+        that points the model to submit_feature_request."""
+        from src.tools.handlers import handle_tool_call, ActionInput
+
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.insert.return_value.execute.return_value.data = [
+            {"id": "fake-action-id"}
+        ]
+
+        result = handle_tool_call(
+            input=ActionInput(
+                user_id="test-user",
+                session_id="test-session",
+                tool_name="read_calendar",
+                arguments={"start": "2026-04-13", "end": "2026-04-14"},
+            ),
+            user_config={},
+            email_ctx=_make_email_ctx(),
+            supabase=mock_supabase,
+        )
+
+        assert result.status == "executed"
+        assert result.result is not None
+        assert result.result["implemented"] is False
+        assert result.result["feedback_tool_name"] == "submit_feature_request"
+        assert "submit_feature_request" in result.result["instruction"]

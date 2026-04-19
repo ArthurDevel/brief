@@ -1,18 +1,20 @@
 """
-IMAP contact extraction and Supabase sync.
+Contact extraction and Supabase sync (provider-aware).
 
-Scans IMAP ENVELOPE headers from Inbox and Sent folders to build a
-per-user contacts index in Supabase. Supports full and incremental sync
-with a cooldown to prevent concurrent scans.
+Scans mailbox data from either IMAP ENVELOPE headers or Unipile API
+to build a per-user contacts index in Supabase. Supports full and
+incremental sync with a cooldown to prevent concurrent scans.
 
 - full_sync: scan last N inbox + sent emails, upsert all contacts
 - incremental_sync: scan only emails newer than the most recent contact
 - delete_user_contacts: wipe contacts when inbox is changed/removed
 - extract_contacts_from_imap: low-level ENVELOPE scanning and deduplication
+- _extract_contacts_from_unipile: Unipile API-based contact extraction
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta
@@ -21,7 +23,7 @@ from typing import Any, cast
 from imapclient import IMAPClient
 from supabase import Client
 
-from src.session import ImapConfig
+from src.session import EmailAccount, ImapConfig
 from src.tools.email_client import (
     create_imap_connection,
     close_imap_connection,
@@ -45,7 +47,7 @@ SCAN_LIMIT = 500
 
 @dataclass
 class ContactRecord:
-    """A contact extracted from IMAP email headers.
+    """A contact extracted from email headers.
 
     Args:
         email: The contact's email address.
@@ -64,14 +66,15 @@ class ContactRecord:
 # MAIN FUNCTIONS
 # ============================================================================
 
-def full_sync(imap_config: ImapConfig, user_id: str, supabase: Client) -> int:
+def full_sync(account: EmailAccount, user_id: str, supabase: Client) -> int:
     """Run a full contact sync: scan last SCAN_LIMIT inbox + sent emails.
 
     Checks contacts_synced_at cooldown first. If within SYNC_COOLDOWN_SECONDS,
-    returns 0. Otherwise claims the sync slot, scans IMAP, and upserts contacts.
+    returns 0. Otherwise claims the sync slot, scans the mailbox via the
+    appropriate provider, and upserts contacts.
 
     Args:
-        imap_config: IMAP server connection parameters.
+        account: The user's active email account (custom or Unipile).
         user_id: The user to sync contacts for.
         supabase: Supabase service-role client.
 
@@ -81,35 +84,30 @@ def full_sync(imap_config: ImapConfig, user_id: str, supabase: Client) -> int:
     if not _claim_sync_slot(user_id, supabase):
         return 0
 
-    logger.info("[contact_sync] Full sync started for user %s", user_id)
+    logger.info("[contact_sync] Full sync started for user %s (provider=%s)", user_id, account.provider)
 
     try:
-        client = create_imap_connection(imap_config)
+        if account.connection_type == "unipile":
+            contacts = _extract_contacts_from_unipile(account, limit=SCAN_LIMIT, since=None)
+        else:
+            contacts = _extract_contacts_from_custom(account, limit=SCAN_LIMIT, since=None)
+
+        count = _upsert_contacts(contacts, user_id, supabase)
+        logger.info("[contact_sync] Full sync completed for user %s: %d contacts", user_id, count)
+        return count
     except Exception:
         _release_sync_slot(user_id, supabase)
         raise
 
-    try:
-        # Discover the Sent folder name
-        sent_folder = resolve_special_use_folder(client, b"\\Sent")
-        folders = ["INBOX", sent_folder]
 
-        contacts = extract_contacts_from_imap(client, folders, limit=SCAN_LIMIT, since=None)
-        count = _upsert_contacts(contacts, user_id, supabase)
-        logger.info("[contact_sync] Full sync completed for user %s: %d contacts", user_id, count)
-        return count
-    finally:
-        close_imap_connection(client)
-
-
-def incremental_sync(imap_config: ImapConfig, user_id: str, supabase: Client) -> int:
+def incremental_sync(account: EmailAccount, user_id: str, supabase: Client) -> int:
     """Run an incremental contact sync: scan only emails newer than the latest contact.
 
     If no contacts exist yet (first-time user), skips entirely. Checks cooldown
     before proceeding.
 
     Args:
-        imap_config: IMAP server connection parameters.
+        account: The user's active email account (custom or Unipile).
         user_id: The user to sync contacts for.
         supabase: Supabase service-role client.
 
@@ -133,7 +131,7 @@ def incremental_sync(imap_config: ImapConfig, user_id: str, supabase: Client) ->
     if not _claim_sync_slot(user_id, supabase):
         return 0
 
-    logger.info("[contact_sync] Incremental sync started for user %s", user_id)
+    logger.info("[contact_sync] Incremental sync started for user %s (provider=%s)", user_id, account.provider)
 
     row = cast(dict[str, Any], result.data[0])
     last_seen_str = cast(str, row["last_seen_at"])
@@ -141,21 +139,17 @@ def incremental_sync(imap_config: ImapConfig, user_id: str, supabase: Client) ->
     since_date = last_seen.date()
 
     try:
-        client = create_imap_connection(imap_config)
-    except Exception:
-        _release_sync_slot(user_id, supabase)
-        raise
+        if account.connection_type == "unipile":
+            contacts = _extract_contacts_from_unipile(account, limit=SCAN_LIMIT, since=since_date)
+        else:
+            contacts = _extract_contacts_from_custom(account, limit=SCAN_LIMIT, since=since_date)
 
-    try:
-        sent_folder = resolve_special_use_folder(client, b"\\Sent")
-        folders = ["INBOX", sent_folder]
-
-        contacts = extract_contacts_from_imap(client, folders, limit=SCAN_LIMIT, since=since_date)
         count = _upsert_contacts(contacts, user_id, supabase)
         logger.info("[contact_sync] Incremental sync completed for user %s: %d contacts", user_id, count)
         return count
-    finally:
-        close_imap_connection(client)
+    except Exception:
+        _release_sync_slot(user_id, supabase)
+        raise
 
 
 def delete_user_contacts(user_id: str, supabase: Client) -> None:
@@ -264,6 +258,198 @@ def extract_contacts_from_imap(
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def _extract_contacts_from_custom(
+    account: EmailAccount,
+    limit: int,
+    since: date | None,
+) -> list[ContactRecord]:
+    """Extract contacts from a custom IMAP account.
+
+    Opens an IMAP connection, scans INBOX + Sent folders, then closes.
+
+    Args:
+        account: The custom email account (must have imap_config).
+        limit: Maximum number of emails to scan per folder.
+        since: Only scan emails since this date, or None for no date filter.
+
+    Returns:
+        Deduplicated list of ContactRecord.
+
+    Raises:
+        RuntimeError: If the account has no IMAP config.
+    """
+    if not account.imap_config:
+        raise RuntimeError("Custom account has no IMAP config for contact sync")
+
+    client = create_imap_connection(account.imap_config)
+    try:
+        sent_folder = resolve_special_use_folder(client, b"\\Sent")
+        folders = ["INBOX", sent_folder]
+        return extract_contacts_from_imap(client, folders, limit=limit, since=since)
+    finally:
+        close_imap_connection(client)
+
+
+def _extract_contacts_from_unipile(
+    account: EmailAccount,
+    limit: int,
+    since: date | None,
+) -> list[ContactRecord]:
+    """Extract contacts from a Unipile-backed email account.
+
+    Lists recent inbox and sent emails via the Unipile API, then extracts
+    contact information from the from/to fields.
+
+    Args:
+        account: The Unipile email account (must have unipile_account_id).
+        limit: Maximum number of emails to fetch per folder.
+        since: Only include emails since this date, or None for no date filter.
+
+    Returns:
+        Deduplicated list of ContactRecord.
+
+    Raises:
+        RuntimeError: If the account has no unipile_account_id.
+    """
+    if not account.unipile_account_id:
+        raise RuntimeError("Unipile account has no unipile_account_id for contact sync")
+
+    # Run async Unipile calls from sync context
+    return asyncio.run(_extract_contacts_from_unipile_async(
+        account.unipile_account_id, limit, since
+    ))
+
+
+async def _extract_contacts_from_unipile_async(
+    account_id: str,
+    limit: int,
+    since: date | None,
+) -> list[ContactRecord]:
+    """Async implementation of Unipile contact extraction.
+
+    Fetches inbox emails (extracts From addresses) and sent emails
+    (extracts To addresses) from the Unipile API.
+
+    Args:
+        account_id: The Unipile account ID.
+        limit: Maximum number of emails to fetch per folder.
+        since: Only include emails since this date, or None for no date filter.
+
+    Returns:
+        Deduplicated list of ContactRecord.
+    """
+    from src.tools.unipile_client import _request
+
+    contacts_map: dict[str, ContactRecord] = {}
+
+    # Fetch inbox emails (extract From addresses)
+    inbox_params: dict[str, Any] = {
+        "account_id": account_id,
+        "limit": limit,
+        "folder": "INBOX",
+    }
+    inbox_data = await _request("GET", "/api/v1/emails", params=inbox_params)
+    inbox_items = inbox_data.get("items", [])
+
+    for item in inbox_items:
+        item_date = _parse_unipile_date(item.get("date"))
+        if since is not None and item_date.date() < since:
+            continue
+
+        from_obj = item.get("from", {})
+        _accumulate_unipile_address(contacts_map, from_obj, item_date)
+
+    # Fetch sent emails (extract To addresses)
+    sent_params: dict[str, Any] = {
+        "account_id": account_id,
+        "limit": limit,
+        "folder": "SENT",
+    }
+    sent_data = await _request("GET", "/api/v1/emails", params=sent_params)
+    sent_items = sent_data.get("items", [])
+
+    for item in sent_items:
+        item_date = _parse_unipile_date(item.get("date"))
+        if since is not None and item_date.date() < since:
+            continue
+
+        to_list = item.get("to", [])
+        if isinstance(to_list, list):
+            for to_obj in to_list:
+                _accumulate_unipile_address(contacts_map, to_obj, item_date)
+
+        cc_list = item.get("cc", [])
+        if isinstance(cc_list, list):
+            for cc_obj in cc_list:
+                _accumulate_unipile_address(contacts_map, cc_obj, item_date)
+
+    return list(contacts_map.values())
+
+
+def _accumulate_unipile_address(
+    contacts_map: dict[str, ContactRecord],
+    addr_obj: Any,
+    item_date: datetime,
+) -> None:
+    """Accumulate a contact from a Unipile address object into the contacts map.
+
+    Args:
+        contacts_map: Mutable map of lowercase email -> ContactRecord.
+        addr_obj: Unipile address object (dict with "identifier" and/or "display_name").
+        item_date: Timestamp of the email this address came from.
+    """
+    if not isinstance(addr_obj, dict):
+        return
+
+    email_addr = addr_obj.get("identifier", "")
+    if not email_addr or not isinstance(email_addr, str):
+        return
+
+    display_name = addr_obj.get("display_name")
+    if display_name and isinstance(display_name, str):
+        display_name = display_name.strip() or None
+    else:
+        display_name = None
+
+    key = email_addr.lower()
+
+    if key in contacts_map:
+        existing = contacts_map[key]
+        existing.frequency += 1
+        if item_date > existing.last_seen_at:
+            existing.last_seen_at = item_date
+            if display_name is not None:
+                existing.display_name = display_name
+    else:
+        contacts_map[key] = ContactRecord(
+            email=email_addr.lower(),
+            display_name=display_name,
+            frequency=1,
+            last_seen_at=item_date,
+        )
+
+
+def _parse_unipile_date(date_str: Any) -> datetime:
+    """Parse a date string from the Unipile API into a timezone-aware datetime.
+
+    Args:
+        date_str: Date string from Unipile, or None.
+
+    Returns:
+        Timezone-aware datetime (defaults to now in UTC if unparseable).
+    """
+    if not date_str or not isinstance(date_str, str):
+        return datetime.now(timezone.utc)
+
+    try:
+        parsed = datetime.fromisoformat(date_str)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except ValueError:
+        return datetime.now(timezone.utc)
+
 
 def _parse_envelope_address(addr: Any) -> tuple[str | None, str] | None:
     """Extract display name and email from an IMAP ENVELOPE address tuple.
@@ -375,7 +561,7 @@ def _claim_sync_slot(user_id: str, supabase: Client) -> bool:
 def _release_sync_slot(user_id: str, supabase: Client) -> None:
     """Reset contacts_synced_at to null so future syncs are not blocked.
 
-    Called when a sync fails before doing any real work (e.g. bad IMAP credentials).
+    Called when a sync fails before doing any real work (e.g. bad credentials).
 
     Args:
         user_id: The user whose sync slot to release.

@@ -1,24 +1,26 @@
 /**
- * Voice call page with two ways to start a conversation.
- *
- * Consumes the shared CallContext for all call state and actions.
- * The session lifecycle is managed by CallProvider (wrapped at the
- * dashboard layout level).
+ * Dashboard call launcher page with phone-based call options and a browser-call entry point.
  *
  * Responsibilities:
- * - Render call UI (start/end buttons, status, errors)
- * - Delegate call actions to CallContext
  * - Display QR code for phone-based calling (matched to user's country)
  * - Show unsupported-country message when no matching company phone exists
+ * - Trigger the outbound "Call me" flow
+ * - Open the standalone browser-call page in a new tab
  */
 
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect, useCallback } from "react";
-import { useCall } from "@/contexts/CallContext";
-import { Smartphone, Monitor, QrCode, UserPlus, PhoneOutgoing } from "lucide-react";
+import { ChevronRight, Monitor, PhoneOutgoing, QrCode, Smartphone, UserPlus } from "lucide-react";
 import * as QRCode from "qrcode";
 import type { UserSettings, CompanyPhone, UserPhone } from "@/lib/types";
+import { useEmailStatus } from "@/contexts/EmailStatusContext";
+import { getDashboardErrorMessage } from "@/lib/errors/dashboardErrors";
+import {
+  buildDashboardErrorFromResponse,
+  logAndMapDashboardError,
+} from "@/lib/errors/mapDashboardError";
 
 // ============================================================================
 // CONSTANTS
@@ -36,7 +38,12 @@ const VCARD_CONTACT_NAME = "Brief.ai";
  */
 async function fetchUserSettings(): Promise<UserSettings> {
   const res = await fetch("/api/user/settings");
-  if (!res.ok) throw new Error("Failed to load user settings");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "CALL_SETTINGS_LOAD_FAILED",
+      error: "Failed to load user settings",
+    });
+  }
   return res.json();
 }
 
@@ -46,7 +53,12 @@ async function fetchUserSettings(): Promise<UserSettings> {
  */
 async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
   const res = await fetch("/api/company-phones");
-  if (!res.ok) throw new Error("Failed to load company phone numbers");
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "CALL_SETTINGS_LOAD_FAILED",
+      error: "Failed to load company phone numbers",
+    });
+  }
   return res.json();
 }
 
@@ -55,7 +67,7 @@ async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
 // ============================================================================
 
 export default function CallPage() {
-  const { callActive, status, error, startCall, endCall } = useCall();
+  const { status: emailStatus } = useEmailStatus();
 
   // Data state
   const [userPhone, setUserPhone] = useState<UserPhone | null>(null);
@@ -67,8 +79,17 @@ export default function CallPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
+  const [phoneSectionOpen, setPhoneSectionOpen] = useState(false);
+  const [browserSectionOpen, setBrowserSectionOpen] = useState(false);
   const [callMeStatus, setCallMeStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [callMeError, setCallMeError] = useState<string | null>(null);
+  const [browserCallError, setBrowserCallError] = useState<string | null>(null);
+
+  const hasConnectedInbox = emailStatus === "connected";
+  const isInboxStatusLoading = emailStatus === null;
+  const inboxRequiredMessage = emailStatus === "connected"
+    ? ""
+    : "We couldn't connect to your inbox. Go to Settings to connect it.";
 
   // Fetch user settings and company phones on mount
   useEffect(() => {
@@ -103,7 +124,7 @@ export default function CallPage() {
           }
         }
       } catch (err) {
-        setLoadError(err instanceof Error ? err.message : "Failed to load data");
+        setLoadError(logAndMapDashboardError(err, "call", "CALL_SETTINGS_LOAD_FAILED"));
       } finally {
         setLoading(false);
       }
@@ -139,29 +160,44 @@ export default function CallPage() {
    * Triggers an outbound call from the voice pipeline to the user's phone.
    */
   const triggerCallMe = useCallback(async () => {
+    if (!hasConnectedInbox) {
+      setCallMeStatus("error");
+      setCallMeError(inboxRequiredMessage);
+      return;
+    }
+
     setCallMeStatus("loading");
     setCallMeError(null);
 
     try {
       const res = await fetch("/api/trigger-call", { method: "POST" });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
 
-      if (data.success) {
+      if (res.ok && data?.success) {
         setCallMeStatus("success");
       } else {
         setCallMeStatus("error");
-        const messages: Record<string, string> = {
-          no_phone_configured: "No phone number configured. Add one in Settings.",
-          country_not_supported: "Your country is not yet supported for outbound calls.",
-          usage_limit_exceeded: "You have reached your monthly call limit.",
-        };
-        setCallMeError(messages[data.error] ?? "Failed to initiate call.");
+        setCallMeError(logAndMapDashboardError(data ?? { error: "Failed to initiate call." }, "call-trigger", "CALL_TRIGGER_FAILED"));
       }
-    } catch {
+    } catch (err) {
       setCallMeStatus("error");
-      setCallMeError("Failed to initiate call.");
+      setCallMeError(logAndMapDashboardError(err, "call-trigger", "CALL_TRIGGER_FAILED"));
     }
-  }, []);
+  }, [hasConnectedInbox, inboxRequiredMessage]);
+
+  /**
+   * Opens the standalone browser-call screen in a new tab.
+   * This must happen directly in the click handler so the browser treats it as a user-initiated tab open.
+   */
+  const openBrowserCall = useCallback(() => {
+    if (!hasConnectedInbox) {
+      setBrowserCallError(inboxRequiredMessage);
+      return;
+    }
+
+    setBrowserCallError(null);
+    window.open("/call", "_blank", "noopener,noreferrer");
+  }, [hasConnectedInbox, inboxRequiredMessage]);
 
   // ============================================================================
   // RENDER
@@ -175,150 +211,200 @@ export default function CallPage() {
       </div>
 
       <div className="page-content">
-        {loading ? (
+        {loading || isInboxStatusLoading ? (
           <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
         ) : loadError ? (
           <div className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {loadError}
           </div>
+        ) : !hasConnectedInbox ? (
+          <section className="settings-panel">
+            <div className="max-w-2xl">
+              <h2 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 8px 0", letterSpacing: "-0.02em" }}>
+                Connect your inbox first
+              </h2>
+              <p style={{ fontSize: 15, color: "var(--text-secondary)", margin: "0 0 18px 0", lineHeight: 1.5 }}>
+                {inboxRequiredMessage} Once your inbox is connected, you’ll be able to call from your phone or start a browser call here.
+              </p>
+              <div className="flex flex-wrap items-center gap-4">
+                <Link
+                  href="/dashboard/settings?tab=email"
+                  style={{
+                    background: "var(--btn-primary-bg)",
+                    color: "var(--btn-primary-text)",
+                    padding: "10px 16px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    textDecoration: "none",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                  className="hover:opacity-90 transition-opacity"
+                >
+                  Connect inbox <span style={{ fontSize: 16 }}>&rsaquo;</span>
+                </Link>
+              </div>
+            </div>
+          </section>
         ) : (
           <>
-        {error && (
-          <div className="mb-6 border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-
         <div className="flex flex-col gap-6">
 
           {/* Phone card */}
-          <section className="flex flex-col gap-4 p-6 md:p-8 border border-[var(--border-color)] bg-[var(--bg-surface)]">
-            <div className="w-12 h-12 bg-blue-100/60 flex items-center justify-center shrink-0">
-              <Smartphone className="w-5 h-5 text-blue-600" strokeWidth={2.5} />
-            </div>
+          <section className="flex flex-col gap-4 border border-[var(--border-color)] bg-[var(--bg-surface)] p-6 md:p-8">
+            <button
+              type="button"
+              onClick={() => setPhoneSectionOpen((prev) => !prev)}
+              aria-expanded={phoneSectionOpen}
+              className="flex w-full items-center justify-between gap-4 bg-transparent p-0 text-left"
+            >
+              <span className="flex min-w-0 items-center gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center bg-blue-100/60">
+                  <Smartphone className="h-5 w-5 text-blue-600" strokeWidth={2.5} />
+                </span>
+                <span className="text-lg font-bold text-[var(--text-primary)]">Call from your phone</span>
+              </span>
+              <ChevronRight
+                className={`h-5 w-5 shrink-0 text-[var(--text-secondary)] transition-transform ${
+                  phoneSectionOpen ? "rotate-90" : ""
+                }`}
+                strokeWidth={2.5}
+              />
+            </button>
 
-            <div className="flex flex-col">
-              <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">Call from your phone</h3>
-
-              {!userPhone ? (
-                <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
-                  Add your phone number in{" "}
-                  <a href="/dashboard/settings" className="text-[var(--text-primary)] underline">Settings</a>{" "}
-                  to get a number you can call directly.
-                </p>
-              ) : matchedCompanyPhone && qrDataUrl ? (
-                <>
-                  {/* Desktop: always show QR */}
-                  <div className="hidden md:block">
-                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
-                      Scan this QR code to save the number to your contacts, then call it anytime.
+            {phoneSectionOpen && (
+              <div className="flex flex-col">
+                  {!userPhone ? (
+                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
+                      Add your phone number in{" "}
+                      <a href="/dashboard/settings" className="text-[var(--text-primary)] underline">Settings</a>{" "}
+                      to get a number you can call directly.
                     </p>
-                    <div className="flex flex-col items-start gap-2">
-                      <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
-                      <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
-                    </div>
-                  </div>
-
-                  {/* Mobile: buttons + toggleable QR */}
-                  <div className="md:hidden">
-                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
-                      Save the number to your contacts, then call it anytime.
-                    </p>
-                    <div className="flex flex-col gap-3 mb-4 max-w-[300px]">
-                      <button
-                        onClick={downloadVcard}
-                        className="flex items-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-4 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition"
-                      >
-                        <UserPlus className="w-4 h-4" />
-                        Add to Contacts
-                      </button>
-                      <button
-                        onClick={() => setShowQr((prev) => !prev)}
-                        className="flex items-center gap-2 border border-[var(--border-color)] bg-[var(--bg-surface)] text-[var(--text-primary)] px-4 py-2.5 text-[13px] font-semibold cursor-pointer hover:bg-[var(--bg-hover)] transition"
-                      >
-                        <QrCode className="w-4 h-4" />
-                        {showQr ? "Hide QR" : "Show QR"}
-                      </button>
-                    </div>
-                    {showQr && (
-                      <div className="flex flex-col items-start gap-2">
-                        <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                  ) : matchedCompanyPhone && qrDataUrl ? (
+                    <>
+                      {/* Desktop: always show QR */}
+                      <div className="hidden md:block">
+                        <p className="mb-5 text-[15px] font-medium leading-relaxed text-[var(--text-secondary)]">
+                          Scan this QR code to save the number to your contacts, then call it anytime.
+                        </p>
+                        <div className="flex flex-col items-start gap-2">
+                          <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                          <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
+                        </div>
                       </div>
-                    )}
-                    <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
-                  </div>
 
-                  {/* Call me button */}
-                  <div className="mt-5 pt-5 border-t border-[var(--border-color)]">
-                    <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-3">
-                      Or have your assistant call you right now.
-                    </p>
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={triggerCallMe}
-                        disabled={callMeStatus === "loading" || callMeStatus === "success"}
-                        className="flex items-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-4 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <PhoneOutgoing className="w-4 h-4" />
-                        {callMeStatus === "loading" ? "Calling..." : callMeStatus === "success" ? "Call initiated" : "Call me"}
-                      </button>
-                      {callMeStatus === "success" && (
-                        <span className="text-[13px] font-medium text-green-600">Your phone should ring shortly.</span>
-                      )}
-                    </div>
-                    {callMeStatus === "error" && callMeError && (
-                      <p className="mt-2 text-[13px] font-medium text-red-600">{callMeError}</p>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm font-medium text-red-600 mb-2">
-                    Your country is not yet supported.
-                  </p>
-                  <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
-                    Phone calls are currently available in:{" "}
-                    {companyPhones.length > 0
-                      ? companyPhones.map((p) => p.label).join(", ")
-                      : "no countries configured yet"}
-                    .
-                  </p>
-                </>
-              )}
-            </div>
+                      {/* Mobile: buttons + toggleable QR */}
+                      <div className="md:hidden">
+                        <p className="mb-5 text-[15px] font-medium leading-relaxed text-[var(--text-secondary)]">
+                          Save the number to your contacts, then call it anytime.
+                        </p>
+                        <div className="mb-4 flex max-w-[300px] flex-col gap-3">
+                          <button
+                            onClick={downloadVcard}
+                            className="flex items-center gap-2 border-none bg-[var(--btn-primary-bg)] px-4 py-2.5 text-[13px] font-semibold text-[var(--btn-primary-text)] cursor-pointer transition hover:bg-[var(--btn-primary-hover)]"
+                          >
+                            <UserPlus className="h-4 w-4" />
+                            Add to Contacts
+                          </button>
+                          <button
+                            onClick={() => setShowQr((prev) => !prev)}
+                            className="flex items-center gap-2 border border-[var(--border-color)] bg-[var(--bg-surface)] px-4 py-2.5 text-[13px] font-semibold text-[var(--text-primary)] cursor-pointer transition hover:bg-[var(--bg-hover)]"
+                          >
+                            <QrCode className="h-4 w-4" />
+                            {showQr ? "Hide QR" : "Show QR"}
+                          </button>
+                        </div>
+                        {showQr && (
+                          <div className="flex flex-col items-start gap-2">
+                            <img src={qrDataUrl} alt="QR code to add phone contact" width={200} height={200} />
+                          </div>
+                        )}
+                        <span className="text-[15px] font-medium text-[var(--text-secondary)]">{matchedCompanyPhone.phoneNumber}</span>
+                      </div>
+
+                      {/* Call me button */}
+                      <div className="mt-5 border-t border-[var(--border-color)] pt-5">
+                        <p className="mb-3 text-[15px] font-medium leading-relaxed text-[var(--text-secondary)]">
+                          Or have your assistant call you right now.
+                        </p>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={triggerCallMe}
+                            disabled={callMeStatus === "loading" || callMeStatus === "success"}
+                            className="flex items-center gap-2 border-none bg-[var(--btn-primary-bg)] px-4 py-2.5 text-[13px] font-semibold text-[var(--btn-primary-text)] cursor-pointer transition hover:bg-[var(--btn-primary-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <PhoneOutgoing className="h-4 w-4" />
+                            {callMeStatus === "loading" ? "Calling..." : callMeStatus === "success" ? "Call initiated" : "Call me"}
+                          </button>
+                          {callMeStatus === "success" && (
+                            <span className="text-[13px] font-medium text-green-600">Your phone should ring shortly.</span>
+                          )}
+                        </div>
+                        {callMeStatus === "error" && callMeError && (
+                          <p className="mt-2 text-[13px] font-medium text-red-600">{callMeError}</p>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="mb-2 text-sm font-medium text-red-600">
+                        Your country is not yet supported.
+                      </p>
+                      <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed">
+                        Phone calls are currently available in:{" "}
+                        {companyPhones.length > 0
+                          ? companyPhones.map((p) => p.label).join(", ")
+                          : "no countries configured yet"}
+                        .
+                      </p>
+                    </>
+                  )}
+              </div>
+            )}
           </section>
 
           {/* Browser call card */}
-          <section className="flex flex-col gap-4 p-6 md:p-8 border border-[var(--border-color)] bg-[var(--bg-surface)]">
-            <div className="w-12 h-12 bg-purple-100/60 flex items-center justify-center shrink-0">
-              <Monitor className="w-5 h-5 text-purple-600" strokeWidth={2.5} />
-            </div>
+          <section className="flex flex-col gap-4 border border-[var(--border-color)] bg-[var(--bg-surface)] p-6 md:p-8">
+            <button
+              type="button"
+              onClick={() => setBrowserSectionOpen((prev) => !prev)}
+              aria-expanded={browserSectionOpen}
+              className="flex w-full items-center justify-between gap-4 bg-transparent p-0 text-left"
+            >
+              <span className="flex min-w-0 items-center gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center bg-purple-100/60">
+                  <Monitor className="h-5 w-5 text-purple-600" strokeWidth={2.5} />
+                </span>
+                <span className="text-lg font-bold text-[var(--text-primary)]">Call from your browser</span>
+              </span>
+              <ChevronRight
+                className={`h-5 w-5 shrink-0 text-[var(--text-secondary)] transition-transform ${
+                  browserSectionOpen ? "rotate-90" : ""
+                }`}
+                strokeWidth={2.5}
+              />
+            </button>
 
-            <div className="flex flex-col">
-              <h3 className="text-lg font-bold text-[var(--text-primary)] mb-1">Call from your browser</h3>
-              <p className="text-[15px] text-[var(--text-secondary)] font-medium leading-relaxed mb-5">
-                Start a voice conversation directly from this page. No app or phone needed.
-              </p>
+            {browserSectionOpen && (
+              <div className="flex flex-col">
+                  <p className="mb-5 text-[15px] font-medium leading-relaxed text-[var(--text-secondary)]">
+                    Start a browser call.
+                  </p>
 
-              <div className="flex items-center gap-4">
-                {!callActive ? (
-                  <button
-                    onClick={startCall}
-                    className="flex items-center justify-center gap-2 bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] px-5 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-[var(--btn-primary-hover)] transition"
-                  >
-                    Start Call
-                  </button>
-                ) : (
-                  <button
-                    onClick={endCall}
-                    className="flex items-center justify-center gap-2 bg-red-600 text-white px-5 py-2.5 text-[13px] font-semibold border-none cursor-pointer hover:bg-red-700 transition"
-                  >
-                    End Call
-                  </button>
-                )}
-                <span className="text-[13px] font-medium text-[var(--text-secondary)]">{status}</span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={openBrowserCall}
+                      className="flex items-center justify-center gap-2 border-none bg-[var(--btn-primary-bg)] px-5 py-2.5 text-[13px] font-semibold text-[var(--btn-primary-text)] cursor-pointer transition hover:bg-[var(--btn-primary-hover)]"
+                    >
+                      Start browser call
+                    </button>
+                  </div>
+                  {browserCallError && (
+                    <p className="mt-2 text-[13px] font-medium text-red-600">{browserCallError}</p>
+                  )}
               </div>
-            </div>
+            )}
           </section>
 
         </div>

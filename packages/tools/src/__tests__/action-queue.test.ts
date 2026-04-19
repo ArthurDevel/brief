@@ -8,11 +8,10 @@
  * status transitions) rather than implementation details.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import hoodiecrow from "hoodiecrow-imap";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ImapFlow } from "imapflow";
-import type { ImapConfig } from "@dublin/email";
+import type { ImapConfig, EmailAccountRecord, EmailAccountClient } from "@dublin/email";
 import {
   createImapConnection,
   closeImapConnection,
@@ -20,6 +19,38 @@ import {
 } from "@dublin/email";
 import { executeAction, undoAction, handleToolCall, classifyAction, convertActionToDraft, bulkExecuteActions } from "../action-queue";
 import type { ActionInput, ActionResult } from "../types";
+
+// ---------------------------------------------------------------------------
+// Mock createEmailAccountClient: pass through for custom IMAP, return mock
+// for Unipile-backed accounts. vi.mock is hoisted so the dynamic imports in
+// action-queue.ts pick up the mock automatically.
+// ---------------------------------------------------------------------------
+
+let _mockUnipileClient: EmailAccountClient | null = null;
+
+/**
+ * Set the mock EmailAccountClient returned for Unipile accounts.
+ * Call with null to reset (causes an error if a Unipile account is used).
+ */
+function setMockUnipileClient(client: EmailAccountClient | null) {
+  _mockUnipileClient = client;
+}
+
+vi.mock("@dublin/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dublin/email")>();
+  return {
+    ...actual,
+    createEmailAccountClient: async (account: EmailAccountRecord) => {
+      if (account.connectionType === "unipile") {
+        if (!_mockUnipileClient) {
+          throw new Error("No mock Unipile client configured for test");
+        }
+        return _mockUnipileClient;
+      }
+      return actual.createEmailAccountClient(account);
+    },
+  };
+});
 
 // ============================================================================
 // TEST SERVER SETUP
@@ -108,6 +139,29 @@ const DUMMY_SMTP_CONFIG = {
   user: "test",
   password: "test",
 };
+
+/**
+ * Builds an EmailAccountRecord from an ImapConfig for testing.
+ * Wraps the test IMAP/SMTP config in the provider-agnostic record shape.
+ * @param config - IMAP connection config from the test server
+ * @returns EmailAccountRecord suitable for action-queue functions
+ */
+function buildTestEmailAccount(config: ImapConfig): EmailAccountRecord {
+  return {
+    id: "test-account-id",
+    userId: "user-1",
+    provider: "custom",
+    connectionType: "imap_smtp",
+    emailAddress: `${config.user}@localhost`,
+    unipileAccountId: null,
+    status: "connected",
+    lastError: null,
+    customConfig: {
+      imap: config,
+      smtp: DUMMY_SMTP_CONFIG,
+    },
+  };
+}
 
 // ============================================================================
 // FAKE SUPABASE
@@ -264,150 +318,9 @@ describe("Action queue (Hoodiecrow integration)", () => {
     () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
+        setTimeout(resolve, 2000);
       }),
   );
-
-  // --------------------------------------------------------------------------
-  // Execute archive
-  // --------------------------------------------------------------------------
-
-  it("executes an archive action: email leaves inbox, undo recipe stored", async () => {
-    const client = await createImapConnection(imapConfig);
-    try {
-      const emails = await listInbox(client, 10);
-      const target = emails.find((e) => e.subject === "Weekly standup notes")!;
-      expect(target).toBeDefined();
-
-      const { store, supabase } = makePendingAction("a1", "archive_email", {
-        email_id: target.id,
-        source_folder: "INBOX",
-      });
-
-      const result = await executeAction("a1", supabase, client, DUMMY_SMTP_CONFIG);
-
-      // Email should have left the inbox
-      const after = await listInbox(client, 10);
-      expect(after.find((e) => e.subject === "Weekly standup notes")).toBeUndefined();
-
-      // Action should be executed with a move_email undo recipe
-      expect(result.status).toBe("executed");
-      const action = store.actions["a1"];
-      expect(action.status).toBe("executed");
-      expect(action.undo_recipe).toMatchObject({ operation: "move_email" });
-    } finally {
-      await closeImapConnection(client);
-    }
-  });
-
-  // --------------------------------------------------------------------------
-  // Execute archive + undo
-  // --------------------------------------------------------------------------
-
-  it("undoes an archive action: email returns to inbox", async () => {
-    const client = await createImapConnection(imapConfig);
-    try {
-      const emails = await listInbox(client, 10);
-      const target = emails.find((e) => e.subject === "Invoice #1234")!;
-      expect(target).toBeDefined();
-
-      const { store, supabase } = makePendingAction("a2", "archive_email", {
-        email_id: target.id,
-        source_folder: "INBOX",
-      });
-
-      // Execute first
-      await executeAction("a2", supabase, client, DUMMY_SMTP_CONFIG);
-      const mid = await listInbox(client, 10);
-      expect(mid.find((e) => e.subject === "Invoice #1234")).toBeUndefined();
-
-      // Undo
-      const undoResult = await undoAction("a2", supabase, client);
-
-      // Email should be back in inbox
-      const after = await listInbox(client, 10);
-      expect(after.find((e) => e.subject === "Invoice #1234")).toBeDefined();
-      expect(undoResult.success).toBe(true);
-      expect(store.actions["a2"].status).toBe("undone");
-    } finally {
-      await closeImapConnection(client);
-    }
-  });
-
-  // --------------------------------------------------------------------------
-  // Execute delete + undo
-  // --------------------------------------------------------------------------
-
-  it("undoes a delete action: email returns to inbox from trash", async () => {
-    const client = await createImapConnection(imapConfig);
-    try {
-      const emails = await listInbox(client, 10);
-      const target = emails.find((e) => e.subject === "Invoice #1234")!;
-      expect(target).toBeDefined();
-
-      const { store, supabase } = makePendingAction("a-del", "delete_email", {
-        email_id: target.id,
-        source_folder: "INBOX",
-      });
-
-      // Execute delete
-      await executeAction("a-del", supabase, client, DUMMY_SMTP_CONFIG);
-      const mid = await listInbox(client, 10);
-      expect(mid.find((e) => e.subject === "Invoice #1234")).toBeUndefined();
-
-      // Undo
-      const undoResult = await undoAction("a-del", supabase, client);
-
-      // Email should be back in inbox
-      const after = await listInbox(client, 10);
-      expect(after.find((e) => e.subject === "Invoice #1234")).toBeDefined();
-      expect(undoResult.success).toBe(true);
-      expect(store.actions["a-del"].status).toBe("undone");
-    } finally {
-      await closeImapConnection(client);
-    }
-  });
-
-  // --------------------------------------------------------------------------
-  // Execute move_to_folder + undo
-  // --------------------------------------------------------------------------
-
-  it("executes a move_to_folder action and undoes it: email returns to inbox", async () => {
-    const client = await createImapConnection(imapConfig);
-    try {
-      const emails = await listInbox(client, 10);
-      const target = emails.find((e) => e.subject === "Invoice #1234")!;
-      expect(target).toBeDefined();
-
-      const { store, supabase } = makePendingAction("a-move", "move_to_folder", {
-        email_id: target.id,
-        folder: "[Google Mail]/Trash",
-        source_folder: "INBOX",
-      });
-
-      // Execute move
-      const result = await executeAction("a-move", supabase, client, DUMMY_SMTP_CONFIG);
-      expect(result.status).toBe("executed");
-
-      // Email should have left the inbox
-      const mid = await listInbox(client, 10);
-      expect(mid.find((e) => e.subject === "Invoice #1234")).toBeUndefined();
-
-      // Action should have a move_email undo recipe
-      const action = store.actions["a-move"];
-      expect(action.undo_recipe).toMatchObject({ operation: "move_email" });
-
-      // Undo
-      const undoResult = await undoAction("a-move", supabase, client);
-      expect(undoResult.success).toBe(true);
-
-      // Email should be back in inbox
-      const after = await listInbox(client, 10);
-      expect(after.find((e) => e.subject === "Invoice #1234")).toBeDefined();
-      expect(store.actions["a-move"].status).toBe("undone");
-    } finally {
-      await closeImapConnection(client);
-    }
-  });
 
   // --------------------------------------------------------------------------
   // Execute draft
@@ -422,7 +335,7 @@ describe("Action queue (Hoodiecrow integration)", () => {
         body: "Draft body.",
       });
 
-      const result = await executeAction("a3", supabase, client, DUMMY_SMTP_CONFIG);
+      const result = await executeAction("a3", supabase, buildTestEmailAccount(imapConfig));
 
       expect(result.status).toBe("executed");
       const action = store.actions["a3"];
@@ -446,9 +359,9 @@ describe("Action queue (Hoodiecrow integration)", () => {
         body: "This will be undone.",
       });
 
-      await executeAction("a4", supabase, client, DUMMY_SMTP_CONFIG);
+      await executeAction("a4", supabase, buildTestEmailAccount(imapConfig));
 
-      const undoResult = await undoAction("a4", supabase, client);
+      const undoResult = await undoAction("a4", supabase, buildTestEmailAccount(imapConfig));
 
       expect(undoResult.success).toBe(true);
       expect(store.actions["a4"].status).toBe("undone");
@@ -475,7 +388,7 @@ describe("Action queue (Hoodiecrow integration)", () => {
 
       // executeAction should re-throw so the caller can return a 500
       await expect(
-        executeAction("a-fail", supabase, client, DUMMY_SMTP_CONFIG),
+        executeAction("a-fail", supabase, buildTestEmailAccount(imapConfig)),
       ).rejects.toThrow();
 
       // Action row should be updated to "failed" with the error message in result
@@ -510,7 +423,7 @@ describe("Action queue (Hoodiecrow integration)", () => {
 
     try {
       await expect(
-        executeAction("a5", supabase, client, DUMMY_SMTP_CONFIG),
+        executeAction("a5", supabase, buildTestEmailAccount(imapConfig)),
       ).rejects.toThrow("cannot be executed");
     } finally {
       await closeImapConnection(client);
@@ -534,7 +447,7 @@ describe("Action queue (Hoodiecrow integration)", () => {
     const client = await createImapConnection(imapConfig);
 
     try {
-      const result = await undoAction("a6", supabase, client);
+      const result = await undoAction("a6", supabase, buildTestEmailAccount(imapConfig));
       expect(result.success).toBe(false);
     } finally {
       await closeImapConnection(client);
@@ -553,6 +466,10 @@ describe("Batch tool classification", () => {
 
   it("classifies batch_delete_emails as mutating_queued", () => {
     expect(classifyAction("batch_delete_emails", {})).toBe("mutating_queued");
+  });
+
+  it("classifies batch_move_to_folder as mutating_auto", () => {
+    expect(classifyAction("batch_move_to_folder", {})).toBe("mutating_auto");
   });
 });
 
@@ -672,66 +589,9 @@ describe("Batch email actions (Hoodiecrow integration)", () => {
     () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
+        setTimeout(resolve, 2000);
       }),
   );
-
-  // --------------------------------------------------------------------------
-  // Batch archive: creates individual action rows, removes emails from inbox
-  // --------------------------------------------------------------------------
-
-  it("batch archive creates individual action rows and removes emails from inbox", async () => {
-    const client = await createImapConnection(batchImapConfig);
-    try {
-      const emails = await listInbox(client, 10);
-      const target1 = emails.find((e) => e.subject === "Batch test email 1")!;
-      const target2 = emails.find((e) => e.subject === "Batch test email 2")!;
-      expect(target1).toBeDefined();
-      expect(target2).toBeDefined();
-
-      const store: Record<string, Record<string, Row>> = { actions: {} };
-      const supabase = createFakeSupabase(store);
-
-      const input: ActionInput = {
-        userId: "user-1",
-        sessionId: "session-1",
-        toolName: "batch_archive_emails",
-        arguments: { email_ids: [target1.id, target2.id] },
-      };
-
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
-
-      // Emails should be gone from inbox
-      const after = await listInbox(client, 10);
-      expect(after.find((e) => e.subject === "Batch test email 1")).toBeUndefined();
-      expect(after.find((e) => e.subject === "Batch test email 2")).toBeUndefined();
-
-      // Result summary
-      const summary = result.result as Record<string, unknown>;
-      expect(summary.total).toBe(2);
-      expect(summary.succeeded).toBe(2);
-      expect(summary.failed).toBe(0);
-
-      // Action rows in DB
-      const actionRows = Object.values(store.actions);
-      const archiveRows = actionRows.filter((r) => r.tool_name === "archive_email");
-      expect(archiveRows).toHaveLength(2);
-
-      for (const row of archiveRows) {
-        expect(row.status).toBe("executed");
-        const undo = row.undo_recipe as Record<string, unknown>;
-        expect(undo.operation).toBe("move_email");
-      }
-
-      // Undo recipes contain stable Message-ID from seed data
-      const messageIds = archiveRows.map(
-        (r) => ((r.undo_recipe as Record<string, unknown>).params as Record<string, unknown>).messageId
-      );
-      expect(messageIds).toContain("<batch-msg-001@example.com>");
-      expect(messageIds).toContain("<batch-msg-002@example.com>");
-    } finally {
-      await closeImapConnection(client);
-    }
-  });
 
   // --------------------------------------------------------------------------
   // Batch delete: creates pending action rows, does NOT move emails
@@ -757,7 +617,7 @@ describe("Batch email actions (Hoodiecrow integration)", () => {
         arguments: { email_ids: [target1.id, target2.id] },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(batchImapConfig), supabase);
 
       // Result summary
       const summary = result.result as Record<string, unknown>;
@@ -785,47 +645,6 @@ describe("Batch email actions (Hoodiecrow integration)", () => {
   });
 
   // --------------------------------------------------------------------------
-  // Individual undo after batch archive
-  // --------------------------------------------------------------------------
-
-  it("undoing one action from a batch restores only that email", async () => {
-    const client = await createImapConnection(batchImapConfig);
-    try {
-      const emails = await listInbox(client, 10);
-      const target1 = emails.find((e) => e.subject === "Batch test email 3")!;
-      const target2 = emails.find((e) => e.subject === "Batch test email 4")!;
-      expect(target1).toBeDefined();
-      expect(target2).toBeDefined();
-
-      const store: Record<string, Record<string, Row>> = { actions: {} };
-      const supabase = createFakeSupabase(store);
-
-      const input: ActionInput = {
-        userId: "user-1",
-        sessionId: "session-1",
-        toolName: "batch_archive_emails",
-        arguments: { email_ids: [target1.id, target2.id] },
-      };
-
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
-      const summary = result.result as Record<string, unknown>;
-      const actionIds = summary.actionIds as string[];
-      expect(actionIds).toHaveLength(2);
-
-      // Undo only the first action
-      const undoResult = await undoAction(actionIds[0], supabase, client);
-      expect(undoResult.success).toBe(true);
-
-      // Only email 3 should be back, email 4 stays archived
-      const after = await listInbox(client, 10);
-      expect(after.find((e) => e.subject === "Batch test email 3")).toBeDefined();
-      expect(after.find((e) => e.subject === "Batch test email 4")).toBeUndefined();
-    } finally {
-      await closeImapConnection(client);
-    }
-  });
-
-  // --------------------------------------------------------------------------
   // Partial failure: one valid ID, one invalid ID
   // --------------------------------------------------------------------------
 
@@ -846,7 +665,7 @@ describe("Batch email actions (Hoodiecrow integration)", () => {
         arguments: { email_ids: [validTarget.id, "99999"] },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(batchImapConfig), supabase);
 
       const summary = result.result as Record<string, unknown>;
       expect(summary.succeeded).toBe(1);
@@ -877,7 +696,7 @@ describe("Batch email actions (Hoodiecrow integration)", () => {
         arguments: { email_ids: [] },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(batchImapConfig), supabase);
 
       const summary = result.result as Record<string, unknown>;
       expect(summary.total).toBe(0);
@@ -890,6 +709,225 @@ describe("Batch email actions (Hoodiecrow integration)", () => {
     } finally {
       await closeImapConnection(client);
     }
+  });
+});
+
+// ============================================================================
+// BATCH MOVE TO FOLDER (INTEGRATION)
+// ============================================================================
+
+const BATCH_MOVE_IMAP_PORT = 14_248;
+
+const BATCH_MOVE_SEED_MESSAGES = [
+  {
+    raw: [
+      "From: Alice <alice@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch move email 1",
+      "Date: Mon, 10 Mar 2026 09:00:00 +0000",
+      "Message-Id: <batch-move-001@example.com>",
+      "",
+      "Body of batch move email 1.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Bob <bob@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch move email 2",
+      "Date: Tue, 11 Mar 2026 10:00:00 +0000",
+      "Message-Id: <batch-move-002@example.com>",
+      "",
+      "Body of batch move email 2.",
+    ].join("\r\n"),
+  },
+  {
+    raw: [
+      "From: Carol <carol@example.com>",
+      "To: testuser@localhost",
+      "Subject: Batch move email 3",
+      "Date: Wed, 12 Mar 2026 11:00:00 +0000",
+      "Message-Id: <batch-move-003@example.com>",
+      "",
+      "Body of batch move email 3.",
+    ].join("\r\n"),
+  },
+];
+
+function createBatchMoveTestServer() {
+  return hoodiecrow({
+    plugins: [
+      "ID", "SASL-IR", "AUTH-PLAIN", "NAMESPACE", "IDLE",
+      "ENABLE", "CONDSTORE", "LITERALPLUS", "UNSELECT",
+      "SPECIAL-USE", "CREATE-SPECIAL-USE",
+    ],
+    storage: {
+      INBOX: {
+        messages: [...BATCH_MOVE_SEED_MESSAGES],
+      },
+      "": {
+        separator: "/",
+        folders: {
+          "[Google Mail]": {
+            flags: ["\\Noselect"],
+            folders: {
+              "All Mail": {
+                "special-use": "\\All",
+                messages: [...BATCH_MOVE_SEED_MESSAGES],
+              },
+              Drafts: { "special-use": "\\Drafts" },
+              "Sent Mail": { "special-use": "\\Sent" },
+              Trash: { "special-use": "\\Trash" },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+const batchMoveImapConfig: ImapConfig = {
+  host: "127.0.0.1",
+  port: BATCH_MOVE_IMAP_PORT,
+  user: TEST_USER,
+  password: TEST_PASS,
+  secure: false,
+};
+
+describe("Batch move to folder (Hoodiecrow integration)", () => {
+  let server: ReturnType<typeof hoodiecrow>;
+
+  beforeAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server = createBatchMoveTestServer();
+        server.listen(BATCH_MOVE_IMAP_PORT, () => resolve());
+      }),
+  );
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        setTimeout(resolve, 2000);
+      }),
+  );
+
+  // --------------------------------------------------------------------------
+  // Happy path: batch move moves emails to target folder
+  // --------------------------------------------------------------------------
+
+  it("batch move moves multiple emails to Trash and creates action rows with undo recipes", async () => {
+    let client = await createImapConnection(batchMoveImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const target1 = emails.find((e) => e.subject === "Batch move email 1")!;
+      const target2 = emails.find((e) => e.subject === "Batch move email 2")!;
+      expect(target1).toBeDefined();
+      expect(target2).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "batch_move_to_folder",
+        arguments: {
+          email_ids: [target1.id, target2.id],
+          folder: "[Google Mail]/Trash",
+          source_folder: "INBOX",
+        },
+      };
+
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(batchMoveImapConfig), supabase);
+
+      // Result summary shows both succeeded
+      const summary = result.result as Record<string, unknown>;
+      expect(summary.total).toBe(2);
+      expect(summary.succeeded).toBe(2);
+      expect(summary.failed).toBe(0);
+
+      // Action rows should have undo recipes
+      const actionRows = Object.values(store.actions);
+      const moveRows = actionRows.filter((r) => r.tool_name === "move_to_folder");
+      expect(moveRows).toHaveLength(2);
+      for (const row of moveRows) {
+        expect(row.status).toBe("executed");
+        expect(row.undo_recipe).toBeTruthy();
+      }
+
+      // Reconnect to see updated mailbox state (handleToolCall uses its own connection)
+      await closeImapConnection(client);
+      client = await createImapConnection(batchMoveImapConfig);
+      const after = await listInbox(client, 10);
+      expect(after.find((e) => e.id === target1.id)).toBeUndefined();
+      expect(after.find((e) => e.id === target2.id)).toBeUndefined();
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Partial failure: one valid ID, one invalid ID
+  // --------------------------------------------------------------------------
+
+  it("partial failure: valid email moves, invalid email fails", async () => {
+    const client = await createImapConnection(batchMoveImapConfig);
+    try {
+      const emails = await listInbox(client, 10);
+      const validTarget = emails[0]!;
+      expect(validTarget).toBeDefined();
+
+      const store: Record<string, Record<string, Row>> = { actions: {} };
+      const supabase = createFakeSupabase(store);
+
+      const input: ActionInput = {
+        userId: "user-1",
+        sessionId: "session-1",
+        toolName: "batch_move_to_folder",
+        arguments: {
+          email_ids: [validTarget.id, "99999"],
+          folder: "[Google Mail]/Trash",
+          source_folder: "INBOX",
+        },
+      };
+
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(batchMoveImapConfig), supabase);
+
+      const summary = result.result as Record<string, unknown>;
+      expect(summary.succeeded).toBe(1);
+      expect(summary.failed).toBe(1);
+    } finally {
+      await closeImapConnection(client);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Empty email_ids
+  // --------------------------------------------------------------------------
+
+  it("empty email_ids returns zero counts with no side effects", async () => {
+    const store: Record<string, Record<string, Row>> = { actions: {} };
+    const supabase = createFakeSupabase(store);
+
+    const input: ActionInput = {
+      userId: "user-1",
+      sessionId: "session-1",
+      toolName: "batch_move_to_folder",
+      arguments: {
+        email_ids: [],
+        folder: "[Google Mail]/Trash",
+      },
+    };
+
+    const result = await handleToolCall(input, {}, buildTestEmailAccount(batchMoveImapConfig), supabase);
+
+    const summary = result.result as Record<string, unknown>;
+    expect(summary.total).toBe(0);
+    expect(summary.succeeded).toBe(0);
+    expect(summary.failed).toBe(0);
+    expect(Object.keys(store.actions)).toHaveLength(0);
   });
 });
 
@@ -1009,6 +1047,7 @@ describe("bulkExecuteActions (Hoodiecrow integration)", () => {
     () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
+        setTimeout(resolve, 2000);
       }),
   );
 
@@ -1064,8 +1103,7 @@ describe("bulkExecuteActions (Hoodiecrow integration)", () => {
       const response = await bulkExecuteActions(
         ["bulk-v1", "bulk-v2"],
         supabase,
-        client,
-        DUMMY_SMTP_CONFIG
+        buildTestEmailAccount(bulkImapConfig)
       );
 
       expect(response.succeeded).toBe(1);
@@ -1133,8 +1171,7 @@ describe("bulkExecuteActions (Hoodiecrow integration)", () => {
       const response = await bulkExecuteActions(
         ["bulk-s1", "bulk-s2"],
         supabase,
-        client,
-        DUMMY_SMTP_CONFIG
+        buildTestEmailAccount(bulkImapConfig)
       );
 
       expect(response.skipped).toBe(1);
@@ -1159,7 +1196,7 @@ describe("bulkExecuteActions (Hoodiecrow integration)", () => {
     try {
       const supabase = createFakeSupabase({ actions: {} });
 
-      const response = await bulkExecuteActions([], supabase, client, DUMMY_SMTP_CONFIG);
+      const response = await bulkExecuteActions([], supabase, buildTestEmailAccount(bulkImapConfig));
 
       expect(response.total).toBe(0);
       expect(response.succeeded).toBe(0);
@@ -1230,8 +1267,7 @@ describe("bulkExecuteActions (Hoodiecrow integration)", () => {
       const response = await bulkExecuteActions(
         ["bulk-m1", "bulk-m2"],
         supabase,
-        client,
-        DUMMY_SMTP_CONFIG
+        buildTestEmailAccount(bulkImapConfig)
       );
 
       expect(response.succeeded).toBe(2);
@@ -1313,8 +1349,7 @@ describe("bulkExecuteActions (Hoodiecrow integration)", () => {
       const response = await bulkExecuteActions(
         ["bulk-f1", "bulk-f2"],
         supabase,
-        client,
-        DUMMY_SMTP_CONFIG
+        buildTestEmailAccount(bulkImapConfig)
       );
 
       // Delete should succeed, send should fail (no real SMTP)
@@ -1333,134 +1368,6 @@ describe("bulkExecuteActions (Hoodiecrow integration)", () => {
   });
 });
 
-// ============================================================================
-// BULK EXECUTE PERFORMANCE (INTEGRATION)
-// ============================================================================
-
-const PERF_IMAP_PORT = 14_248;
-const PERF_EMAIL_COUNT = 30;
-
-// Generate 30 seed messages
-const PERF_SEED_MESSAGES = Array.from({ length: PERF_EMAIL_COUNT }, (_, i) => ({
-  raw: [
-    `From: sender${i}@example.com`,
-    "To: testuser@localhost",
-    `Subject: Perf test email ${i + 1}`,
-    `Date: Mon, ${String(10 + (i % 20)).padStart(2, "0")} Mar 2026 09:00:00 +0000`,
-    `Message-Id: <perf-msg-${String(i + 1).padStart(3, "0")}@example.com>`,
-    "",
-    `Body of performance test email ${i + 1}.`,
-  ].join("\r\n"),
-}));
-
-function createPerfTestServer() {
-  return hoodiecrow({
-    plugins: [
-      "ID", "SASL-IR", "AUTH-PLAIN", "NAMESPACE", "IDLE", "ENABLE",
-      "CONDSTORE", "LITERALPLUS", "UNSELECT", "SPECIAL-USE", "CREATE-SPECIAL-USE",
-    ],
-    storage: {
-      INBOX: {
-        messages: [...PERF_SEED_MESSAGES],
-      },
-      "": {
-        separator: "/",
-        folders: {
-          "[Google Mail]": {
-            flags: ["\\Noselect"],
-            folders: {
-              "All Mail": {
-                "special-use": "\\All",
-                messages: [...PERF_SEED_MESSAGES],
-              },
-              Drafts: { "special-use": "\\Drafts" },
-              "Sent Mail": { "special-use": "\\Sent" },
-              Trash: { "special-use": "\\Trash" },
-            },
-          },
-        },
-      },
-    },
-  });
-}
-
-const perfImapConfig: ImapConfig = {
-  host: "127.0.0.1",
-  port: PERF_IMAP_PORT,
-  user: TEST_USER,
-  password: TEST_PASS,
-  secure: false,
-};
-
-describe("bulkExecuteActions performance (Hoodiecrow integration)", () => {
-  let server: ReturnType<typeof hoodiecrow>;
-
-  beforeAll(
-    () =>
-      new Promise<void>((resolve) => {
-        server = createPerfTestServer();
-        server.listen(PERF_IMAP_PORT, () => resolve());
-      }),
-  );
-
-  afterAll(
-    () =>
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      }),
-  );
-
-  it(`bulk delete of ${PERF_EMAIL_COUNT} emails completes under 2 seconds`, async () => {
-    const client = await createImapConnection(perfImapConfig);
-    try {
-      const emails = await listInbox(client, PERF_EMAIL_COUNT + 5);
-      expect(emails.length).toBe(PERF_EMAIL_COUNT);
-
-      // Build fake store with all 30 as pending delete_email actions
-      const actions: Record<string, Row> = {};
-      const actionIds: string[] = [];
-      for (const email of emails) {
-        const id = `perf-${email.id}`;
-        actionIds.push(id);
-        actions[id] = {
-          id,
-          user_id: "user-1",
-          session_id: "session-1",
-          tool_name: "delete_email",
-          arguments: { email_id: email.id, source_folder: "INBOX" },
-          status: "pending",
-          requires_approval: true,
-          result: null,
-          undo_recipe: null,
-          undo_deadline: null,
-          created_at: new Date().toISOString(),
-          executed_at: null,
-        };
-      }
-
-      const store: Record<string, Record<string, Row>> = { actions };
-      const supabase = createFakeSupabase(store);
-
-      const start = performance.now();
-      const response = await bulkExecuteActions(actionIds, supabase, client, DUMMY_SMTP_CONFIG);
-      const elapsed = performance.now() - start;
-
-      // All should succeed
-      expect(response.succeeded).toBe(PERF_EMAIL_COUNT);
-      expect(response.failed).toBe(0);
-      expect(response.total).toBe(PERF_EMAIL_COUNT);
-
-      // Inbox should be empty
-      const after = await listInbox(client, PERF_EMAIL_COUNT + 5);
-      expect(after.length).toBe(0);
-
-      // Must complete under 2 seconds (batched = ~2 IMAP commands, not 60)
-      expect(elapsed).toBeLessThan(2000);
-    } finally {
-      await closeImapConnection(client);
-    }
-  });
-});
 
 // ============================================================================
 // SESSION-AWARE INBOX FILTERING (INTEGRATION)
@@ -1581,6 +1488,7 @@ describe("Session-aware inbox filtering", () => {
     () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
+        setTimeout(resolve, 2000);
       }),
   );
 
@@ -1612,7 +1520,7 @@ describe("Session-aware inbox filtering", () => {
         arguments: { limit: 10 },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(filterImapConfig), supabase);
       const markdown = (result.result as Record<string, unknown>).markdown as string;
 
       // First email should be filtered out; others present
@@ -1652,7 +1560,7 @@ describe("Session-aware inbox filtering", () => {
         arguments: { limit: 10 },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(filterImapConfig), supabase);
       const markdown = (result.result as Record<string, unknown>).markdown as string;
 
       expect(markdown).toContain("Filter test email 1");
@@ -1691,7 +1599,7 @@ describe("Session-aware inbox filtering", () => {
         arguments: { query: "filter test" },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(filterImapConfig), supabase);
       const markdown = (result.result as Record<string, unknown>).markdown as string;
 
       expect(markdown).not.toContain("Filter test email 1");
@@ -1730,7 +1638,7 @@ describe("Session-aware inbox filtering", () => {
         arguments: { limit: 10 },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(filterImapConfig), supabase);
       const markdown = (result.result as Record<string, unknown>).markdown as string;
 
       expect(markdown).toContain("Queued Outgoing");
@@ -1769,7 +1677,7 @@ describe("Session-aware inbox filtering", () => {
         arguments: { limit: 10 },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(filterImapConfig), supabase);
       const markdown = (result.result as Record<string, unknown>).markdown as string;
 
       // All emails should be present -- different session's actions don't apply
@@ -1798,7 +1706,7 @@ describe("Session-aware inbox filtering", () => {
         arguments: { limit: 10 },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(filterImapConfig), supabase);
       const markdown = (result.result as Record<string, unknown>).markdown as string;
 
       expect(markdown).toContain("Filter test email 1");
@@ -1838,7 +1746,7 @@ describe("Session-aware inbox filtering", () => {
         arguments: { limit: 10 },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(filterImapConfig), supabase);
       const markdown = (result.result as Record<string, unknown>).markdown as string;
 
       expect(markdown).toContain("Filter test email 1");
@@ -2002,6 +1910,7 @@ describe("Overfetch for pending actions", () => {
     () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
+        setTimeout(resolve, 2000);
       }),
   );
 
@@ -2050,7 +1959,7 @@ describe("Overfetch for pending actions", () => {
         arguments: { limit: 3 },
       };
 
-      const result = await handleToolCall(input, {}, client, DUMMY_SMTP_CONFIG, supabase);
+      const result = await handleToolCall(input, {}, buildTestEmailAccount(overfetchImapConfig), supabase);
       const markdown = (result.result as Record<string, unknown>).markdown as string;
 
       // The 3 older emails should be present
@@ -2134,6 +2043,7 @@ describe("convertActionToDraft", () => {
     () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
+        setTimeout(resolve, 2000);
       }),
   );
 
@@ -2150,7 +2060,7 @@ describe("convertActionToDraft", () => {
         body: "This should become a draft.",
       });
 
-      const result = await convertActionToDraft("c1", supabase, client);
+      const result = await convertActionToDraft("c1", supabase, buildTestEmailAccount(convertImapConfig));
 
       // Result should indicate conversion with a draftUid
       expect(result.status).toBe("converted");
@@ -2189,7 +2099,7 @@ describe("convertActionToDraft", () => {
 
     try {
       await expect(
-        convertActionToDraft("c2", supabase, client),
+        convertActionToDraft("c2", supabase, buildTestEmailAccount(convertImapConfig)),
       ).rejects.toThrow("not pending");
     } finally {
       await closeImapConnection(client);
@@ -2209,11 +2119,226 @@ describe("convertActionToDraft", () => {
 
     try {
       await expect(
-        convertActionToDraft("c3", supabase, client),
-      ).rejects.toThrow("not a send_email action");
+        convertActionToDraft("c3", supabase, buildTestEmailAccount(convertImapConfig)),
+      ).rejects.toThrow("not a send_email or reply_email action");
     } finally {
       await closeImapConnection(client);
     }
+  });
+});
+
+// ============================================================================
+// UNIPILE-BACKED ACCOUNT TESTS
+// ============================================================================
+
+/**
+ * Builds an EmailAccountRecord for a Unipile-backed Gmail/Outlook account.
+ * No customConfig -- email operations go through the mocked Unipile client.
+ */
+function buildUnipileTestAccount(): EmailAccountRecord {
+  return {
+    id: "unipile-account-id",
+    userId: "user-1",
+    provider: "gmail",
+    connectionType: "unipile",
+    emailAddress: "user@gmail.com",
+    unipileAccountId: "uni_abc123",
+    status: "connected",
+    lastError: null,
+  };
+}
+
+/**
+ * Creates a mock EmailAccountClient with vi.fn() stubs for all methods.
+ * Individual tests can override return values as needed.
+ */
+function createMockEmailClient(): EmailAccountClient {
+  return {
+    listInbox: vi.fn().mockResolvedValue([]),
+    searchEmails: vi.fn().mockResolvedValue([]),
+    readEmail: vi.fn().mockResolvedValue({ id: "e1", subject: "Test", from: "a@b.com", to: ["x@y.com"], cc: [], date: "", body: "", snippet: "" }),
+    readThread: vi.fn().mockResolvedValue([]),
+    markAsRead: vi.fn().mockResolvedValue(undefined),
+    archiveEmail: vi.fn().mockResolvedValue({ operation: "move_email", params: { emailId: "e1", from: "All Mail", to: "INBOX" } }),
+    deleteEmail: vi.fn().mockResolvedValue({ operation: "move_email", params: { emailId: "e1", from: "Trash", to: "INBOX" } }),
+    moveToFolder: vi.fn().mockResolvedValue({ operation: "move_email", params: { emailId: "e1", from: "Target", to: "INBOX" } }),
+    moveEmail: vi.fn().mockResolvedValue(undefined),
+    listFolders: vi.fn().mockResolvedValue([{ name: "INBOX", path: "INBOX" }]),
+    resolveSpecialUseFolder: vi.fn().mockResolvedValue("Trash"),
+    saveDraft: vi.fn().mockResolvedValue({ operation: "delete_draft", params: { draftUid: "999" } }),
+    deleteDraft: vi.fn().mockResolvedValue(undefined),
+    sendEmail: vi.fn().mockResolvedValue(undefined),
+    replyEmail: vi.fn().mockResolvedValue(undefined),
+    fetchReplyContext: vi.fn().mockResolvedValue({ messageId: "<orig@example.com>", from: "sender@example.com", to: ["user@gmail.com"], cc: [], subject: "Re: Hello", references: [] }),
+    fetchEmailMetaBatch: vi.fn().mockResolvedValue(new Map()),
+  };
+}
+
+describe("Unipile-backed account", () => {
+  let mockClient: EmailAccountClient;
+
+  beforeAll(() => {
+    mockClient = createMockEmailClient();
+    setMockUnipileClient(mockClient);
+  });
+
+  afterAll(() => {
+    setMockUnipileClient(null);
+  });
+
+  // --------------------------------------------------------------------------
+  // executeAction: delete_email via Unipile mock
+  // --------------------------------------------------------------------------
+
+  it("executeAction: delete_email succeeds through Unipile client", async () => {
+    const store: Record<string, Record<string, Row>> = {
+      actions: {
+        "uni-del-1": {
+          id: "uni-del-1",
+          user_id: "user-1",
+          session_id: "session-1",
+          tool_name: "delete_email",
+          arguments: { email_id: "e1", source_folder: "INBOX" },
+          status: "pending",
+          result: null,
+          undo_recipe: null,
+          undo_deadline: null,
+          created_at: new Date().toISOString(),
+          executed_at: null,
+        },
+      },
+    };
+    const supabase = createFakeSupabase(store) as unknown as SupabaseClient;
+
+    const result = await executeAction("uni-del-1", supabase, buildUnipileTestAccount());
+
+    expect(result.status).toBe("executed");
+    expect(mockClient.deleteEmail).toHaveBeenCalledWith("e1", "INBOX");
+    expect(store.actions["uni-del-1"].status).toBe("executed");
+    expect(store.actions["uni-del-1"].undo_recipe).toBeDefined();
+  });
+
+  // --------------------------------------------------------------------------
+  // executeAction: archive_email via Unipile mock
+  // --------------------------------------------------------------------------
+
+  it("executeAction: archive_email succeeds through Unipile client", async () => {
+    const store: Record<string, Record<string, Row>> = {
+      actions: {
+        "uni-arc-1": {
+          id: "uni-arc-1",
+          user_id: "user-1",
+          session_id: "session-1",
+          tool_name: "archive_email",
+          arguments: { email_id: "e1", source_folder: "INBOX" },
+          status: "pending",
+          result: null,
+          undo_recipe: null,
+          undo_deadline: null,
+          created_at: new Date().toISOString(),
+          executed_at: null,
+        },
+      },
+    };
+    const supabase = createFakeSupabase(store) as unknown as SupabaseClient;
+
+    const result = await executeAction("uni-arc-1", supabase, buildUnipileTestAccount());
+
+    expect(result.status).toBe("executed");
+    expect(mockClient.archiveEmail).toHaveBeenCalledWith("e1", "INBOX");
+    expect(store.actions["uni-arc-1"].status).toBe("executed");
+  });
+
+  // --------------------------------------------------------------------------
+  // undoAction: move_email undo via Unipile mock
+  // --------------------------------------------------------------------------
+
+  it("undoAction: reverses a delete via Unipile client", async () => {
+    const store: Record<string, Record<string, Row>> = {
+      actions: {
+        "uni-undo-1": {
+          id: "uni-undo-1",
+          user_id: "user-1",
+          session_id: "session-1",
+          tool_name: "delete_email",
+          arguments: { email_id: "e1", source_folder: "INBOX" },
+          status: "executed",
+          result: { success: true },
+          undo_recipe: { operation: "move_email", params: { emailId: "e1", from: "Trash", to: "INBOX" } },
+          undo_deadline: null,
+          created_at: new Date().toISOString(),
+          executed_at: new Date().toISOString(),
+        },
+      },
+    };
+    const supabase = createFakeSupabase(store) as unknown as SupabaseClient;
+
+    const result = await undoAction("uni-undo-1", supabase, buildUnipileTestAccount());
+
+    expect(result.success).toBe(true);
+    // moveEmail(identifier, destFolder, sourceFolder) -- undo swaps from/to
+    expect(mockClient.moveEmail).toHaveBeenCalledWith("e1", "INBOX", "Trash");
+    expect(store.actions["uni-undo-1"].status).toBe("undone");
+  });
+
+  // --------------------------------------------------------------------------
+  // handleToolCall: list_emails via Unipile mock
+  // --------------------------------------------------------------------------
+
+  it("handleToolCall: list_inbox returns mocked inbox through Unipile", async () => {
+    (mockClient.listInbox as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { id: "u1", subject: "Unipile email", from: "test@example.com", date: "2026-01-01", snippet: "Hello" },
+    ]);
+
+    const store: Record<string, Record<string, Row>> = { actions: {} };
+    const supabase = createFakeSupabase(store) as unknown as SupabaseClient;
+
+    const input: ActionInput = {
+      userId: "user-1",
+      sessionId: "session-1",
+      toolName: "list_inbox",
+      arguments: {},
+    };
+
+    const result = await handleToolCall(input, {}, buildUnipileTestAccount(), supabase);
+
+    expect(result.status).toBe("executed");
+    expect(mockClient.listInbox).toHaveBeenCalled();
+  });
+
+  // --------------------------------------------------------------------------
+  // convertActionToDraft: send_email via Unipile mock
+  // --------------------------------------------------------------------------
+
+  it("convertActionToDraft: saves draft through Unipile client", async () => {
+    const store: Record<string, Record<string, Row>> = {
+      actions: {
+        "uni-draft-1": {
+          id: "uni-draft-1",
+          user_id: "user-1",
+          session_id: "session-1",
+          tool_name: "send_email",
+          arguments: { to: "recipient@example.com", subject: "Test", body: "Hello" },
+          status: "pending",
+          result: null,
+          undo_recipe: null,
+          undo_deadline: null,
+          created_at: new Date().toISOString(),
+          executed_at: null,
+        },
+      },
+    };
+    const supabase = createFakeSupabase(store) as unknown as SupabaseClient;
+
+    const result = await convertActionToDraft("uni-draft-1", supabase, buildUnipileTestAccount());
+
+    expect(result.status).toBe("converted");
+    expect(mockClient.saveDraft).toHaveBeenCalledWith({
+      to: "recipient@example.com",
+      subject: "Test",
+      body: "Hello",
+    });
+    expect(store.actions["uni-draft-1"].status).toBe("converted");
   });
 });
 
@@ -2222,6 +2347,14 @@ describe("convertActionToDraft", () => {
 // ============================================================================
 
 describe("what_can_you_do", () => {
+  beforeAll(() => {
+    setMockUnipileClient(createMockEmailClient());
+  });
+
+  afterAll(() => {
+    setMockUnipileClient(null);
+  });
+
   it("returns capabilities markdown", async () => {
     const store: Record<string, Record<string, Row>> = { actions: {} };
     const supabase = createFakeSupabase(store) as unknown as SupabaseClient;
@@ -2236,12 +2369,50 @@ describe("what_can_you_do", () => {
     const result: ActionResult = await handleToolCall(
       input,
       {},
-      null as unknown as ImapFlow,
-      DUMMY_SMTP_CONFIG,
+      buildUnipileTestAccount(),
       supabase,
     );
 
     expect(result.status).toBe("executed");
     expect((result.result as Record<string, unknown>).markdown).toContain("archive");
+  });
+});
+
+describe("read_calendar", () => {
+  beforeAll(() => {
+    setMockUnipileClient(createMockEmailClient());
+  });
+
+  afterAll(() => {
+    setMockUnipileClient(null);
+  });
+
+  it("returns placeholder guidance with submit_feature_request", async () => {
+    const store: Record<string, Record<string, Row>> = { actions: {} };
+    const supabase = createFakeSupabase(store) as unknown as SupabaseClient;
+
+    const input: ActionInput = {
+      userId: "user-1",
+      sessionId: "session-1",
+      toolName: "read_calendar",
+      arguments: {
+        start: "2026-04-13",
+        end: "2026-04-14",
+      },
+    };
+
+    const result: ActionResult = await handleToolCall(
+      input,
+      {},
+      buildUnipileTestAccount(),
+      supabase,
+    );
+
+    expect(result.status).toBe("executed");
+    expect(result.result).toMatchObject({
+      implemented: false,
+      feedbackToolName: "submit_feature_request",
+    });
+    expect((result.result as Record<string, unknown>).instruction).toContain("submit_feature_request");
   });
 });

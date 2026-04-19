@@ -9,6 +9,10 @@
  * - Provides get / set / clear helpers consumed by EmailStatusContext
  */
 
+import type { EmailStatus, EmailStatusResult } from "./email-status";
+
+export type { EmailStatus, EmailStatusResult } from "./email-status";
+
 // ============================================================================
 // CONSTANTS
 // ============================================================================
@@ -18,17 +22,6 @@ const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
 /** Prefix used for the localStorage key */
 const CACHE_KEY_PREFIX = "email_status_cache_";
-
-// ============================================================================
-// TYPES
-// ============================================================================
-
-export type EmailStatus = "not_configured" | "connected" | "error";
-
-export interface EmailStatusResult {
-  status: EmailStatus;
-  message?: string;
-}
 
 interface CachedEmailStatus extends EmailStatusResult {
   checkedAt: number;

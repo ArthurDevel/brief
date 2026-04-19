@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Generator
 from unittest.mock import MagicMock
 
@@ -76,6 +77,23 @@ def test_logs_outside_session_not_buffered() -> None:
     stdlib_logger.info("this should also not be buffered")
 
     assert len(session_logger._buffers) == 0
+
+
+def test_preformatted_lines_can_be_appended() -> None:
+    """Pre-session markers can be buffered and appended after start()."""
+    session_id = "test-pre-session-lines"
+    line = session_logger.make_log_line(
+        level="INFO",
+        module="test_session_logger",
+        message="[startup] before session existed",
+        timestamp=datetime(2026, 4, 10, 12, 0, 0, 123000, tzinfo=timezone.utc),
+    )
+
+    session_logger.start(session_id)
+    session_logger.append_lines(session_id, [line])
+    log_text = session_logger.stop(session_id)
+
+    assert "2026-04-10 12:00:00.123 INFO [test_session_logger] [startup] before session existed" in log_text
 
 
 @pytest.mark.asyncio

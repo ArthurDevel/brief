@@ -14,27 +14,19 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ImapFlow } from "imapflow";
 import type {
   ToolName,
   ActionClassification,
   ToolApprovalConfig,
   ActionInput,
   ActionResult,
-  ActionRow,
   QueuedSend,
   UndoRecipe,
   UndoResult,
   BulkActionResult,
   BulkActionResponse,
 } from "./types";
-/** SMTP server connection configuration. Duplicated here to avoid circular dependency with @dublin/email. */
-interface SmtpConfig {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-}
+import type { EmailAccountRecord } from "@dublin/email";
 import { getDefaultClassification } from "./classification";
 import { CAPABILITIES_MARKDOWN } from "./definitions";
 
@@ -69,24 +61,25 @@ export function classifyAction(toolName: ToolName, userConfig: ToolApprovalConfi
  * Writes the action to the DB in both cases.
  * @param input - The tool call input (userId, sessionId, toolName, arguments)
  * @param userConfig - User's per-tool classification overrides
- * @param imapClient - Connected ImapFlow client for email operations
- * @param smtpConfig - SMTP configuration for sending emails
+ * @param emailAccount - The user's active email account record
  * @param supabase - Supabase client for DB operations
  * @returns ActionResult with the outcome
  */
 export async function handleToolCall(
   input: ActionInput,
   userConfig: ToolApprovalConfig,
-  imapClient: ImapFlow,
-  smtpConfig: SmtpConfig,
+  emailAccount: EmailAccountRecord,
   supabase: SupabaseClient
 ): Promise<ActionResult> {
   // Intercept batch tools before the normal classify/dispatch flow
   if (input.toolName === "batch_archive_emails") {
-    return await handleBatchArchive(input, imapClient, smtpConfig, supabase);
+    return await handleBatchArchive(input, emailAccount, supabase);
   }
   if (input.toolName === "batch_delete_emails") {
     return await handleBatchDelete(input, supabase);
+  }
+  if (input.toolName === "batch_move_to_folder") {
+    return await handleBatchMove(input, emailAccount, supabase);
   }
 
   const classification = classifyAction(input.toolName, userConfig);
@@ -98,23 +91,21 @@ export async function handleToolCall(
   }
 
   // Execute immediately (read_only or mutating_auto)
-  return await executeAndStore(input, imapClient, smtpConfig, supabase);
+  return await executeAndStore(input, emailAccount, supabase);
 }
 
 /**
- * Executes a pending or approved action via IMAP/SMTP.
+ * Executes a pending or approved action via the provider-agnostic email client.
  * Stores the undo recipe and deadline in the action row after execution.
  * @param actionId - The action row ID to execute
  * @param supabase - Supabase client for DB operations
- * @param imapClient - Connected ImapFlow client for email operations
- * @param smtpConfig - SMTP configuration for sending emails
+ * @param emailAccount - The user's active email account record
  * @returns ActionResult with the outcome
  */
 export async function executeAction(
   actionId: string,
   supabase: SupabaseClient,
-  imapClient: ImapFlow,
-  smtpConfig: SmtpConfig
+  emailAccount: EmailAccountRecord
 ): Promise<ActionResult> {
   // Load the action from DB
   const { data: action, error } = await supabase
@@ -140,8 +131,7 @@ export async function executeAction(
     ({ result, undoRecipe } = await dispatchTool(
       action.tool_name as ToolName,
       action.arguments,
-      imapClient,
-      smtpConfig,
+      emailAccount,
       supabase,
       action.user_id,
       null
@@ -187,17 +177,17 @@ export async function executeAction(
 /**
  * Converts a pending send_email or reply_email action into a draft in the user's mailbox.
  * For reply_email, fetches the original email's reply context to build threading headers.
- * Saves the draft via IMAP APPEND, then marks the action as "converted".
+ * Saves the draft via the provider-agnostic client, then marks the action as "converted".
  * On failure the action remains "pending" -- errors propagate to the caller.
  * @param actionId - The action row ID to convert
  * @param supabase - Supabase client for DB operations
- * @param imapClient - Connected ImapFlow client for IMAP APPEND
+ * @param emailAccount - The user's active email account record
  * @returns ActionResult with converted status and draftUid
  */
 export async function convertActionToDraft(
   actionId: string,
   supabase: SupabaseClient,
-  imapClient: ImapFlow
+  emailAccount: EmailAccountRecord
 ): Promise<ActionResult> {
   // Load the action from DB
   const { data: action, error } = await supabase
@@ -218,12 +208,14 @@ export async function convertActionToDraft(
     throw new Error(`Action ${actionId} is not pending (status: "${action.status}")`);
   }
 
+  const { createEmailAccountClient } = await import("@dublin/email");
+  const emailClient = await createEmailAccountClient(emailAccount);
+
   let recipe: import("./types").UndoRecipe;
 
   if (action.tool_name === "reply_email") {
     // Fetch reply context from the original email, then save as draft with threading headers
-    const { fetchReplyContext, saveDraft } = await import("@dublin/email");
-    const context = await fetchReplyContext(imapClient, action.arguments.email_id as string);
+    const context = await emailClient.fetchReplyContext(action.arguments.email_id as string);
 
     const replyAll = (action.arguments.reply_all as boolean) ?? false;
     const senderAddress = action.arguments._sender_address as string | undefined;
@@ -236,22 +228,21 @@ export async function convertActionToDraft(
       ? [...context.to, ...context.cc].filter(addr => senderAddress ? addr.toLowerCase() !== senderAddress.toLowerCase() : true)
       : [];
 
-    recipe = await saveDraft(imapClient, {
+    recipe = await emailClient.saveDraft({
       to: context.from,
       subject,
       body: action.arguments.body as string,
       cc: ccAddrs.length > 0 ? ccAddrs.join(", ") : undefined,
       inReplyTo: context.messageId,
       references: [...context.references, context.messageId].join(" "),
-    });
+    }) as UndoRecipe;
   } else {
     // send_email: save draft directly from action arguments
-    const { saveDraft } = await import("@dublin/email");
-    recipe = await saveDraft(imapClient, {
+    recipe = await emailClient.saveDraft({
       to: action.arguments.to as string,
       subject: action.arguments.subject as string,
       body: action.arguments.body as string,
-    });
+    }) as UndoRecipe;
   }
 
   const draftUid = recipe.params.draftUid as string;
@@ -283,13 +274,13 @@ export async function convertActionToDraft(
  * the reverse operation (move_email, delete_draft, delete_memory, etc.).
  * @param actionId - The action row ID to undo
  * @param supabase - Supabase client for DB operations
- * @param imapClient - Connected ImapFlow client for email operations
+ * @param emailAccount - The user's active email account record
  * @returns UndoResult indicating success or failure
  */
 export async function undoAction(
   actionId: string,
   supabase: SupabaseClient,
-  imapClient: ImapFlow
+  emailAccount: EmailAccountRecord
 ): Promise<UndoResult> {
   // Load the action from DB
   const { data: action, error } = await supabase
@@ -321,7 +312,7 @@ export async function undoAction(
   }
 
   // Dispatch the undo operation
-  await dispatchUndo(undoRecipe, imapClient, supabase);
+  await dispatchUndo(undoRecipe, emailAccount, supabase);
 
   // Update the action status
   const { error: updateError } = await supabase
@@ -337,21 +328,18 @@ export async function undoAction(
 }
 
 /**
- * Executes multiple actions in bulk with batched IMAP lock acquisition.
- * Email-move actions (delete_email, archive_email) are grouped by (tool_name, source_folder)
- * and executed under a single mailbox lock per group. Non-move actions fall back to
- * individual executeAction calls.
+ * Executes multiple actions in bulk via the provider-agnostic email client.
+ * For custom IMAP accounts, email-move actions are executed sequentially.
+ * Non-move actions fall back to individual executeAction calls.
  * @param actionIds - Array of action row IDs to execute
  * @param supabase - Supabase client for DB operations
- * @param imapClient - Connected ImapFlow client for email operations
- * @param smtpConfig - SMTP configuration for sending emails
+ * @param emailAccount - The user's active email account record
  * @returns BulkActionResponse with per-action results and summary counts
  */
 export async function bulkExecuteActions(
   actionIds: string[],
   supabase: SupabaseClient,
-  imapClient: ImapFlow,
-  smtpConfig: SmtpConfig
+  emailAccount: EmailAccountRecord
 ): Promise<BulkActionResponse> {
   // Early return for empty input
   if (actionIds.length === 0) {
@@ -390,162 +378,10 @@ export async function bulkExecuteActions(
     pendingActions.push(action);
   }
 
-  // Step 3: Resolve target folders once (cached)
-  const MOVE_TOOLS = new Set(["delete_email", "archive_email"]);
-  const { resolveSpecialUseFolder } = await import("@dublin/email");
-
-  const folderCache = new Map<string, string>();
-
-  const moveActions: Record<string, unknown>[] = [];
-  const nonMoveActions: Record<string, unknown>[] = [];
-
+  // Step 3: Execute all pending actions sequentially via executeAction
   for (const action of pendingActions) {
-    if (MOVE_TOOLS.has(action.tool_name as string)) {
-      moveActions.push(action);
-    } else {
-      nonMoveActions.push(action);
-    }
-  }
-
-  // Resolve target folders for move actions
-  for (const toolName of ["delete_email", "archive_email"]) {
-    const hasActions = moveActions.some((a) => a.tool_name === toolName);
-    if (!hasActions) continue;
-
-    const flag = toolName === "delete_email" ? "\\Trash" : "\\All";
     try {
-      const folder = await resolveSpecialUseFolder(imapClient, flag as "\\Trash" | "\\All");
-      folderCache.set(toolName, folder);
-    } catch (err) {
-      // Mark all actions of this tool type as failed
-      for (const action of moveActions.filter((a) => a.tool_name === toolName)) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        results.push({ actionId: action.id as string, status: "failed", error: `Folder resolution failed: ${errorMsg}` });
-        await supabase
-          .from("actions")
-          .update({ status: "failed", result: { error: `Folder resolution failed: ${errorMsg}` } })
-          .eq("id", action.id as string);
-      }
-    }
-  }
-
-  // Step 4: Group email-move actions by (tool_name, source_folder)
-  const groups = new Map<string, Record<string, unknown>[]>();
-  for (const action of moveActions) {
-    const toolName = action.tool_name as string;
-    // Skip if folder resolution failed
-    if (!folderCache.has(toolName)) continue;
-
-    const args = action.arguments as Record<string, unknown>;
-    const sourceFolder = (args.source_folder as string) ?? "INBOX";
-    const groupKey = `${toolName}::${sourceFolder}`;
-
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, []);
-    }
-    groups.get(groupKey)!.push(action);
-  }
-
-  // Step 5: Process each group with batched IMAP commands (1 fetch + 1 move per group)
-  for (const [groupKey, groupActions] of groups) {
-    const [toolName] = groupKey.split("::");
-    const targetFolder = folderCache.get(toolName)!;
-    const args = groupActions[0].arguments as Record<string, unknown>;
-    const sourceFolder = (args.source_folder as string) ?? "INBOX";
-
-    // Build a map of uid -> action for this group
-    const uidToAction = new Map<string, Record<string, unknown>>();
-    for (const action of groupActions) {
-      const actionArgs = action.arguments as Record<string, unknown>;
-      const uid = actionArgs.email_id as string;
-      uidToAction.set(uid, action);
-    }
-
-    const allUids = Array.from(uidToAction.keys());
-    const uidRange = allUids.join(",");
-
-    const lock = await imapClient.getMailboxLock(sourceFolder);
-    try {
-      // Batch fetch all envelopes in one IMAP command
-      const uidToMessageId = new Map<number, string>();
-      for await (const msg of imapClient.fetch(uidRange, { envelope: true, uid: true }, { uid: true })) {
-        if (msg.envelope?.messageId) {
-          uidToMessageId.set(msg.uid, msg.envelope.messageId);
-        }
-      }
-
-      // Identify which UIDs were found and which were not
-      const foundUids: string[] = [];
-      for (const uid of allUids) {
-        const uidNum = Number(uid);
-        if (uidToMessageId.has(uidNum)) {
-          foundUids.push(uid);
-        } else {
-          // Mark as failed -- email not found
-          const action = uidToAction.get(uid)!;
-          const errorMsg = `Email with UID ${uid} not found in folder ${sourceFolder}`;
-          await supabase
-            .from("actions")
-            .update({ status: "failed", result: { error: errorMsg } })
-            .eq("id", action.id as string);
-          results.push({ actionId: action.id as string, status: "failed", error: errorMsg });
-        }
-      }
-
-      if (foundUids.length > 0) {
-        // Batch move all found UIDs in one IMAP command
-        const moveRange = foundUids.join(",");
-        await imapClient.messageMove(moveRange, targetFolder, { uid: true });
-
-        // Update all DB rows concurrently
-        const executedAt = new Date().toISOString();
-        const resultData = toolName === "delete_email" ? { deleted: true } : { archived: true };
-
-        await Promise.all(foundUids.map((uid) => {
-          const action = uidToAction.get(uid)!;
-          const messageId = uidToMessageId.get(Number(uid))!;
-
-          const undoRecipe: UndoRecipe = {
-            operation: "move_email",
-            params: { messageId, from: targetFolder, to: sourceFolder },
-          };
-
-          results.push({ actionId: action.id as string, status: "executed", error: null });
-
-          return supabase
-            .from("actions")
-            .update({
-              status: "executed",
-              result: resultData,
-              undo_recipe: undoRecipe,
-              undo_deadline: null,
-              executed_at: executedAt,
-            })
-            .eq("id", action.id as string);
-        }));
-      }
-    } catch (err) {
-      // If the batch IMAP operation fails, mark all unprocessed actions as failed
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      for (const action of groupActions) {
-        const alreadyProcessed = results.some((r) => r.actionId === (action.id as string));
-        if (!alreadyProcessed) {
-          await supabase
-            .from("actions")
-            .update({ status: "failed", result: { error: errorMsg } })
-            .eq("id", action.id as string);
-          results.push({ actionId: action.id as string, status: "failed", error: errorMsg });
-        }
-      }
-    } finally {
-      lock.release();
-    }
-  }
-
-  // Step 6: Process non-move actions individually via executeAction
-  for (const action of nonMoveActions) {
-    try {
-      await executeAction(action.id as string, supabase, imapClient, smtpConfig);
+      await executeAction(action.id as string, supabase, emailAccount);
       results.push({ actionId: action.id as string, status: "executed", error: null });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -553,7 +389,7 @@ export async function bulkExecuteActions(
     }
   }
 
-  // Step 7: Build summary
+  // Step 4: Build summary
   const succeeded = results.filter((r) => r.status === "executed").length;
   const failed = results.filter((r) => r.status === "failed").length;
   const skipped = results.filter((r) => r.status === "skipped").length;
@@ -609,22 +445,19 @@ async function insertPendingAction(
 /**
  * Executes a tool call and stores the result + undo recipe in the DB.
  * @param input - The action input
- * @param imapClient - Connected ImapFlow client
- * @param smtpConfig - SMTP configuration
+ * @param emailAccount - The user's active email account record
  * @param supabase - Supabase client
  * @returns ActionResult with executed status
  */
 async function executeAndStore(
   input: ActionInput,
-  imapClient: ImapFlow,
-  smtpConfig: SmtpConfig,
+  emailAccount: EmailAccountRecord,
   supabase: SupabaseClient
 ): Promise<ActionResult> {
   const { result, undoRecipe } = await dispatchTool(
     input.toolName,
     input.arguments,
-    imapClient,
-    smtpConfig,
+    emailAccount,
     supabase,
     input.userId,
     input.sessionId
@@ -661,18 +494,15 @@ async function executeAndStore(
 
 /**
  * Fans out a batch_archive_emails call into individual archive_email actions.
- * Processes emails sequentially (IMAP supports only one operation at a time).
- * Each email gets its own action row with an individual undo recipe.
+ * Processes emails sequentially. Each email gets its own action row with an individual undo recipe.
  * @param input - The batch action input containing email_ids in arguments
- * @param imapClient - Connected ImapFlow client for email operations
- * @param smtpConfig - SMTP configuration for sending emails
+ * @param emailAccount - The user's active email account record
  * @param supabase - Supabase client for DB operations
  * @returns ActionResult with summary counts and all created actionIds
  */
 async function handleBatchArchive(
   input: ActionInput,
-  imapClient: ImapFlow,
-  smtpConfig: SmtpConfig,
+  emailAccount: EmailAccountRecord,
   supabase: SupabaseClient
 ): Promise<ActionResult> {
   const emailIds = (input.arguments.email_ids as string[]) ?? [];
@@ -694,7 +524,7 @@ async function handleBatchArchive(
         arguments: { email_id: emailId, source_folder: sourceFolder },
       };
 
-      const result = await executeAndStore(individualInput, imapClient, smtpConfig, supabase);
+      const result = await executeAndStore(individualInput, emailAccount, supabase);
       actionIds.push(result.actionId);
 
       if (!firstSuccessfulActionId) {
@@ -767,11 +597,97 @@ async function handleBatchDelete(
 }
 
 /**
+ * Moves multiple emails to a folder in a single batch.
+ * Creates one email client, validates the folder once, then loops over emails
+ * making one move call per email. Stores each result as an individual action row.
+ * @param input - The batch action input containing email_ids, folder, and optional source_folder
+ * @param emailAccount - The user's active email account record
+ * @param supabase - Supabase client for DB operations
+ * @returns ActionResult with summary counts and all created actionIds
+ */
+async function handleBatchMove(
+  input: ActionInput,
+  emailAccount: EmailAccountRecord,
+  supabase: SupabaseClient
+): Promise<ActionResult> {
+  const emailIds = (input.arguments.email_ids as string[]) ?? [];
+  const folder = input.arguments.folder as string;
+  const sourceFolder = (input.arguments.source_folder as string) ?? "INBOX";
+
+  const total = emailIds.length;
+  if (total === 0) {
+    return {
+      actionId: "",
+      status: "executed",
+      result: { total: 0, succeeded: 0, failed: 0, errors: [], actionIds: [] },
+      message: `Moved 0 of 0 emails to ${folder} (0 failed)`,
+    };
+  }
+
+  // Create one client for the entire batch
+  const { createEmailAccountClient } = await import("@dublin/email");
+  const emailClient = await createEmailAccountClient(emailAccount);
+
+  // Call batchMoveToFolder -- validates folder once, then moves each email
+  const moveResults = await emailClient.batchMoveToFolder(emailIds, folder, sourceFolder);
+
+  // Store each result as an individual action row in the DB
+  let succeeded = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  const actionIds: string[] = [];
+  let firstSuccessfulActionId = "";
+
+  for (const item of moveResults) {
+    if (item.undoRecipe) {
+      const { data, error } = await supabase
+        .from("actions")
+        .insert({
+          user_id: input.userId,
+          session_id: input.sessionId,
+          tool_name: "move_to_folder",
+          arguments: { email_id: item.emailId, folder, source_folder: sourceFolder },
+          result: { moved: true },
+          status: "executed",
+          requires_approval: false,
+          undo_recipe: item.undoRecipe,
+          undo_deadline: null,
+          executed_at: new Date().toISOString(),
+        })
+        .select("id")
+        .single();
+
+      if (error || !data) {
+        errors.push(`email ${item.emailId}: DB insert failed`);
+        failed++;
+        continue;
+      }
+
+      actionIds.push(data.id);
+      if (!firstSuccessfulActionId) {
+        firstSuccessfulActionId = data.id;
+      }
+      succeeded++;
+    } else {
+      // moveToFolder returned null undo recipe -- treat as failure
+      errors.push(`email ${item.emailId}: move returned no undo recipe`);
+      failed++;
+    }
+  }
+
+  return {
+    actionId: firstSuccessfulActionId || "",
+    status: "executed",
+    result: { total, succeeded, failed, errors, actionIds },
+    message: `Moved ${succeeded} of ${total} emails to ${folder} (${failed} failed)`,
+  };
+}
+
+/**
  * Dispatches a tool call to the appropriate handler.
  * @param toolName - The tool to execute
  * @param args - The tool arguments
- * @param imapClient - Connected ImapFlow client
- * @param smtpConfig - SMTP configuration
+ * @param emailAccount - The user's active email account record
  * @param supabase - Supabase client
  * @param userId - The user ID (for memory/feature request operations)
  * @param sessionId - The session ID for filtering pending actions, or null to skip filtering
@@ -780,19 +696,20 @@ async function handleBatchDelete(
 async function dispatchTool(
   toolName: ToolName,
   args: Record<string, unknown>,
-  imapClient: ImapFlow,
-  smtpConfig: SmtpConfig,
+  emailAccount: EmailAccountRecord,
   supabase: SupabaseClient,
   userId: string,
   sessionId: string | null
 ): Promise<{ result: Record<string, unknown>; undoRecipe: UndoRecipe | null }> {
   // Lazy import to avoid circular dependencies
-  const {
-    listInbox, searchEmails, readEmail, readThread, markAsRead,
-    archiveEmail, deleteEmail, moveEmail, listFolders, moveEmailToFolder,
-  } = await import("@dublin/email");
-  const { sendEmail, saveDraft } = await import("@dublin/email");
+  const { createEmailAccountClient } = await import("@dublin/email");
   const { formatEmailSummaries, formatEmail, formatThread, formatFolders } = await import("@dublin/email");
+
+  // Build the provider-agnostic email client
+  const emailClient = await createEmailAccountClient(emailAccount);
+
+  // Determine sender address for reply operations
+  const senderAddress = emailAccount.emailAddress ?? emailAccount.customConfig?.smtp.user ?? "";
 
   switch (toolName) {
     case "list_inbox": {
@@ -802,7 +719,7 @@ async function dispatchTool(
       if (sessionId !== null) {
         const pendingIds = await fetchPendingEmailIds(sessionId, supabase);
         // Overfetch to compensate for filtered-out emails
-        const emails = await listInbox(imapClient, limit + pendingIds.size);
+        const emails = await emailClient.listInbox(limit + pendingIds.size);
         const filtered = emails.filter((e) => !pendingIds.has(e.id)).slice(0, limit);
         let markdown = formatEmailSummaries(filtered, "Inbox");
 
@@ -815,22 +732,22 @@ async function dispatchTool(
         return { result: { markdown }, undoRecipe: null };
       }
 
-      const emails = await listInbox(imapClient, limit);
+      const emails = await emailClient.listInbox(limit);
       return { result: { markdown: formatEmailSummaries(emails, "Inbox") }, undoRecipe: null };
     }
 
     case "read_email": {
-      const email = await readEmail(imapClient, args.email_id as string);
+      const email = await emailClient.readEmail(args.email_id as string);
       return { result: { markdown: formatEmail(email) }, undoRecipe: null };
     }
 
     case "read_thread": {
-      const messages = await readThread(imapClient, args.email_id as string);
+      const messages = await emailClient.readThread(args.email_id as string);
       return { result: { markdown: formatThread(messages) }, undoRecipe: null };
     }
 
     case "search_emails": {
-      const emails = await searchEmails(imapClient, args.query as string);
+      const emails = await emailClient.searchEmails(args.query as string);
 
       // Filter out emails with pending removal actions in this session
       if (sessionId !== null) {
@@ -842,34 +759,47 @@ async function dispatchTool(
       return { result: { markdown: formatEmailSummaries(emails, "Search Results") }, undoRecipe: null };
     }
 
+    case "read_calendar": {
+      return {
+        result: {
+          implemented: false,
+          message: "I can't check your calendar yet.",
+          instruction:
+            "Tell the user that calendar support is not available yet, and ask whether they want to send feedback to the developers using submit_feature_request.",
+          feedbackToolName: "submit_feature_request",
+        },
+        undoRecipe: null,
+      };
+    }
+
     case "mark_as_read": {
-      await markAsRead(imapClient, args.email_id as string);
+      await emailClient.markAsRead(args.email_id as string);
       return { result: { marked: true }, undoRecipe: null };
     }
 
     case "archive_email": {
       const sourceFolder = (args.source_folder as string) ?? "INBOX";
-      const undoRecipe = await archiveEmail(imapClient, args.email_id as string, sourceFolder);
+      const undoRecipe = await emailClient.archiveEmail(args.email_id as string, sourceFolder);
       return { result: { archived: true }, undoRecipe };
     }
 
     case "delete_email": {
       const sourceFolder = (args.source_folder as string) ?? "INBOX";
-      const undoRecipe = await deleteEmail(imapClient, args.email_id as string, sourceFolder);
+      const undoRecipe = await emailClient.deleteEmail(args.email_id as string, sourceFolder);
       return { result: { deleted: true }, undoRecipe };
     }
 
     case "draft_email": {
-      const undoRecipe = await saveDraft(imapClient, {
+      const undoRecipe = await emailClient.saveDraft({
         to: args.to as string,
         subject: args.subject as string,
         body: args.body as string,
       });
-      return { result: { drafted: true, draftUid: undoRecipe.params.draftUid }, undoRecipe };
+      return { result: { drafted: true, draftUid: undoRecipe?.params.draftUid }, undoRecipe };
     }
 
     case "send_email": {
-      await sendEmail(smtpConfig, {
+      await emailClient.sendEmail({
         to: args.to as string,
         subject: args.subject as string,
         body: args.body as string,
@@ -878,27 +808,24 @@ async function dispatchTool(
     }
 
     case "reply_email": {
-      const { fetchReplyContext, replyToEmail } = await import("@dublin/email");
-      const context = await fetchReplyContext(imapClient, args.email_id as string);
-      await replyToEmail(
-        smtpConfig,
+      const context = await emailClient.fetchReplyContext(args.email_id as string);
+      await emailClient.replyEmail({
         context,
-        args.body as string,
-        (args.reply_all as boolean) ?? false,
-        smtpConfig.user
-      );
+        body: args.body as string,
+        replyAll: (args.reply_all as boolean) ?? false,
+        senderAddress,
+      });
       return { result: { sent: true }, undoRecipe: null };
     }
 
     case "list_folders": {
-      const folders = await listFolders(imapClient);
+      const folders = await emailClient.listFolders();
       return { result: { markdown: formatFolders(folders) }, undoRecipe: null };
     }
 
     case "move_to_folder": {
       const sourceFolder = (args.source_folder as string) ?? "INBOX";
-      const undoRecipe = await moveEmailToFolder(
-        imapClient,
+      const undoRecipe = await emailClient.moveToFolder(
         args.email_id as string,
         args.folder as string,
         sourceFolder
@@ -982,29 +909,35 @@ async function handleFeatureRequest(
 /**
  * Dispatches an undo operation based on the undo recipe.
  * @param recipe - The undo recipe describing what to reverse
- * @param imapClient - Connected ImapFlow client
+ * @param emailAccount - The user's active email account record
  * @param supabase - Supabase client (for memory/feature request undos)
  */
 async function dispatchUndo(
   recipe: UndoRecipe,
-  imapClient: ImapFlow,
+  emailAccount: EmailAccountRecord,
   supabase: SupabaseClient
 ): Promise<void> {
   switch (recipe.operation) {
     case "move_email": {
-      const { moveEmail } = await import("@dublin/email");
-      await moveEmail(
-        imapClient,
-        recipe.params.messageId as string,
-        recipe.params.from as string,
-        recipe.params.to as string
-      );
+      const { createEmailAccountClient } = await import("@dublin/email");
+      const emailClient = await createEmailAccountClient(emailAccount);
+
+      // Undo recipes use messageId (IMAP) or emailId (Unipile) as identifier
+      const identifier = (recipe.params.emailId as string) ?? (recipe.params.messageId as string);
+      const from = recipe.params.from as string;
+      const to = recipe.params.to as string;
+      // Outlook undo: rfcMessageId is set when the email was moved on Outlook,
+      // because Outlook invalidates the original ID after a move.
+      const rfcMessageId = recipe.params.rfcMessageId as string | undefined;
+
+      await emailClient.moveEmail(identifier, to, from, rfcMessageId);
       break;
     }
 
     case "delete_draft": {
-      const { deleteDraft } = await import("@dublin/email");
-      await deleteDraft(imapClient, recipe.params.draftUid as string);
+      const { createEmailAccountClient } = await import("@dublin/email");
+      const emailClient = await createEmailAccountClient(emailAccount);
+      await emailClient.deleteDraft(Number(recipe.params.draftUid));
       break;
     }
 

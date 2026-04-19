@@ -6,8 +6,8 @@ Port of packages/tools/src/definitions.ts.
 Each definition describes a tool the LLM can call. These are schema-only
 (no handlers) -- handlers live in handlers.py and email_client.py.
 
-- Define all 17 tool schemas (list_inbox, read_email, read_thread,
-  search_emails, mark_as_read, draft_email, delete_email, archive_email,
+- Define all 18 tool schemas (list_inbox, read_email, read_thread,
+  search_emails, read_calendar, mark_as_read, draft_email, delete_email, archive_email,
   send_email, batch_archive_emails, batch_delete_emails, save_memory,
   submit_feature_request, list_folders, move_to_folder,
   get_newsletter_summary, set_newsletter_config)
@@ -25,6 +25,8 @@ from __future__ import annotations
 CAPABILITIES_MARKDOWN = """Here is what I can help you with:
 
 **Reading emails** -- check your inbox, search for specific emails, and read full threads or individual messages.
+
+**Calendar** -- calendar access is not implemented yet, but I can log feedback for the team.
 
 **Managing emails** -- archive, delete, label, move to folders, and mark emails as read.
 
@@ -138,6 +140,43 @@ def get_tool_definitions() -> list[dict]:
                         },
                     },
                     "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_calendar",
+                "description": (
+                    "Read calendar events for a date or date range. "
+                    "Use the session's current date/time to resolve relative references "
+                    "like 'today', 'tomorrow', or 'next week'."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "start": {
+                            "type": "string",
+                            "description": (
+                                "Start of the calendar window as an ISO 8601 datetime "
+                                "or YYYY-MM-DD date."
+                            ),
+                        },
+                        "end": {
+                            "type": "string",
+                            "description": (
+                                "End of the calendar window as an ISO 8601 datetime "
+                                "or YYYY-MM-DD date."
+                            ),
+                        },
+                        "calendar_id": {
+                            "type": "string",
+                            "description": (
+                                "Optional calendar identifier if the user refers "
+                                "to a specific calendar."
+                            ),
+                        },
+                    },
                 },
             },
         },
@@ -316,6 +355,35 @@ def get_tool_definitions() -> list[dict]:
                         },
                     },
                     "required": ["email_ids"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "batch_move_to_folder",
+                "description": (
+                    "Move multiple emails at once to a specified folder. "
+                    "On Gmail, this is equivalent to applying a label to each email."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "email_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Array of email IDs to move.",
+                        },
+                        "folder": {
+                            "type": "string",
+                            "description": "The target folder to move the emails to.",
+                        },
+                        "source_folder": {
+                            "type": "string",
+                            "description": "The folder the emails are currently in. Defaults to INBOX.",
+                        },
+                    },
+                    "required": ["email_ids", "folder"],
                 },
             },
         },

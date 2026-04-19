@@ -2,23 +2,27 @@
  * Bulk approve/reject API endpoint.
  *
  * Accepts an array of action IDs and an operation (approve or reject).
- * For reject: performs a single DB update. For approve: opens one IMAP
- * connection and delegates to bulkExecuteActions for batched execution.
+ * For reject: performs a single DB update. For approve: loads the active
+ * email account and delegates to bulkExecuteActions for execution.
  *
  * Responsibilities:
  * - Authenticate the request and verify ownership of all actions
  * - Validate input (actionIds array, operation string)
  * - Reject path: single DB update, return counts
- * - Approve path: load credentials, open IMAP, call bulkExecuteActions, close
+ * - Approve path: load active email account, call bulkExecuteActions
  */
 
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase/client";
-import { bulkExecuteActions, retrieveSecret } from "@dublin/tools";
-import { createImapConnection, closeImapConnection } from "@dublin/email";
+import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/client";
+import { getActiveEmailAccountRecord } from "@/lib/email-accounts";
+import { bulkExecuteActions } from "@dublin/tools";
 import type { BulkActionResponse } from "@dublin/tools";
-import type { SmtpConfig } from "@dublin/email";
+import {
+  getDashboardErrorMessage,
+  type DashboardErrorCode,
+} from "@/lib/errors/dashboardErrors";
+import { mapDashboardError, mapDashboardErrorDetails } from "@/lib/errors/mapDashboardError";
 
 const VALID_OPERATIONS = ["approve", "reject"] as const;
 type Operation = (typeof VALID_OPERATIONS)[number];
@@ -39,23 +43,20 @@ interface BulkRequestBody {
  */
 export async function POST(
   request: NextRequest
-): Promise<NextResponse<BulkActionResponse | { error: string }>> {
+): Promise<NextResponse<BulkActionResponse | { code: DashboardErrorCode; error: string }>> {
   // Auth
   const cookieStore = await cookies();
   const supabase = createServerSupabaseClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return errorResponse("UNAUTHORIZED", 401);
   }
 
   // Parse and validate body
   const body = await parseRequestBody(request);
   if (!body) {
-    return NextResponse.json(
-      { error: "Invalid request body. Expected { actionIds: string[], operation: \"approve\" | \"reject\" }" },
-      { status: 400 }
-    );
+    return errorResponse("BULK_ACTION_FAILED", 400);
   }
 
   const { actionIds, operation } = body;
@@ -67,13 +68,14 @@ export async function POST(
     .in("id", actionIds);
 
   if (loadError) {
-    return NextResponse.json({ error: loadError.message }, { status: 500 });
+    console.error("[actions/bulk]", loadError);
+    return errorResponse("BULK_ACTION_FAILED", 500);
   }
 
   // If any action belongs to a different user, reject the entire request
   const foreignAction = (actions ?? []).find((a) => a.user_id !== user.id);
   if (foreignAction) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    return errorResponse("UNAUTHORIZED", 403);
   }
 
   // Route to the correct handler
@@ -128,7 +130,7 @@ async function handleReject(
   loadedActions: { id: string; user_id: string; status: string }[],
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
-): Promise<NextResponse<BulkActionResponse>> {
+): Promise<NextResponse<BulkActionResponse | { code: DashboardErrorCode; error: string }>> {
   // Single DB update -- only pending actions are affected
   const { data: updated, error } = await supabase
     .from("actions")
@@ -139,8 +141,12 @@ async function handleReject(
     .select("id");
 
   if (error) {
+    console.error("[actions/bulk]", error);
     return NextResponse.json(
-      { error: error.message } as unknown as BulkActionResponse,
+      {
+        code: "BULK_ACTION_FAILED",
+        error: getDashboardErrorMessage("BULK_ACTION_FAILED"),
+      } as unknown as BulkActionResponse,
       { status: 500 }
     );
   }
@@ -165,7 +171,7 @@ async function handleReject(
 }
 
 /**
- * Handles the approve operation: loads credentials, opens IMAP, calls bulkExecuteActions.
+ * Handles the approve operation: loads active email account, calls bulkExecuteActions.
  * @param actionIds - The action IDs to approve
  * @param supabase - Supabase client
  * @param userId - Authenticated user ID
@@ -175,56 +181,43 @@ async function handleApprove(
   actionIds: string[],
   supabase: ReturnType<typeof createServerSupabaseClient>,
   userId: string
-): Promise<NextResponse<BulkActionResponse | { error: string }>> {
-  // Load user settings to get credential secret IDs
-  const { data: settings, error: settingsError } = await supabase
-    .from("user_settings")
-    .select("imap_host, imap_port, imap_user, imap_password_secret_id, smtp_host, smtp_port, smtp_user, smtp_password_secret_id")
-    .eq("user_id", userId)
-    .single();
+): Promise<NextResponse<BulkActionResponse | { code: DashboardErrorCode; error: string }>> {
+  // Load active email account with resolved credentials
+  const serviceClient = createServiceRoleClient();
+  const emailAccount = await getActiveEmailAccountRecord(supabase, serviceClient, userId);
 
-  if (settingsError || !settings) {
-    return NextResponse.json({ error: "Email settings not configured" }, { status: 400 });
+  if (!emailAccount) {
+    return errorResponse("EMAIL_ACCOUNT_REQUIRED", 400);
   }
-
-  if (!settings.imap_password_secret_id) {
-    return NextResponse.json({ error: "IMAP password not configured" }, { status: 400 });
-  }
-
-  // Retrieve secrets from Vault
-  const imapPassword = await retrieveSecret(supabase, settings.imap_password_secret_id);
-
-  let smtpPassword: string | null = null;
-  if (settings.smtp_password_secret_id) {
-    smtpPassword = await retrieveSecret(supabase, settings.smtp_password_secret_id);
-  }
-
-  const smtpConfig: SmtpConfig = {
-    host: settings.smtp_host,
-    port: settings.smtp_port,
-    user: settings.smtp_user,
-    password: smtpPassword ?? "",
-  };
-
-  // Open one IMAP connection for the entire batch
-  const imapClient = await createImapConnection({
-    host: settings.imap_host,
-    port: settings.imap_port,
-    user: settings.imap_user,
-    password: imapPassword,
-  });
 
   try {
-    const response = await bulkExecuteActions(actionIds, supabase, imapClient, smtpConfig);
-    return NextResponse.json(response);
+    const response = await bulkExecuteActions(actionIds, supabase, emailAccount);
+    return NextResponse.json({
+      ...response,
+      results: response.results.map((result) => ({
+        ...result,
+        error: result.error
+          ? mapDashboardError(result.error, "action-bulk", "ACTION_EXECUTION_FAILED")
+          : null,
+      })),
+    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to execute bulk actions";
-    return NextResponse.json({ error: message }, { status: 500 });
-  } finally {
-    try {
-      await closeImapConnection(imapClient);
-    } catch {
-      // Connection may already be closed -- ignore
-    }
+    console.error("[actions/bulk]", error);
+    const { code, message } = mapDashboardErrorDetails(
+      error,
+      "action-bulk",
+      "BULK_ACTION_FAILED"
+    );
+    return NextResponse.json({ code, error: message }, { status: 500 });
   }
+}
+
+function errorResponse(
+  code: DashboardErrorCode,
+  status: number
+): NextResponse<{ code: DashboardErrorCode; error: string }> {
+  return NextResponse.json(
+    { code, error: getDashboardErrorMessage(code) },
+    { status }
+  );
 }

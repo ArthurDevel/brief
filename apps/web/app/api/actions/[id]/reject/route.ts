@@ -11,6 +11,10 @@
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
+import {
+  getDashboardErrorMessage,
+  type DashboardErrorCode,
+} from "@/lib/errors/dashboardErrors";
 
 // ============================================================================
 // MAIN HANDLERS
@@ -25,14 +29,14 @@ import { createServerSupabaseClient } from "@/lib/supabase/client";
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-): Promise<NextResponse<{ success: boolean } | { error: string }>> {
+): Promise<NextResponse<{ success: boolean } | { code: DashboardErrorCode; error: string }>> {
   const { id: actionId } = await params;
   const cookieStore = await cookies();
   const supabase = createServerSupabaseClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return errorResponse("UNAUTHORIZED", 401);
   }
 
   // Load the action and verify ownership
@@ -43,15 +47,15 @@ export async function POST(
     .single();
 
   if (actionError || !action) {
-    return NextResponse.json({ error: "Action not found" }, { status: 404 });
+    return errorResponse("ACTION_NOT_FOUND", 404);
   }
 
   if (action.user_id !== user.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    return errorResponse("UNAUTHORIZED", 403);
   }
 
   if (action.status !== "pending") {
-    return NextResponse.json({ error: `Action is not pending (status: ${action.status})` }, { status: 400 });
+    return errorResponse("ACTION_ALREADY_HANDLED", 400);
   }
 
   // Update status to rejected
@@ -61,8 +65,19 @@ export async function POST(
     .eq("id", actionId);
 
   if (updateError) {
-    return NextResponse.json({ error: updateError.message }, { status: 500 });
+    console.error("[actions/reject]", updateError);
+    return errorResponse("ACTION_REJECT_FAILED", 500);
   }
 
   return NextResponse.json({ success: true });
+}
+
+function errorResponse(
+  code: DashboardErrorCode,
+  status: number
+): NextResponse<{ code: DashboardErrorCode; error: string }> {
+  return NextResponse.json(
+    { code, error: getDashboardErrorMessage(code) },
+    { status }
+  );
 }

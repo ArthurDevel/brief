@@ -15,12 +15,11 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { CallProvider } from "@/contexts/CallContext";
 import { EmailStatusProvider } from "@/contexts/EmailStatusContext";
-import ActiveCallBar from "@/components/ActiveCallBar";
 import { createBrowserClient } from "@/lib/supabase/client";
 import EmailStatusBanner from "./EmailStatusBanner";
-import { Home, Phone, Activity, Clock, Settings, Menu, X, User, LogOut } from "lucide-react";
+import { Home, Phone, Activity, Clock, Settings, Menu, User, LogOut, Shield, MessageCircle } from "lucide-react";
+import { checkIsAdmin } from "@/app/admin/actions";
 
 // ============================================================================
 // CONSTANTS
@@ -61,6 +60,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState<boolean>(false);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   // Close Mobile Menu automatically upon navigation
@@ -81,6 +81,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     supabase.auth.getUser().then(({ data }) => {
       setUserEmail(data.user?.email ?? null);
     });
+  }, []);
+
+  // Check if current user is an admin
+  useEffect(() => {
+    checkIsAdmin().then(setIsAdmin).catch(() => {});
   }, []);
 
   // Close user menu when clicking outside
@@ -106,10 +111,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <CallProvider>
-      <EmailStatusProvider>
+    <EmailStatusProvider>
       <div className="flex flex-col h-screen">
-        <ActiveCallBar />
         <div className="flex flex-1 min-h-0 relative">
 
         {/* Mobile Sidebar Overlay */}
@@ -165,10 +168,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {userEmail && (
             <div className="sidebar-user-menu" ref={userMenuRef}>
               {isUserMenuOpen && (
-                <button className="sidebar-user-logout" onClick={handleLogout}>
-                  <LogOut size={14} strokeWidth={1.75} />
-                  Log out
-                </button>
+                <>
+                  {isAdmin && (
+                    <>
+                      <Link href="/admin/transactional" className="sidebar-user-logout" style={{ textDecoration: "none" }}>
+                        <Shield size={14} strokeWidth={1.75} />
+                        Admin
+                      </Link>
+                      <Link href="/whatsapp" className="sidebar-user-logout" style={{ textDecoration: "none" }}>
+                        <MessageCircle size={14} strokeWidth={1.75} />
+                        WhatsApp
+                      </Link>
+                    </>
+                  )}
+                  <button className="sidebar-user-logout" onClick={handleLogout}>
+                    <LogOut size={14} strokeWidth={1.75} />
+                    Log out
+                  </button>
+                </>
               )}
               <button
                 className="sidebar-user-button"
@@ -208,7 +225,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         </div>
       </div>
-      </EmailStatusProvider>
-    </CallProvider>
+    </EmailStatusProvider>
   );
 }

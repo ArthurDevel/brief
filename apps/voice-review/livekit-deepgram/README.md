@@ -5,6 +5,8 @@ Standalone TypeScript voice review app for comparing Deepgram Aura 2 voices at d
 Two modes:
 - `TTS Preview` generates a sample clip with the selected voice and speed
 - `Live Call` joins a LiveKit room and talks to an LLM through Deepgram STT -> OpenRouter LLM -> Deepgram TTS -> WSOLA speed -> RMS normalization
+  - `Open Conversation` keeps the chat free-form
+  - `Demo Mode` injects a short demo brief into the system prompt so the LLM produces more directed, qualitative samples without tool calls
 
 ## Setup
 
