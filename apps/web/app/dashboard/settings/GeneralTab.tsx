@@ -125,6 +125,23 @@ async function savePhone(phone: PhoneFormState): Promise<void> {
   }
 }
 
+async function saveWhatsAppPhone(phone: string): Promise<{ whatsappPhone: string }> {
+  const res = await fetch("/api/user/whatsapp-phone", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone }),
+  });
+
+  if (!res.ok) {
+    throw await buildDashboardErrorFromResponse(res, {
+      code: "PHONE_SAVE_FAILED",
+      error: "Failed to save WhatsApp phone number",
+    });
+  }
+
+  return res.json();
+}
+
 async function fetchCompanyPhones(): Promise<CompanyPhone[]> {
   const res = await fetch("/api/company-phones");
   if (!res.ok) {
@@ -202,6 +219,8 @@ function toPhoneFormState(settingsPhone: UserSettings["phone"]): PhoneFormState 
 export default function GeneralTab() {
   const [phone, setPhone] = useState<PhoneFormState>({ localNumber: "", countryCode: "" });
   const [savedPhone, setSavedPhone] = useState<PhoneFormState>({ localNumber: "", countryCode: "" });
+  const [whatsappPhone, setWhatsappPhone] = useState<string | null>(null);
+  const [whatsappPhoneDraft, setWhatsappPhoneDraft] = useState("");
   const [pin, setPin] = useState("");
   const [hasPin, setHasPin] = useState(false);
   const [toolApprovalConfig, setToolApprovalConfig] = useState<ToolApprovalConfig>({});
@@ -219,6 +238,8 @@ export default function GeneralTab() {
 
         setPhone(loadedPhone);
         setSavedPhone(loadedPhone);
+        setWhatsappPhone(settings.whatsappPhone);
+        setWhatsappPhoneDraft(settings.whatsappPhone ?? "");
         setHasPin(settings.hasPin);
         setToolApprovalConfig(settings.toolApprovalConfig);
         setCompanyPhones(phones);
@@ -237,6 +258,7 @@ export default function GeneralTab() {
   const phoneUnsupported =
     phone.countryCode !== "" &&
     !companyPhones.some((companyPhone) => companyPhone.countryCode === phone.countryCode);
+  const whatsappPhoneDirty = whatsappPhoneDraft !== (whatsappPhone ?? "");
   const pinDirty = pin !== "";
   const selectedCountry = getSelectedCountry(phone.countryCode);
   const exampleNumber =
@@ -323,6 +345,22 @@ export default function GeneralTab() {
     }
   }
 
+  async function handleSaveWhatsAppPhone(): Promise<void> {
+    setSavingSection("whatsapp");
+    setError(null);
+
+    try {
+      const result = await saveWhatsAppPhone(whatsappPhoneDraft);
+      setWhatsappPhone(result.whatsappPhone);
+      setWhatsappPhoneDraft(result.whatsappPhone);
+      flashSaved("whatsapp");
+    } catch (err) {
+      setError(logAndMapDashboardError(err, "settings-general", "PHONE_SAVE_FAILED"));
+    } finally {
+      setSavingSection(null);
+    }
+  }
+
   async function handleToolApprovalChange(toolName: string, classification: ActionClassification) {
     const updated = { ...toolApprovalConfig, [toolName]: classification };
     setToolApprovalConfig(updated);
@@ -402,6 +440,37 @@ export default function GeneralTab() {
               {companyPhones.map((companyPhone) => companyPhone.label).join(", ")}.
             </p>
           )}
+        </section>
+
+        <section className="settings-panel">
+          <h2>WhatsApp Login</h2>
+          <p className={SETTINGS_SECTION_COPY}>
+            This number is used only for the standalone <code>/whatsapp</code> login flow. It does not replace your
+            caller-ID phone setting above.
+          </p>
+          <div className={SETTINGS_MAX_WIDTH}>
+            <label className={SETTINGS_FIELD_LABEL}>Linked WhatsApp number</label>
+            <input
+              type="tel"
+              value={whatsappPhoneDraft}
+              onChange={(e) => setWhatsappPhoneDraft(e.target.value)}
+              className={SETTINGS_INPUT}
+              placeholder="+15551234567"
+            />
+            <p className="mt-2 text-[13px] text-[var(--text-secondary)]">
+              Existing users can link a number here. If someone starts from WhatsApp with an unknown number, the login
+              flow can also create a new Supabase account automatically using an internal auth email behind the scenes.
+            </p>
+          </div>
+          <div className="mt-4 flex justify-end">
+            {whatsappPhoneDirty ? (
+              <SectionSaveButton onClick={handleSaveWhatsAppPhone} saving={savingSection === "whatsapp"} />
+            ) : savedSection === "whatsapp" ? (
+              <span className="bg-green-100 px-3 py-1 text-[13px] font-medium text-green-700">
+                Saved
+              </span>
+            ) : null}
+          </div>
         </section>
 
         <section className="settings-panel">

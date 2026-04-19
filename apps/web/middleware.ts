@@ -19,14 +19,15 @@ import { getCookieOptions } from "./lib/supabase/client";
 /** Routes that do not require authentication. */
 const PUBLIC_ROUTES = [
   "/login",
+  "/whatsapp",
   "/api/auth",
+  "/api/whatsapp/auth",
   "/ingest",
   "/api/trigger-call",
   "/api/user/email-accounts/notify",
   "/api/cron/engagement-emails",
   "/review/session",
   "/api/session-review",
-  "/api/whatsapp/webhook",
 ];
 
 /** User IDs allowed to access /admin/* routes. */
@@ -50,6 +51,9 @@ const posthogHandler = postHogMiddleware({
  */
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-pathname", pathname);
+  requestHeaders.set("x-current-path", `${pathname}${request.nextUrl.search}`);
 
   // CORS preflight for /api/trigger-call (cross-subdomain fetch from lander)
   if (pathname === "/api/trigger-call" && request.method === "OPTIONS") {
@@ -75,7 +79,7 @@ export async function middleware(request: NextRequest) {
     || pathname.match(/^\/api\/sessions\/[^/]+\/end-of-session$/) !== null;
 
   // Create a response to pass through (we may modify cookies on it)
-  let response = NextResponse.next({ request: { headers: request.headers } });
+  let response = NextResponse.next({ request: { headers: requestHeaders } });
 
   const cookieOptions = getCookieOptions();
 
@@ -94,7 +98,7 @@ export async function middleware(request: NextRequest) {
             request.cookies.set(name, value);
           });
           // Create a new response with updated request headers
-          response = NextResponse.next({ request: { headers: request.headers } });
+          response = NextResponse.next({ request: { headers: requestHeaders } });
           // Set cookies on the response (for the browser)
           cookiesToSet.forEach(({ name, value, options }) => {
             response.cookies.set(name, value, options);
@@ -122,7 +126,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // Block non-admin users from privileged routes
-  const isPrivilegedRoute = pathname.startsWith("/admin") || pathname.startsWith("/whatsapp");
+  const isPrivilegedRoute = pathname.startsWith("/admin");
   if (user && isPrivilegedRoute && !ADMIN_USER_IDS.includes(user.id)) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";

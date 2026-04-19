@@ -45,6 +45,7 @@ export function getDefaultUserSettings(
     voiceSpeed: defaults.voice_config.speed,
     toolApprovalConfig: defaults.tool_approval_config,
     phone: defaults.phone,
+    whatsappPhone: null,
     hasPin: false,
     callSchedule: defaults.call_schedule,
   };
@@ -71,6 +72,7 @@ export function mapUserSettingsRowToSettings(
       (row.tool_approval_config as ToolApprovalConfig | null) ??
       defaults.tool_approval_config,
     phone: (row.phone as UserPhone | null | undefined) ?? defaults.phone,
+    whatsappPhone: (row.whatsapp_phone as string | null | undefined) ?? null,
     hasPin: !!row.pin_hash,
     callSchedule:
       (row.call_schedule as CallSchedule | null | undefined) ??

@@ -48,6 +48,7 @@ describe("mapUserSettingsRowToSettings", () => {
     expect(result.voiceSpeed).toBe(1.5);
     expect(result.toolApprovalConfig).toEqual({ archive_email: "mutating_auto" });
     expect(result.phone).toEqual({ number: "+15551234567", countryCode: "US" });
+    expect(result.whatsappPhone).toBeNull();
     expect(result.hasPin).toBe(true);
     expect(result.callSchedule).toEqual({ timezone: "America/New_York", monday: "09:00" });
   });
@@ -62,6 +63,7 @@ describe("mapUserSettingsRowToSettings", () => {
     expect(result.voiceSpeed).toBe(DEFAULT_SPEED);
     expect(result.toolApprovalConfig).toEqual({});
     expect(result.phone).toBeNull();
+    expect(result.whatsappPhone).toBeNull();
     expect(result.hasPin).toBe(false);
     expect(result.callSchedule).toBeNull();
   });
@@ -84,6 +86,7 @@ describe("getDefaultUserSettings", () => {
     expect(result.voiceSpeed).toBe(DEFAULT_SPEED);
     expect(result.toolApprovalConfig).toEqual({});
     expect(result.phone).toBeNull();
+    expect(result.whatsappPhone).toBeNull();
     expect(result.hasPin).toBe(false);
     expect(result.callSchedule).toBeNull();
   });

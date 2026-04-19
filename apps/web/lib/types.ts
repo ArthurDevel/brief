@@ -129,6 +129,7 @@ export interface UserSettings {
   voiceSpeed: number;
   toolApprovalConfig: ToolApprovalConfig;
   phone: UserPhone | null;
+  whatsappPhone: string | null;
   hasPin: boolean;
   callSchedule: CallSchedule | null;
 }
