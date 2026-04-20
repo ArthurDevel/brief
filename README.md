@@ -116,6 +116,73 @@ Update `apps/voice-gateway/.env` to match:
 PUBLIC_URL=https://your-ngrok-url
 ```
 
+## WhatsApp Local Dev
+
+For the WhatsApp call flow, run the web app, the WhatsApp webhook server, and the WhatsApp agent locally.
+
+### 1. Configure env files
+
+```bash
+cp apps/web/.env.example apps/web/.env.local
+cp apps/whatsapp-server/.env.example apps/whatsapp-server/.env
+cp apps/whatsapp-agent/.env.example apps/whatsapp-agent/.env
+```
+
+Important values:
+- `apps/whatsapp-server/.env`
+  - `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+  - `WHATSAPP_ACCESS_TOKEN`
+  - `WHATSAPP_PHONE_NUMBER_ID`
+  - `WHATSAPP_BUSINESS_ACCOUNT_ID`
+  - `WHATSAPP_WEB_BASE_URL`
+  - `LIVEKIT_URL`
+  - `LIVEKIT_API_KEY`
+  - `LIVEKIT_API_SECRET`
+- `apps/whatsapp-agent/.env`
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `COMPOSIO_API_KEY`
+  - `LIVEKIT_URL`
+  - `LIVEKIT_API_KEY`
+  - `LIVEKIT_API_SECRET`
+
+Keep `LIVEKIT_AGENT_NAME` the same in both `apps/whatsapp-server/.env` and `apps/whatsapp-agent/.env`.
+
+### 2. Start the local apps
+
+```bash
+# Terminal 1
+pnpm dev:web
+
+# Terminal 2
+cd apps/whatsapp-server && pnpm dev
+
+# Terminal 3
+cd apps/whatsapp-agent && pnpm dev
+```
+
+### 3. Expose the WhatsApp webhook with ngrok
+
+```bash
+ngrok http 3020
+```
+
+Use the `https` URL from `ngrok` in two places:
+- Set the Meta webhook URL to `https://<your-ngrok-subdomain>.ngrok.app/api/whatsapp/webhook`
+- Set `WHATSAPP_WEB_BASE_URL=https://<your-ngrok-subdomain>.ngrok.app` in `apps/whatsapp-server/.env`
+
+When Meta verifies the webhook, it will call:
+
+```text
+GET /api/whatsapp/webhook
+```
+
+When a user sends a WhatsApp message or starts a call, Meta will post to:
+
+```text
+POST /api/whatsapp/webhook
+```
+
 ## Call Flow
 
 ### Phone (Twilio)

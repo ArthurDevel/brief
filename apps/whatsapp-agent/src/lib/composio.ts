@@ -4,6 +4,16 @@ import { Composio } from "@composio/core";
 import type { AgentEnv } from "./env.js";
 import type { WhatsAppCallerContext } from "./whatsappRuntime.js";
 
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const TOOL_PAGE_LIMIT = 50;
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
 interface HeaderEntry {
   name?: string;
   value?: string;
@@ -15,6 +25,12 @@ interface RawToolDefinition {
   description?: string;
   inputParameters?: unknown;
   parameters?: unknown;
+}
+
+interface RawToolListResponse {
+  items?: unknown[];
+  nextCursor?: string;
+  next_cursor?: string;
 }
 
 interface GmailMessage {
@@ -43,6 +59,12 @@ interface ToolExecutionResult {
   logId?: string;
 }
 
+interface RawToolListQuery {
+  cursor?: string;
+  limit: number;
+  toolkits: string[];
+}
+
 function normalizeParametersSchema(tool: RawToolDefinition): Record<string, unknown> {
   const candidate = tool.inputParameters ?? tool.parameters;
   if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
@@ -67,8 +89,38 @@ function toToolKey(slug: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
-function toToolkitSlug(toolSlug: string): string {
-  return toolSlug.split("_")[0]?.toLowerCase() || toolSlug.toLowerCase();
+function normalizeRawToolList(response: unknown): RawToolDefinition[] {
+  if (Array.isArray(response)) {
+    return response as RawToolDefinition[];
+  }
+
+  if (
+    response
+    && typeof response === "object"
+    && Array.isArray((response as RawToolListResponse).items)
+  ) {
+    return (response as RawToolListResponse).items as RawToolDefinition[];
+  }
+
+  return [];
+}
+
+function getNextCursor(response: unknown): string | null {
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+
+  const nextCursor = (response as RawToolListResponse).nextCursor;
+  if (typeof nextCursor === "string" && nextCursor.trim()) {
+    return nextCursor.trim();
+  }
+
+  const snakeCaseCursor = (response as RawToolListResponse).next_cursor;
+  if (typeof snakeCaseCursor === "string" && snakeCaseCursor.trim()) {
+    return snakeCaseCursor.trim();
+  }
+
+  return null;
 }
 
 function extractHeader(message: GmailMessage, name: string): string | undefined {
@@ -183,30 +235,120 @@ function formatToolResult(toolSlug: string, result: ToolExecutionResult): string
   }
 }
 
+/**
+ * Loads every raw tool definition for the caller's connected toolkits.
+ * @param composio - Composio SDK client
+ * @param toolkitSlugs - Connected toolkit slugs for the caller
+ * @returns Raw tool definitions keyed by Composio slug
+ */
+async function getRawToolsForConnectedToolkits(
+  composio: Composio,
+  toolkitSlugs: string[]
+): Promise<RawToolDefinition[]> {
+  const toolsBySlug = new Map<string, RawToolDefinition>();
+  let cursor: string | undefined;
+  let pageNumber = 0;
+
+  do {
+    pageNumber += 1;
+    const query: RawToolListQuery = {
+      toolkits: toolkitSlugs,
+      limit: TOOL_PAGE_LIMIT,
+    };
+    if (cursor) {
+      query.cursor = cursor;
+    }
+
+    const pageStartedAt = Date.now();
+    console.info("[whatsapp-agent] getRawComposioTools begin", {
+      pageNumber,
+      toolkitSlugs,
+      cursor: cursor ?? null,
+      limit: TOOL_PAGE_LIMIT,
+    });
+    const response = await composio.tools.getRawComposioTools(query);
+    const pageTools = normalizeRawToolList(response);
+    const nextCursor = getNextCursor(response);
+    console.info("[whatsapp-agent] getRawComposioTools complete", {
+      pageNumber,
+      toolkitSlugs,
+      toolCount: pageTools.length,
+      nextCursor,
+      responseKeys:
+        response && typeof response === "object"
+          ? Object.keys(response as unknown as Record<string, unknown>)
+          : [],
+      elapsedMs: Date.now() - pageStartedAt,
+    });
+
+    for (const tool of pageTools) {
+      const slug = tool.slug?.trim();
+      if (!slug) {
+        continue;
+      }
+
+      toolsBySlug.set(slug, tool);
+    }
+
+    cursor = nextCursor ?? undefined;
+  } while (cursor);
+
+  return Array.from(toolsBySlug.values());
+}
+
 export async function createComposioTools(
   env: AgentEnv,
   callerContext: WhatsAppCallerContext
 ): Promise<llmNamespace.ToolContext> {
+  const startedAt = Date.now();
+  const toolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
+  if (toolkitSlugs.length === 0) {
+    throw new Error("No connected Composio accounts were found for this caller.");
+  }
+  console.info("[whatsapp-agent] createComposioTools start", {
+    supabaseUserId: callerContext.supabaseUserId,
+    toolkitSlugs,
+  });
+
   const composio = new Composio({
     apiKey: env.composioApiKey
   });
-  const toolsByToolkit = env.composioAllowedTools.reduce<Record<string, string[]>>((acc, slug) => {
-    const toolkitSlug = toToolkitSlug(slug);
-    acc[toolkitSlug] ??= [];
-    acc[toolkitSlug].push(slug);
-    return acc;
-  }, {});
+  const sessionStartedAt = Date.now();
   const session = await composio.create(callerContext.supabaseUserId, {
-    connectedAccounts: {
-      gmail: callerContext.gmailConnectedAccountId,
-    },
-    tools: toolsByToolkit,
+    connectedAccounts: callerContext.connectedAccountsByToolkit,
+    toolkits: toolkitSlugs,
     manageConnections: false
   });
+  console.info("[whatsapp-agent] composio.create complete", {
+    supabaseUserId: callerContext.supabaseUserId,
+    toolkitSlugs,
+    elapsedMs: Date.now() - sessionStartedAt,
+    totalElapsedMs: Date.now() - startedAt,
+    hasSession: Boolean(session),
+  });
+
+  const discoveryStartedAt = Date.now();
+  const rawTools = await getRawToolsForConnectedToolkits(composio, toolkitSlugs);
+  console.info("[whatsapp-agent] raw tool discovery complete", {
+    supabaseUserId: callerContext.supabaseUserId,
+    toolkitSlugs,
+    rawToolCount: rawTools.length,
+    rawToolSlugs: rawTools.map((tool) => tool.slug).filter(Boolean),
+    elapsedMs: Date.now() - discoveryStartedAt,
+    totalElapsedMs: Date.now() - startedAt,
+  });
+
+  if (rawTools.length === 0) {
+    throw new Error("No Composio tools are available for the caller's connected apps.");
+  }
 
   const tools = await Promise.all(
-    env.composioAllowedTools.map(async (slug) => {
-      const rawTool = await composio.tools.getRawComposioToolBySlug(slug) as RawToolDefinition;
+    rawTools.map(async (rawTool) => {
+      const slug = rawTool.slug?.trim();
+      if (!slug) {
+        throw new Error("Composio returned a tool without a slug.");
+      }
+
       const parameters = normalizeParametersSchema(rawTool);
 
       return [
@@ -226,6 +368,12 @@ export async function createComposioTools(
       ] as const;
     })
   );
+  console.info("[whatsapp-agent] tool registration complete", {
+    supabaseUserId: callerContext.supabaseUserId,
+    registeredToolCount: tools.length,
+    registeredToolKeys: tools.map(([toolKey]) => toolKey),
+    totalElapsedMs: Date.now() - startedAt,
+  });
 
   return Object.fromEntries(tools) as llmNamespace.ToolContext;
 }

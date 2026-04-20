@@ -1,10 +1,10 @@
 /**
- * Runtime helpers for resolving the caller's user-scoped Gmail connection.
+ * Runtime helpers for resolving the caller's user-scoped Composio connections.
  *
  * Responsibilities:
  * - Parse LiveKit participant metadata from the WhatsApp bridge
  * - Resolve the matching Supabase user by whatsapp_phone
- * - Load the saved Gmail Composio connection for the caller
+ * - Load the saved Composio connections for the caller
  */
 
 import { createClient } from "@supabase/supabase-js";
@@ -23,6 +23,7 @@ interface CallerLookupRow {
 }
 
 interface ComposioConnectionLookupRow {
+  toolkit: string;
   connected_account_id: string | null;
   last_error: string | null;
   status: "connected" | "reconnect_required" | "pending" | "error";
@@ -30,7 +31,7 @@ interface ComposioConnectionLookupRow {
 
 export interface WhatsAppCallerContext {
   callerPhone: string;
-  gmailConnectedAccountId: string;
+  connectedAccountsByToolkit: Record<string, string>;
   supabaseUserId: string;
 }
 
@@ -39,7 +40,7 @@ export interface WhatsAppCallerContext {
 // ============================================================================
 
 /**
- * Resolves the caller's Gmail connection from participant metadata.
+ * Resolves the caller's connected Composio accounts from participant metadata.
  * @param env - Agent environment config
  * @param participantMetadata - LiveKit participant metadata JSON from the bridge
  * @returns Caller context used to create a user-scoped Composio session
@@ -48,10 +49,19 @@ export async function resolveWhatsAppCallerContext(
   env: AgentEnv,
   participantMetadata: string
 ): Promise<WhatsAppCallerContext> {
+  const startedAt = Date.now();
+  console.info("[whatsapp-agent] resolveWhatsAppCallerContext start", {
+    participantMetadataLength: participantMetadata.length,
+  });
+
   const metadata = parseWhatsAppParticipantMetadata(participantMetadata);
   if (!metadata.caller) {
     throw new Error("I could not identify the WhatsApp caller for this session.");
   }
+  console.info("[whatsapp-agent] participant metadata parsed", {
+    callerPhone: metadata.caller,
+    elapsedMs: Date.now() - startedAt,
+  });
 
   const supabase = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
     auth: {
@@ -60,11 +70,18 @@ export async function resolveWhatsAppCallerContext(
     },
   });
 
+  const callerLookupStartedAt = Date.now();
   const { data: callerRow, error: callerError } = await supabase
     .from("user_settings")
     .select("user_id")
     .eq("whatsapp_phone", metadata.caller)
     .maybeSingle();
+  console.info("[whatsapp-agent] user_settings lookup complete", {
+    callerPhone: metadata.caller,
+    foundUser: Boolean((callerRow as CallerLookupRow | null)?.user_id),
+    elapsedMs: Date.now() - callerLookupStartedAt,
+    totalElapsedMs: Date.now() - startedAt,
+  });
 
   if (callerError) {
     throw new Error(`Failed to look up the WhatsApp caller: ${callerError.message}`);
@@ -75,25 +92,45 @@ export async function resolveWhatsAppCallerContext(
   }
 
   const userId = (callerRow as CallerLookupRow).user_id;
-  const { data: connectionRow, error: connectionError } = await supabase
+  const connectionsLookupStartedAt = Date.now();
+  const { data: connectionRows, error: connectionError } = await supabase
     .from("user_composio_connections")
-    .select("connected_account_id, status, last_error")
+    .select("toolkit, connected_account_id, status, last_error")
     .eq("user_id", userId)
-    .eq("toolkit", "gmail")
-    .maybeSingle();
+    .order("toolkit", { ascending: true });
+  console.info("[whatsapp-agent] user_composio_connections lookup complete", {
+    userId,
+    rowCount: Array.isArray(connectionRows) ? connectionRows.length : 0,
+    elapsedMs: Date.now() - connectionsLookupStartedAt,
+    totalElapsedMs: Date.now() - startedAt,
+  });
 
   if (connectionError) {
-    throw new Error(`Failed to load the Gmail connection: ${connectionError.message}`);
+    throw new Error(`Failed to load the connected apps: ${connectionError.message}`);
   }
 
-  const connection = connectionRow as ComposioConnectionLookupRow | null;
-  if (!connection?.connected_account_id || connection.status !== "connected") {
-    throw new Error(buildMissingConnectionMessage(connection));
+  const connections = Array.isArray(connectionRows)
+    ? (connectionRows as ComposioConnectionLookupRow[])
+    : [];
+  const connectedAccountsByToolkit = buildConnectedAccountsByToolkit(connections);
+  console.info("[whatsapp-agent] connected toolkit summary", {
+    userId,
+    connections: connections.map((connection) => ({
+      toolkit: connection.toolkit,
+      status: connection.status,
+      hasConnectedAccountId: Boolean(connection.connected_account_id),
+    })),
+    connectedToolkitSlugs: Object.keys(connectedAccountsByToolkit),
+    totalElapsedMs: Date.now() - startedAt,
+  });
+
+  if (Object.keys(connectedAccountsByToolkit).length === 0) {
+    throw new Error(buildMissingConnectionsMessage(connections));
   }
 
   return {
     callerPhone: metadata.caller,
-    gmailConnectedAccountId: connection.connected_account_id,
+    connectedAccountsByToolkit,
     supabaseUserId: userId,
   };
 }
@@ -123,20 +160,45 @@ function parseWhatsAppParticipantMetadata(
 }
 
 /**
- * Returns the spoken error message when no usable Gmail connection exists.
- * @param connection - Existing connection row, if any
+ * Builds the connected account map for the Composio session.
+ * @param connections - Saved connection rows for the caller
+ * @returns Connected account IDs keyed by toolkit slug
+ */
+function buildConnectedAccountsByToolkit(
+  connections: ComposioConnectionLookupRow[]
+): Record<string, string> {
+  const connectedAccountsByToolkit: Record<string, string> = {};
+
+  for (const connection of connections) {
+    const toolkit = connection.toolkit.trim().toLowerCase();
+    if (!toolkit || !connection.connected_account_id || connection.status !== "connected") {
+      continue;
+    }
+
+    connectedAccountsByToolkit[toolkit] = connection.connected_account_id;
+  }
+
+  return connectedAccountsByToolkit;
+}
+
+/**
+ * Returns the spoken error message when no usable Composio connection exists.
+ * @param connections - Existing connection rows, if any
  * @returns Spoken guidance for the caller
  */
-function buildMissingConnectionMessage(
-  connection: ComposioConnectionLookupRow | null
+function buildMissingConnectionsMessage(
+  connections: ComposioConnectionLookupRow[]
 ): string {
-  if (connection?.status === "reconnect_required") {
-    return "Your Gmail connection needs to be reconnected. Send authenticate gmail in WhatsApp and try again.";
+  if (connections.some((connection) => connection.status === "reconnect_required")) {
+    return "One of your connected apps needs to be reconnected. Send authenticate gmail in WhatsApp and try again.";
   }
 
-  if (connection?.status === "error" && connection.last_error) {
-    return `${connection.last_error} Send authenticate gmail in WhatsApp and try again.`;
+  const failedConnection = connections.find(
+    (connection) => connection.status === "error" && connection.last_error
+  );
+  if (failedConnection?.last_error) {
+    return `${failedConnection.last_error} Send authenticate gmail in WhatsApp and try again.`;
   }
 
-  return "Your Gmail account is not connected yet. Send authenticate gmail in WhatsApp and try again.";
+  return "You do not have any connected apps yet. Send authenticate gmail in WhatsApp and try again.";
 }

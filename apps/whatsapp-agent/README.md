@@ -6,8 +6,8 @@ Minimal TypeScript LiveKit agent for the WhatsApp calling MVP.
 
 - Joins LiveKit rooms as a voice agent
 - Resolves the caller phone from the WhatsApp LiveKit bridge metadata
-- Loads the caller's Gmail Composio connection from Supabase
-- Exposes an allowlisted set of Composio tools directly to the LLM
+- Loads the caller's connected Composio accounts from Supabase
+- Exposes the caller's connected Composio tools directly to the LLM
 - Speaks concise responses suitable for phone calls
 
 ## Local run

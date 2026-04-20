@@ -15,8 +15,23 @@ import { resolveWhatsAppCallerContext } from "./lib/whatsappRuntime.js";
 const env = getEnv();
 
 async function buildAssistant(participantMetadata: string): Promise<voice.Agent> {
+  const startedAt = Date.now();
+  console.info("[whatsapp-agent] buildAssistant start", {
+    participantMetadataLength: participantMetadata.length,
+  });
+
   const callerContext = await resolveWhatsAppCallerContext(env, participantMetadata);
+  console.info("[whatsapp-agent] caller context resolved", {
+    supabaseUserId: callerContext.supabaseUserId,
+    toolkitCount: Object.keys(callerContext.connectedAccountsByToolkit).length,
+    elapsedMs: Date.now() - startedAt,
+  });
+
   const tools = await createComposioTools(env, callerContext);
+  console.info("[whatsapp-agent] composio tools created", {
+    toolCount: Object.keys(tools).length,
+    elapsedMs: Date.now() - startedAt,
+  });
 
   return new voice.Agent({
     instructions: env.livekitAgentInstructions,
@@ -25,8 +40,20 @@ async function buildAssistant(participantMetadata: string): Promise<voice.Agent>
 }
 
 async function entry(ctx: JobContext): Promise<void> {
+  const startedAt = Date.now();
+  console.info("[whatsapp-agent] entry start");
+
   await ctx.connect();
+  console.info("[whatsapp-agent] ctx.connect complete", {
+    elapsedMs: Date.now() - startedAt,
+  });
+
   const participant = await ctx.waitForParticipant();
+  console.info("[whatsapp-agent] participant joined", {
+    participantIdentity: participant.identity,
+    metadataLength: participant.metadata.length,
+    elapsedMs: Date.now() - startedAt,
+  });
 
   let agent: voice.Agent;
   let greeting = env.livekitAgentGreeting;
@@ -36,11 +63,12 @@ async function entry(ctx: JobContext): Promise<void> {
   } catch (error) {
     const message = error instanceof Error
       ? error.message
-      : "I could not reach your Gmail connection. Send authenticate gmail in WhatsApp and try again.";
+      : "I could not reach your connected apps. Send authenticate gmail in WhatsApp and try again.";
 
     console.error("[whatsapp-agent] failed to resolve caller context", {
       participantIdentity: participant.identity,
       error: message,
+      stack: error instanceof Error ? error.stack : undefined,
     });
 
     greeting = message;
@@ -59,17 +87,32 @@ async function entry(ctx: JobContext): Promise<void> {
     session.on(voice.AgentSessionEventTypes.Close, () => resolve());
   });
 
+  console.info("[whatsapp-agent] session.start begin", {
+    elapsedMs: Date.now() - startedAt,
+  });
   await session.start({
     agent,
     room: ctx.room,
     record: false
   });
+  console.info("[whatsapp-agent] session.start complete", {
+    elapsedMs: Date.now() - startedAt,
+  });
 
+  console.info("[whatsapp-agent] generateReply begin", {
+    elapsedMs: Date.now() - startedAt,
+  });
   session.generateReply({
     instructions: greeting
   });
+  console.info("[whatsapp-agent] generateReply queued", {
+    elapsedMs: Date.now() - startedAt,
+  });
 
   await closed;
+  console.info("[whatsapp-agent] session closed", {
+    elapsedMs: Date.now() - startedAt,
+  });
 }
 
 const worker = defineAgent({

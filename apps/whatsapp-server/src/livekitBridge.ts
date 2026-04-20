@@ -135,6 +135,13 @@ export class WhatsAppLiveKitBridge {
   }
 
   async start(): Promise<void> {
+    const startedAt = Date.now();
+    console.info("[whatsapp-server] livekit bridge start", {
+      callId: this.options.callId,
+      roomName: this.options.roomName,
+      participantIdentity: this.options.participantIdentity,
+    });
+
     const publishOptions = new TrackPublishOptions();
     publishOptions.source = TrackSource.SOURCE_MICROPHONE;
 
@@ -142,12 +149,22 @@ export class WhatsAppLiveKitBridge {
       autoSubscribe: true,
       dynacast: true
     });
+    console.info("[whatsapp-server] livekit bridge connected", {
+      callId: this.options.callId,
+      roomName: this.options.roomName,
+      elapsedMs: Date.now() - startedAt,
+    });
 
     if (!this.room.localParticipant) {
       throw new Error("LiveKit local participant is not available after connect");
     }
 
     await this.room.localParticipant.publishTrack(this.localTrack, publishOptions);
+    console.info("[whatsapp-server] livekit bridge published inbound track", {
+      callId: this.options.callId,
+      roomName: this.options.roomName,
+      elapsedMs: Date.now() - startedAt,
+    });
     await this.startInboundPipeline();
     this.startOutboundPipeline();
     this.subscribeExistingOutboundTracks();
@@ -282,6 +299,12 @@ export class WhatsAppLiveKitBridge {
     console.log(
       `[whatsapp-server] starting outbound audio for call ${this.options.callId} from participant ${participant.identity}`
     );
+    console.info("[whatsapp-server] outbound audio track subscribed", {
+      callId: this.options.callId,
+      participantIdentity: participant.identity,
+      publicationSid: publication.sid,
+      trackSid: track.sid,
+    });
 
     const outboundFfmpeg = spawn("ffmpeg", [
       "-hide_banner",

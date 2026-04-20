@@ -8,18 +8,6 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function splitCsv(rawValue: string | undefined, fallback: string[]): string[] {
-  const value = rawValue?.trim();
-  if (!value) {
-    return fallback;
-  }
-
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 export interface AgentEnv {
   livekitAgentName: string;
   livekitAgentGreeting: string;
@@ -31,7 +19,6 @@ export interface AgentEnv {
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
   composioApiKey: string;
-  composioAllowedTools: string[];
   livekitSttModel: string;
   livekitLlmModel: string;
   livekitTtsModel: string;
@@ -61,11 +48,6 @@ export function getEnv(): AgentEnv {
     supabaseUrl: requireEnv("NEXT_PUBLIC_SUPABASE_URL"),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
     composioApiKey: requireEnv("COMPOSIO_API_KEY"),
-    composioAllowedTools: splitCsv(process.env.COMPOSIO_ALLOWED_TOOLS, [
-      "GMAIL_FETCH_EMAILS",
-      "GMAIL_LIST_LABELS",
-      "GMAIL_SEND_EMAIL",
-    ]),
     livekitSttModel: process.env.LIVEKIT_STT_MODEL?.trim() || "deepgram/nova-3:en",
     livekitLlmModel: process.env.LIVEKIT_LLM_MODEL?.trim() || "openai/gpt-4.1-mini",
     livekitTtsModel:
