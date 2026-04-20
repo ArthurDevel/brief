@@ -4,18 +4,12 @@
  * Responsibilities:
  * - Require the user to still have a signed-in WhatsApp/Supabase session
  * - Validate callback query params from Composio
- * - Persist the Notion connection result in user_composio_connections
  * - Redirect back to the WhatsApp Notion connector page with a safe notice code
  */
 
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
-import { getComposioExternalUserId } from "@/lib/composio";
-import {
-  getUserComposioConnection,
-  upsertUserComposioConnection,
-} from "@/lib/composio-connections";
 import { getWhatsAppConnectorDefinition } from "@/app/whatsapp/connectors/connectorDefinitions";
 import { parseConnectorCallback } from "@/app/whatsapp/connectors/connectorLogic";
 
@@ -49,55 +43,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return redirectToConnectorPage(request, { error: callback.errorCode });
   }
 
-  try {
-    const existingConnection = await getUserComposioConnection(
-      supabase,
-      user.id,
-      definition.toolkit
-    );
-
-    if (callback.status === "success") {
-      await upsertUserComposioConnection(supabase, {
-        userId: user.id,
-        toolkit: definition.toolkit,
-        status: "connected",
-        connectedAccountId: callback.connectedAccountId,
-        connectedAt: new Date().toISOString(),
-        externalUserId: getComposioExternalUserId(user.id),
-        lastError: null,
-      });
-
-      console.info("[whatsapp-notion/callback] connected", {
-        userId: user.id,
-        connectedAccountId: callback.connectedAccountId,
-      });
-
-      return redirectToConnectorPage(request, { connected: "1" });
-    }
-
-    await upsertUserComposioConnection(supabase, {
+  if (callback.status === "success") {
+    console.info("[whatsapp-notion/callback] connected", {
       userId: user.id,
-      toolkit: definition.toolkit,
-      status: existingConnection ? "reconnect_required" : "error",
-      externalUserId: getComposioExternalUserId(user.id),
-      lastError: definition.connectionFailedMessage,
+      connectedAccountId: callback.connectedAccountId,
     });
 
-    console.warn("[whatsapp-notion/callback] connection failed", {
-      userId: user.id,
-      query: request.nextUrl.search,
-    });
-
-    return redirectToConnectorPage(request, { error: "connection_failed" });
-  } catch (error) {
-    console.error("[whatsapp-notion/callback] failed to persist callback", {
-      userId: user.id,
-      query: request.nextUrl.search,
-      error: error instanceof Error ? error.message : String(error),
-    });
-
-    return redirectToConnectorPage(request, { error: "save_failed" });
+    return redirectToConnectorPage(request, { connected: "1" });
   }
+
+  console.warn("[whatsapp-notion/callback] connection failed", {
+    userId: user.id,
+    query: request.nextUrl.search,
+    safeMessage: definition.connectionFailedMessage,
+  });
+
+  return redirectToConnectorPage(request, { error: "connection_failed" });
 }
 
 // ============================================================================

@@ -4,9 +4,10 @@
  * Responsibilities:
  * - Parse LiveKit participant metadata from the WhatsApp bridge
  * - Resolve the matching Supabase user by whatsapp_phone
- * - Load the saved Composio connections for the caller
+ * - Load the live Composio connections for the caller
  */
 
+import { Composio } from "@composio/core";
 import { createClient } from "@supabase/supabase-js";
 import type { AgentEnv } from "./env.js";
 
@@ -22,11 +23,14 @@ interface CallerLookupRow {
   user_id: string;
 }
 
-interface ComposioConnectionLookupRow {
-  toolkit: string;
-  connected_account_id: string | null;
-  last_error: string | null;
-  status: "connected" | "reconnect_required" | "pending" | "error";
+interface ComposioConnectedAccountRow {
+  id: string;
+  status: "ACTIVE" | "INITIATED" | "EXPIRED" | "FAILED" | "INACTIVE";
+  statusReason: string | null;
+  toolkit: {
+    slug: string;
+  };
+  updatedAt: string;
 }
 
 export interface WhatsAppCallerContext {
@@ -92,33 +96,29 @@ export async function resolveWhatsAppCallerContext(
   }
 
   const userId = (callerRow as CallerLookupRow).user_id;
+  const composio = createComposioClient(env);
   const connectionsLookupStartedAt = Date.now();
-  const { data: connectionRows, error: connectionError } = await supabase
-    .from("user_composio_connections")
-    .select("toolkit, connected_account_id, status, last_error")
-    .eq("user_id", userId)
-    .order("toolkit", { ascending: true });
-  console.info("[whatsapp-agent] user_composio_connections lookup complete", {
+  const connectionResponse = await composio.connectedAccounts.list({
+    userIds: [userId],
+    limit: 100,
+  });
+  console.info("[whatsapp-agent] composio connectedAccounts lookup complete", {
     userId,
-    rowCount: Array.isArray(connectionRows) ? connectionRows.length : 0,
+    rowCount: Array.isArray(connectionResponse.items) ? connectionResponse.items.length : 0,
     elapsedMs: Date.now() - connectionsLookupStartedAt,
     totalElapsedMs: Date.now() - startedAt,
   });
 
-  if (connectionError) {
-    throw new Error(`Failed to load the connected apps: ${connectionError.message}`);
-  }
-
-  const connections = Array.isArray(connectionRows)
-    ? (connectionRows as ComposioConnectionLookupRow[])
+  const connections = Array.isArray(connectionResponse.items)
+    ? (connectionResponse.items as ComposioConnectedAccountRow[])
     : [];
   const connectedAccountsByToolkit = buildConnectedAccountsByToolkit(connections);
   console.info("[whatsapp-agent] connected toolkit summary", {
     userId,
     connections: connections.map((connection) => ({
-      toolkit: connection.toolkit,
+      toolkit: connection.toolkit.slug,
       status: connection.status,
-      hasConnectedAccountId: Boolean(connection.connected_account_id),
+      hasConnectedAccountId: Boolean(connection.id),
     })),
     connectedToolkitSlugs: Object.keys(connectedAccountsByToolkit),
     totalElapsedMs: Date.now() - startedAt,
@@ -165,17 +165,24 @@ function parseWhatsAppParticipantMetadata(
  * @returns Connected account IDs keyed by toolkit slug
  */
 function buildConnectedAccountsByToolkit(
-  connections: ComposioConnectionLookupRow[]
+  connections: ComposioConnectedAccountRow[]
 ): Record<string, string> {
   const connectedAccountsByToolkit: Record<string, string> = {};
+  const latestUpdatedAtByToolkit = new Map<string, number>();
 
   for (const connection of connections) {
-    const toolkit = connection.toolkit.trim().toLowerCase();
-    if (!toolkit || !connection.connected_account_id || connection.status !== "connected") {
+    const toolkit = connection.toolkit.slug.trim().toLowerCase();
+    if (!toolkit || connection.status !== "ACTIVE") {
       continue;
     }
 
-    connectedAccountsByToolkit[toolkit] = connection.connected_account_id;
+    const updatedAt = new Date(connection.updatedAt).getTime();
+    const latestUpdatedAt = latestUpdatedAtByToolkit.get(toolkit) ?? Number.NEGATIVE_INFINITY;
+
+    if (updatedAt >= latestUpdatedAt) {
+      connectedAccountsByToolkit[toolkit] = connection.id;
+      latestUpdatedAtByToolkit.set(toolkit, updatedAt);
+    }
   }
 
   return connectedAccountsByToolkit;
@@ -187,18 +194,29 @@ function buildConnectedAccountsByToolkit(
  * @returns Spoken guidance for the caller
  */
 function buildMissingConnectionsMessage(
-  connections: ComposioConnectionLookupRow[]
+  connections: ComposioConnectedAccountRow[]
 ): string {
-  if (connections.some((connection) => connection.status === "reconnect_required")) {
+  if (connections.some((connection) => connection.status === "EXPIRED" || connection.status === "INACTIVE")) {
     return "One of your connected apps needs to be reconnected. Send authenticate overview in WhatsApp and try again.";
   }
 
   const failedConnection = connections.find(
-    (connection) => connection.status === "error" && connection.last_error
+    (connection) => connection.status === "FAILED" && connection.statusReason
   );
-  if (failedConnection?.last_error) {
-    return `${failedConnection.last_error} Send authenticate overview in WhatsApp and try again.`;
+  if (failedConnection?.statusReason) {
+    return `${failedConnection.statusReason} Send authenticate overview in WhatsApp and try again.`;
   }
 
   return "You do not have any connected apps yet. Send authenticate overview in WhatsApp and connect one first.";
+}
+
+/**
+ * Creates a Composio SDK client for agent-side reads.
+ * @param env - Agent environment config
+ * @returns Configured Composio SDK client
+ */
+function createComposioClient(env: AgentEnv): Composio {
+  return new Composio({
+    apiKey: env.composioApiKey,
+  });
 }

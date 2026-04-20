@@ -147,6 +147,41 @@ export interface ComposioConnectionSummary {
   lastError: string | null;
 }
 
+/**
+ * Raw Composio connected-account status used for overview pages.
+ * @param status - Current status returned by Composio, or NOT_CONNECTED when no account exists
+ */
+export type ComposioConnectedAccountStatus =
+  | "ACTIVE"
+  | "INITIATED"
+  | "EXPIRED"
+  | "FAILED"
+  | "INACTIVE"
+  | "NOT_CONNECTED";
+
+/**
+ * Live overview of one Composio toolkit for a user.
+ * Used when the UI reads connection state directly from Composio.
+ * @param toolkit - Toolkit slug, for example "gmail" or "notion"
+ * @param connectedAccountId - Active or most relevant connected account ID
+ * @param status - Current Composio status
+ * @param statusReason - Safe reason returned by Composio, if any
+ * @param connectedAt - Connected-account creation timestamp
+ * @param updatedAt - Last update timestamp from Composio
+ * @param scopes - Granted OAuth scopes, when Composio exposes them
+ * @param tools - Currently available tool slugs for this toolkit
+ */
+export interface ComposioToolkitOverview {
+  toolkit: string;
+  connectedAccountId: string | null;
+  status: ComposioConnectedAccountStatus;
+  statusReason: string | null;
+  connectedAt: string | null;
+  updatedAt: string | null;
+  scopes: string[];
+  tools: string[];
+}
+
 /** User configuration as returned by the settings API. Passwords are never exposed. */
 export interface UserSettings {
   emailAccount: EmailAccountSummary | null;

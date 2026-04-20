@@ -3,16 +3,19 @@
  *
  * Responsibilities:
  * - Stay inside the existing /whatsapp auth shell
- * - Load the signed-in user's saved Composio connections
- * - Show which connectors are connected and which need attention
+ * - Load the signed-in user's live Composio connections
+ * - Show which expected connectors are connected and which need attention
  */
 
 import { cookies } from "next/headers";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
-import { listUserComposioConnections } from "@/lib/composio-connections";
-import type { ComposioConnectionSummary } from "@/lib/types";
+import { listWhatsAppConnectorOverviews } from "@/lib/composio";
+import type { ComposioToolkitOverview } from "@/lib/types";
 import { getWhatsAppProfile } from "@/lib/whatsapp-auth";
-import { getWhatsAppConnectorLabel } from "../connectorDefinitions";
+import {
+  getWhatsAppConnectorLabel,
+  listWhatsAppConnectorDefinitions,
+} from "../connectorDefinitions";
 
 // ============================================================================
 // MAIN ENTRYPOINT
@@ -33,13 +36,16 @@ export default async function WhatsAppConnectorsOverviewPage() {
     return null;
   }
 
+  const connectorDefinitions = listWhatsAppConnectorDefinitions();
+  const expectedToolkits = connectorDefinitions.map((definition) => definition.toolkit);
+
   const [profile, connections] = await Promise.all([
     getWhatsAppProfile(supabase, user),
-    listUserComposioConnections(supabase, user.id),
+    listWhatsAppConnectorOverviews(user.id, expectedToolkits),
   ]);
 
-  const connectedConnections = connections.filter((connection) => connection.status === "connected");
-  const nonConnectedConnections = connections.filter((connection) => connection.status !== "connected");
+  const connectedConnections = connections.filter((connection) => connection.status === "ACTIVE");
+  const nonConnectedConnections = connections.filter((connection) => connection.status !== "ACTIVE");
 
   return (
     <div className="grid gap-6">
@@ -69,9 +75,9 @@ export default async function WhatsAppConnectorsOverviewPage() {
 
           <div>
             <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
-              Saved connectors
+              Expected connectors
             </div>
-            <div className="mt-1">{connections.length}</div>
+            <div className="mt-1">{expectedToolkits.length}</div>
           </div>
         </div>
       </section>
@@ -103,7 +109,7 @@ export default async function WhatsAppConnectorsOverviewPage() {
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
             Needs Attention
           </div>
-          <h2 className="mt-2 text-[20px] font-semibold">Saved but not connected</h2>
+          <h2 className="mt-2 text-[20px] font-semibold">Missing or unhealthy connectors</h2>
 
           <div className="mt-6 grid gap-4">
             {nonConnectedConnections.map((connection) => (
@@ -129,7 +135,7 @@ export default async function WhatsAppConnectorsOverviewPage() {
  * @returns Connector summary card
  */
 function ConnectorSummaryCard(props: {
-  connection: ComposioConnectionSummary;
+  connection: ComposioToolkitOverview;
 }) {
   return (
     <div className="border border-[var(--border-color)] px-4 py-4">
@@ -151,31 +157,53 @@ function ConnectorSummaryCard(props: {
       <div className="mt-4 grid gap-4 text-[14px] md:grid-cols-2">
         <div>
           <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
-            Provider
+            Connected at
           </div>
-          <div className="mt-1">{props.connection.provider}</div>
+          <div className="mt-1">{formatTimestamp(props.connection.connectedAt)}</div>
         </div>
 
         <div>
           <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
-            Connected at
+            Last updated
           </div>
-          <div className="mt-1">{formatConnectedAt(props.connection.connectedAt)}</div>
+          <div className="mt-1">{formatTimestamp(props.connection.updatedAt)}</div>
         </div>
 
         <div className="md:col-span-2">
           <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
             Connected account
           </div>
-          <div className="mt-1 break-all">{props.connection.connectedAccountId ?? "Not saved"}</div>
+          <div className="mt-1 break-all">{props.connection.connectedAccountId ?? "Not connected"}</div>
         </div>
 
-        {props.connection.lastError && (
+        <div className="md:col-span-2">
+          <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
+            Granted scopes
+          </div>
+          <div className="mt-1">
+            {props.connection.scopes.length > 0
+              ? props.connection.scopes.join(", ")
+              : "Not exposed by Composio for this connection"}
+          </div>
+        </div>
+
+        <div className="md:col-span-2">
+          <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
+            Available tools
+          </div>
+          <div className="mt-1">
+            {props.connection.tools.length > 0
+              ? props.connection.tools.join(", ")
+              : "No tools returned by Composio"}
+          </div>
+        </div>
+
+        {props.connection.statusReason && (
           <div className="md:col-span-2">
             <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
-              Last issue
+              Status reason
             </div>
-            <div className="mt-1">{props.connection.lastError}</div>
+            <div className="mt-1">{props.connection.statusReason}</div>
           </div>
         )}
       </div>
@@ -193,35 +221,37 @@ function ConnectorSummaryCard(props: {
  * @returns Human-readable status label
  */
 function getConnectionStatusLabel(
-  status: ComposioConnectionSummary["status"]
+  status: ComposioToolkitOverview["status"]
 ): string {
   switch (status) {
-    case "connected":
+    case "ACTIVE":
       return "Connected";
-    case "reconnect_required":
-      return "Reconnect required";
-    case "pending":
-      return "Pending";
-    case "error":
-      return "Error";
-    case "not_connected":
+    case "INITIATED":
+      return "Connection in progress";
+    case "EXPIRED":
+      return "Expired";
+    case "FAILED":
+      return "Failed";
+    case "INACTIVE":
+      return "Inactive";
+    case "NOT_CONNECTED":
       return "Not connected";
   }
 }
 
 /**
- * Formats the saved connection timestamp for display.
- * @param connectedAt - ISO timestamp, or null when never connected
+ * Formats a Composio timestamp for display.
+ * @param value - ISO timestamp, or null when not available
  * @returns Human-readable date string
  */
-function formatConnectedAt(connectedAt: string | null): string {
-  if (!connectedAt) {
+function formatTimestamp(value: string | null): string {
+  if (!value) {
     return "Not available";
   }
 
-  const parsedDate = new Date(connectedAt);
+  const parsedDate = new Date(value);
   if (Number.isNaN(parsedDate.getTime())) {
-    return connectedAt;
+    return value;
   }
 
   return parsedDate.toLocaleString("en-US", {

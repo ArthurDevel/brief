@@ -9,7 +9,7 @@
 
 import { cookies } from "next/headers";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
-import { getUserComposioConnection } from "@/lib/composio-connections";
+import { getWhatsAppConnectorConnectionSummary } from "@/lib/composio";
 import { getWhatsAppProfile } from "@/lib/whatsapp-auth";
 import ComposioConnectorCard from "../ComposioConnectorCard";
 import { getWhatsAppConnectorDefinition } from "../connectorDefinitions";
@@ -52,7 +52,7 @@ export default async function GmailConnectorPage(
 
   const [profile, connection] = await Promise.all([
     getWhatsAppProfile(supabase, user),
-    getUserComposioConnection(supabase, user.id, "gmail"),
+    getWhatsAppConnectorConnectionSummary(user.id, "gmail"),
   ]);
 
   return (
