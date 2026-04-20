@@ -3,6 +3,7 @@
  *
  * Responsibilities:
  * - Load a user's saved Composio connection by toolkit
+ * - List a user's saved Composio connections
  * - Upsert connection state after callback completion
  * - Map raw database rows into stable UI DTOs
  */
@@ -66,6 +67,29 @@ export async function getUserComposioConnection(
   }
 
   return mapUserComposioConnectionRowToSummary(data as UserComposioConnectionRow);
+}
+
+/**
+ * Loads all saved Composio connections for one user.
+ * @param supabase - Supabase client with user or service credentials
+ * @param userId - Supabase auth user ID
+ * @returns Mapped connection summaries ordered by toolkit
+ */
+export async function listUserComposioConnections(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ComposioConnectionSummary[]> {
+  const { data, error } = await supabase
+    .from("user_composio_connections")
+    .select("toolkit, provider, connected_account_id, status, external_user_id, connected_at, last_error")
+    .eq("user_id", userId)
+    .order("toolkit", { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data as UserComposioConnectionRow[]).map(mapUserComposioConnectionRowToSummary);
 }
 
 /**

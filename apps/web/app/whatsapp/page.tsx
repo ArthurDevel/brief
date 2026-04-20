@@ -38,6 +38,19 @@ export default function WhatsAppPage() {
           </p>
         </Link>
 
+        <Link
+          href="/whatsapp/connectors/overview"
+          className="settings-panel block transition hover:border-[var(--text-primary)]"
+        >
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
+            Overview
+          </div>
+          <h2 className="mt-2 text-[20px] font-semibold">View connected tools</h2>
+          <p className="mt-2 text-[14px] leading-6 text-[var(--text-secondary)]">
+            See every saved connector for the signed-in WhatsApp user and whether it is currently connected.
+          </p>
+        </Link>
+
         <div className="settings-panel">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
             Routing

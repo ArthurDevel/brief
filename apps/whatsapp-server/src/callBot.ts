@@ -3,11 +3,13 @@ import { MediaStreamTrackFactory, RTCPeerConnection, type MediaStreamTrack, type
 import { WhatsAppLiveKitBridge } from "./livekitBridge.js";
 import { LiveKitRoomManager } from "./roomManager.js";
 import {
-  getWhatsAppGmailMessageConfig,
+  getWhatsAppAuthMessageConfig,
   isAuthenticateGmailCommand,
+  isAuthenticateOverviewCommand,
   normalizeWhatsAppCallerPhone,
   sendWhatsAppGmailConnectMessage,
-} from "./whatsappGmailAuth.js";
+  sendWhatsAppOverviewMessage,
+} from "./whatsappAuthCommands.js";
 
 interface WhatsAppCallSession {
   sdp_type?: "offer" | "answer";
@@ -234,22 +236,29 @@ export class WhatsAppCallBot {
     }
 
     const normalizedPhone = normalizeWhatsAppCallerPhone(from);
-    if (isAuthenticateGmailCommand(body)) {
+    if (isAuthenticateGmailCommand(body) || isAuthenticateOverviewCommand(body)) {
       if (!normalizedPhone) {
-        console.warn("[whatsapp-server] could not normalize sender phone for gmail auth", {
+        console.warn("[whatsapp-server] could not normalize sender phone for auth command", {
           rawPhone: from,
           messageId: message.id ?? null,
         });
         return;
       }
 
-      console.info("[whatsapp-server] sending gmail auth message", {
+      console.info("[whatsapp-server] sending auth command message", {
         phone: normalizedPhone,
+        command: body.toLowerCase(),
         messageId: message.id ?? null,
       });
 
-      const messageConfig = getWhatsAppGmailMessageConfig();
-      await sendWhatsAppGmailConnectMessage(messageConfig, normalizedPhone);
+      const messageConfig = getWhatsAppAuthMessageConfig();
+
+      if (isAuthenticateGmailCommand(body)) {
+        await sendWhatsAppGmailConnectMessage(messageConfig, normalizedPhone);
+        return;
+      }
+
+      await sendWhatsAppOverviewMessage(messageConfig, normalizedPhone);
       return;
     }
 

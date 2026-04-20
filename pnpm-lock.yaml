@@ -32,6 +32,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@composio/core':
+        specifier: ^0.6.10
+        version: 0.6.10(ws@8.19.0)(zod@3.25.76)
       '@dublin/email':
         specifier: workspace:*
         version: link:../../packages/email

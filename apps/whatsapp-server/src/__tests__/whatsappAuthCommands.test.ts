@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildWhatsAppConnectorOverviewUrl,
   buildWhatsAppGmailConnectorUrl,
   isAuthenticateGmailCommand,
+  isAuthenticateOverviewCommand,
   normalizeWhatsAppCallerPhone,
-} from "../whatsappGmailAuth.js";
+} from "../whatsappAuthCommands.js";
 
 describe("isAuthenticateGmailCommand", () => {
   it("matches the hardcoded gmail auth command", () => {
@@ -12,6 +14,16 @@ describe("isAuthenticateGmailCommand", () => {
 
   it("rejects other messages", () => {
     expect(isAuthenticateGmailCommand("authenticate outlook")).toBe(false);
+  });
+});
+
+describe("isAuthenticateOverviewCommand", () => {
+  it("matches the hardcoded overview auth command", () => {
+    expect(isAuthenticateOverviewCommand(" authenticate overview ")).toBe(true);
+  });
+
+  it("rejects other messages", () => {
+    expect(isAuthenticateOverviewCommand("authenticate gmail")).toBe(false);
   });
 });
 
@@ -30,5 +42,13 @@ describe("buildWhatsAppGmailConnectorUrl", () => {
     expect(
       buildWhatsAppGmailConnectorUrl("https://app.example.com", "+15551234567")
     ).toBe("https://app.example.com/whatsapp/connectors/gmail?phone=%2B15551234567");
+  });
+});
+
+describe("buildWhatsAppConnectorOverviewUrl", () => {
+  it("builds the whatsapp connectors overview deep link", () => {
+    expect(
+      buildWhatsAppConnectorOverviewUrl("https://app.example.com", "+15551234567")
+    ).toBe("https://app.example.com/whatsapp/connectors/overview?phone=%2B15551234567");
   });
 });

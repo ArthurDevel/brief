@@ -1,17 +1,18 @@
 /**
- * WhatsApp Gmail-auth helpers for inbound chat commands.
+ * WhatsApp auth-command helpers for inbound chat messages.
  *
  * Responsibilities:
- * - Detect the hardcoded "authenticate gmail" command
+ * - Detect supported authenticate commands
  * - Normalize WhatsApp sender numbers to the same E.164 shape used by the web app
- * - Build the Gmail connector URL and send a temporary WhatsApp text message
+ * - Build deep links into the WhatsApp auth shell
+ * - Send temporary WhatsApp text messages with those links
  */
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-export interface WhatsAppGmailMessageConfig {
+export interface WhatsAppAuthMessageConfig {
   accessToken: string;
   apiVersion: string;
   phoneNumberId: string;
@@ -29,6 +30,15 @@ export interface WhatsAppGmailMessageConfig {
  */
 export function isAuthenticateGmailCommand(messageBody: string): boolean {
   return messageBody.trim().toLowerCase() === "authenticate gmail";
+}
+
+/**
+ * Returns true when an inbound message should open the connectors overview page.
+ * @param messageBody - Raw inbound text message body
+ * @returns Whether the message is the supported overview command
+ */
+export function isAuthenticateOverviewCommand(messageBody: string): boolean {
+  return messageBody.trim().toLowerCase() === "authenticate overview";
 }
 
 /**
@@ -66,10 +76,25 @@ export function buildWhatsAppGmailConnectorUrl(
 }
 
 /**
- * Loads the WhatsApp configuration required to send the Gmail link message.
+ * Builds the connector overview URL that keeps users inside the /whatsapp auth shell.
+ * @param webBaseUrl - Public base URL of the web app
+ * @param phone - Normalized WhatsApp phone number
+ * @returns Full URL to the connector overview page
+ */
+export function buildWhatsAppConnectorOverviewUrl(
+  webBaseUrl: string,
+  phone: string
+): string {
+  const url = new URL("/whatsapp/connectors/overview", webBaseUrl);
+  url.searchParams.set("phone", phone);
+  return url.toString();
+}
+
+/**
+ * Loads the WhatsApp configuration required to send auth-link messages.
  * @returns Config for the WhatsApp Graph API
  */
-export function getWhatsAppGmailMessageConfig(): WhatsAppGmailMessageConfig {
+export function getWhatsAppAuthMessageConfig(): WhatsAppAuthMessageConfig {
   const accessToken = requireEnv("WHATSAPP_ACCESS_TOKEN");
   const phoneNumberId = requireEnv("WHATSAPP_PHONE_NUMBER_ID");
   const webBaseUrl = requireEnv("WHATSAPP_WEB_BASE_URL");
@@ -91,11 +116,40 @@ export function getWhatsAppGmailMessageConfig(): WhatsAppGmailMessageConfig {
  * @returns Promise that resolves when the message is accepted by the Graph API
  */
 export async function sendWhatsAppGmailConnectMessage(
-  config: WhatsAppGmailMessageConfig,
+  config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const endpoint = `https://graph.facebook.com/${config.apiVersion}/${config.phoneNumberId}/messages`;
   const connectUrl = buildWhatsAppGmailConnectorUrl(config.webBaseUrl, phone);
+  await sendWhatsAppTextMessage(config, phone, `Open this link to connect Gmail: ${connectUrl}`);
+}
+
+/**
+ * Sends a temporary plain-text WhatsApp message with the connectors overview URL.
+ * @param config - WhatsApp config
+ * @param phone - Normalized E.164 phone number
+ * @returns Promise that resolves when the message is accepted by the Graph API
+ */
+export async function sendWhatsAppOverviewMessage(
+  config: WhatsAppAuthMessageConfig,
+  phone: string
+): Promise<void> {
+  const overviewUrl = buildWhatsAppConnectorOverviewUrl(config.webBaseUrl, phone);
+  await sendWhatsAppTextMessage(config, phone, `Open this link to view your connectors: ${overviewUrl}`);
+}
+
+/**
+ * Sends a simple WhatsApp text message.
+ * @param config - WhatsApp config
+ * @param phone - Normalized E.164 phone number
+ * @param body - Text message body
+ * @returns Promise that resolves when the message is accepted by the Graph API
+ */
+async function sendWhatsAppTextMessage(
+  config: WhatsAppAuthMessageConfig,
+  phone: string,
+  body: string
+): Promise<void> {
+  const endpoint = `https://graph.facebook.com/${config.apiVersion}/${config.phoneNumberId}/messages`;
 
   const response = await fetch(endpoint, {
     method: "POST",
@@ -128,7 +182,7 @@ export async function sendWhatsAppGmailConnectMessage(
       to: phone.replace(/[^\d]/g, ""),
       type: "text",
       text: {
-        body: `Open this link to connect Gmail: ${connectUrl}`,
+        body,
         preview_url: false,
       },
     }),
