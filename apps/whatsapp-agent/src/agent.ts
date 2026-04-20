@@ -42,6 +42,9 @@ const env = getEnv();
 
 const KNOWN_STT_REJECTION_MESSAGE_PREFIX = "failed to recognize speech after";
 const KNOWN_STT_REJECTION_STACK_FRAGMENT = "SpeechStream.mainTask";
+const KNOWN_STT_ABORTED_ERROR_MESSAGE = "WebSocket connection aborted";
+const KNOWN_STT_ERROR_LABEL = "inference.STT";
+const KNOWN_UNHANDLED_ERROR_CODE = "ERR_UNHANDLED_ERROR";
 
 // Toolkit slug used to detect Gmail connectivity for context injection.
 const GMAIL_TOOLKIT_SLUG = "gmail";
@@ -83,7 +86,46 @@ function isIgnorableSttShutdownRejection(reason: unknown): boolean {
   const hasKnownStack =
     typeof reason.stack === "string" && reason.stack.includes(KNOWN_STT_REJECTION_STACK_FRAGMENT);
 
-  return hasKnownMessage && hasKnownStack;
+  if (hasKnownMessage && hasKnownStack) {
+    return true;
+  }
+
+  return isIgnorableWrappedSttShutdownError(reason);
+}
+
+/**
+ * Returns true when Node wraps the known STT shutdown error in ERR_UNHANDLED_ERROR.
+ * @param reason - Unhandled rejection reason from Node.js
+ * @returns True when the wrapped error is safe to ignore
+ */
+function isIgnorableWrappedSttShutdownError(reason: Error): boolean {
+  const wrappedReason = reason as Error & {
+    code?: string;
+    context?: {
+      error?: {
+        message?: string;
+      };
+      label?: string;
+      type?: string;
+    };
+  };
+
+  const isUnhandledError = wrappedReason.code === KNOWN_UNHANDLED_ERROR_CODE;
+  const isSttError = wrappedReason.context?.type === "stt_error";
+  const hasKnownLabel = wrappedReason.context?.label === KNOWN_STT_ERROR_LABEL;
+  const hasKnownInnerMessage =
+    wrappedReason.context?.error?.message === KNOWN_STT_ABORTED_ERROR_MESSAGE;
+  const hasKnownOuterMessage = wrappedReason.message.includes(KNOWN_STT_ABORTED_ERROR_MESSAGE);
+  const hasKnownStack =
+    typeof wrappedReason.stack === "string"
+    && wrappedReason.stack.includes(KNOWN_STT_REJECTION_STACK_FRAGMENT);
+
+  return isUnhandledError
+    && isSttError
+    && hasKnownLabel
+    && hasKnownInnerMessage
+    && hasKnownOuterMessage
+    && hasKnownStack;
 }
 
 registerUnhandledRejectionHandler();
@@ -331,12 +373,18 @@ async function entry(ctx: JobContext): Promise<void> {
           elapsedMs: Date.now() - startedAt,
         });
 
-        void notifyWhatsAppEndOfSession(env, appSessionId).catch((error) => {
+        try {
+          await notifyWhatsAppEndOfSession(env, appSessionId);
+          console.info("[whatsapp-agent] whatsapp-end-of-session callback completed", {
+            sessionId: appSessionId,
+            elapsedMs: Date.now() - startedAt,
+          });
+        } catch (error) {
           console.error("[whatsapp-agent] whatsapp-end-of-session callback failed", {
             sessionId: appSessionId,
             error: error instanceof Error ? error.message : String(error),
           });
-        });
+        }
       } catch (error) {
         console.error("[whatsapp-agent] failed to finalize session row", {
           sessionId: appSessionId,

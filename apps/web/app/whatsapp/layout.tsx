@@ -1,10 +1,16 @@
 import Link from "next/link";
 import { cookies, headers } from "next/headers";
 import { createServerSupabaseClient } from "@/lib/supabase/client";
+import { getWhatsAppSessionAccess } from "@/lib/whatsapp-session-access";
 import { getWhatsAppProfile, sanitizeWhatsAppRedirectPath } from "@/lib/whatsapp-auth";
 import WhatsAppAuthShell from "./_components/WhatsAppAuthShell";
 import WhatsAppSignOutButton from "./_components/WhatsAppSignOutButton";
 import { listWhatsAppConnectorDefinitions } from "./connectors/connectorDefinitions";
+
+function getSessionIdFromWhatsAppPath(path: string): string | null {
+  const match = path.match(/^\/whatsapp\/sessions\/([^/?#]+)/);
+  return match?.[1] ?? null;
+}
 
 export default async function WhatsAppLayout({ children }: { children: React.ReactNode }) {
   const connectorDefinitions = listWhatsAppConnectorDefinitions();
@@ -15,6 +21,41 @@ export default async function WhatsAppLayout({ children }: { children: React.Rea
   const currentPath = sanitizeWhatsAppRedirectPath(headerStore.get("x-current-path"));
 
   if (!user) {
+    const sessionId = getSessionIdFromWhatsAppPath(currentPath);
+
+    if (sessionId) {
+      const sessionAccess = await getWhatsAppSessionAccess(sessionId);
+
+      if (!sessionAccess) {
+        return (
+          <div className="min-h-screen bg-[var(--bg-main)] px-4 py-8 text-[var(--text-primary)] md:px-8">
+            <div className="mx-auto max-w-xl settings-panel">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--text-secondary)]">
+                WhatsApp Session
+              </div>
+              <h1 className="mt-2 text-[28px] font-semibold">Session not found</h1>
+              <p className="mt-3 text-[14px] leading-6 text-[var(--text-secondary)]">
+                This WhatsApp session link is invalid or no longer available.
+              </p>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-[var(--bg-main)] px-4 py-8 text-[var(--text-primary)] md:px-8">
+          <WhatsAppAuthShell
+            autoStart
+            currentPath={currentPath}
+            initialPhone={sessionAccess.whatsappPhone}
+            isPhoneLocked
+            primaryButtonLabel="Send another code"
+            title="Review your session"
+          />
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-[var(--bg-main)] px-4 py-8 text-[var(--text-primary)] md:px-8">
         <WhatsAppAuthShell currentPath={currentPath} />

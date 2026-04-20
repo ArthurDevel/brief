@@ -1,5 +1,5 @@
 /**
- * Sends fire-and-forget callbacks to the web app after a WhatsApp session ends.
+ * Sends callbacks to the web app after a WhatsApp session ends.
  *
  * Responsibilities:
  * - Notify the web app that a WhatsApp session has been finalized
@@ -13,7 +13,7 @@ import type { AgentEnv } from "./env.js";
 // ============================================================================
 
 /**
- * Triggers the web app's WhatsApp end-of-session route without blocking the agent.
+ * Triggers the web app's WhatsApp end-of-session route.
  * @param env - Agent environment config
  * @param sessionId - Existing sessions.id value
  * @returns Promise that resolves when the HTTP request finishes

@@ -4,8 +4,8 @@
  * Responsibilities:
  * - Authenticate via INTERNAL_API_KEY (service-to-service)
  * - Load a finalized WhatsApp session from the sessions table
- * - Fetch current LiveKit public pricing
- * - Calculate and persist cost_usd from stored model usage
+ * - Calculate and persist cost_usd from stored model usage when possible
+ * - Send the WhatsApp session link template after the call
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -15,6 +15,11 @@ import {
   getLiveKitPricing,
   type SessionModelUsage
 } from "@/lib/livekitPricing";
+import {
+  getWhatsAppMessagingConfig,
+  sendWhatsAppSessionLinkTemplate,
+} from "@/lib/whatsapp-messaging";
+import { getWhatsAppSessionAccess } from "@/lib/whatsapp-session-access";
 
 // ============================================================================
 // TYPES
@@ -29,7 +34,7 @@ interface WhatsAppEndOfSessionResult {
 // ============================================================================
 
 /**
- * Calculates and stores cost_usd for a completed WhatsApp session.
+ * Calculates cost and sends the WhatsApp session link for a completed session.
  * @param request - Incoming authenticated service request
  * @param context - Route params containing the session ID
  * @returns JSON response with the calculated cost
@@ -76,6 +81,59 @@ export async function POST(
     : [];
 
   try {
+    const sessionAccess = await getWhatsAppSessionAccess(sessionId);
+
+    if (!sessionAccess) {
+      throw new Error("WhatsApp session owner could not be resolved");
+    }
+
+    const costUsd = await updateSessionCostBestEffort(
+      supabase,
+      sessionId,
+      modelUsage,
+      durationSeconds
+    );
+
+    const messagingConfig = getWhatsAppMessagingConfig();
+    await sendWhatsAppSessionLinkTemplate(
+      messagingConfig,
+      sessionAccess.whatsappPhone,
+      sessionId
+    );
+
+    return NextResponse.json({ costUsd });
+  } catch (error) {
+    console.error("[whatsapp-end-of-session] failed to process completed session", {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    return NextResponse.json(
+      { error: "Failed to process WhatsApp session completion" },
+      { status: 500 }
+    );
+  }
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Calculates and stores the session cost without blocking the WhatsApp send.
+ * @param supabase - Service-role Supabase client
+ * @param sessionId - Session ID to update
+ * @param modelUsage - Stored LiveKit usage rows
+ * @param durationSeconds - Session duration in seconds
+ * @returns Calculated cost or 0 when pricing fails
+ */
+async function updateSessionCostBestEffort(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  sessionId: string,
+  modelUsage: SessionModelUsage[],
+  durationSeconds: number
+): Promise<number> {
+  try {
     const pricing = await getLiveKitPricing();
     const costUsd = calculateSessionCostUsd(modelUsage, durationSeconds, pricing);
 
@@ -90,16 +148,13 @@ export async function POST(
       throw new Error(`Failed to update session cost: ${updateError.message}`);
     }
 
-    return NextResponse.json({ costUsd });
+    return costUsd;
   } catch (error) {
-    console.error("[whatsapp-end-of-session] failed to calculate cost", {
+    console.error("[whatsapp-end-of-session] failed to update session cost", {
       sessionId,
       error: error instanceof Error ? error.message : String(error),
     });
 
-    return NextResponse.json(
-      { error: "Failed to calculate session cost" },
-      { status: 500 }
-    );
+    return 0;
   }
 }

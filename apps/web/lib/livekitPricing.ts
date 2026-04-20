@@ -241,8 +241,8 @@ function calculateLlmUsageCost(
   usage: SessionModelUsage,
   pricing: LiveKitPricing
 ): number {
-  const provider = normalizeKey(usage.provider);
-  const model = normalizeKey(usage.model);
+  const provider = resolveUsageProvider(usage);
+  const model = normalizeModelKey(usage.model);
 
   if (provider !== "openai" || model !== "gpt-4.1-mini") {
     throw new Error(`Unsupported LLM usage for cost calculation: ${usage.provider}/${usage.model}`);
@@ -270,8 +270,8 @@ function calculateSttUsageCost(
   usage: SessionModelUsage,
   pricing: LiveKitPricing
 ): number {
-  const provider = normalizeKey(usage.provider);
-  const model = normalizeKey(usage.model);
+  const provider = resolveUsageProvider(usage);
+  const model = normalizeModelKey(usage.model);
 
   if (provider !== "deepgram" || (model !== "nova-3:en" && model !== "nova-3")) {
     throw new Error(`Unsupported STT usage for cost calculation: ${usage.provider}/${usage.model}`);
@@ -290,8 +290,8 @@ function calculateTtsUsageCost(
   usage: SessionModelUsage,
   pricing: LiveKitPricing
 ): number {
-  const provider = normalizeKey(usage.provider);
-  const model = normalizeKey(usage.model);
+  const provider = resolveUsageProvider(usage);
+  const model = normalizeModelKey(usage.model);
 
   if (provider !== "cartesia" || !model.startsWith("sonic-3")) {
     throw new Error(`Unsupported TTS usage for cost calculation: ${usage.provider}/${usage.model}`);
@@ -307,6 +307,56 @@ function calculateTtsUsageCost(
  */
 function normalizeKey(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? "";
+}
+
+/**
+ * Normalizes a provider key and strips an optional LiveKit namespace prefix.
+ * @param value - Raw provider string, for example "openai" or "livekit/openai"
+ * @returns Normalized provider slug
+ */
+function normalizeProviderKey(value: string | undefined): string {
+  const normalizedValue = normalizeKey(value);
+  if (!normalizedValue) {
+    return "";
+  }
+
+  const segments = normalizedValue.split("/");
+  return segments[segments.length - 1] ?? "";
+}
+
+/**
+ * Normalizes a model key and strips an optional vendor prefix.
+ * @param value - Raw model string, for example "gpt-4.1-mini" or "openai/gpt-4.1-mini"
+ * @returns Normalized model slug
+ */
+function normalizeModelKey(value: string | undefined): string {
+  const normalizedValue = normalizeKey(value);
+  if (!normalizedValue) {
+    return "";
+  }
+
+  const segments = normalizedValue.split("/");
+  return segments[segments.length - 1] ?? "";
+}
+
+/**
+ * Resolves the effective provider for one usage row.
+ * @param usage - Stored usage row
+ * @returns Normalized provider slug
+ */
+function resolveUsageProvider(usage: SessionModelUsage): string {
+  const provider = normalizeProviderKey(usage.provider);
+  if (provider && provider !== "livekit") {
+    return provider;
+  }
+
+  const normalizedModel = normalizeKey(usage.model);
+  const modelSegments = normalizedModel.split("/");
+  if (modelSegments.length > 1) {
+    return modelSegments[0] ?? "";
+  }
+
+  return provider;
 }
 
 /**

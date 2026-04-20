@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 type StartResponse = {
@@ -9,10 +9,30 @@ type StartResponse = {
   verificationType: "magiclink" | "email";
 };
 
-export default function WhatsAppAuthShell({ currentPath }: { currentPath: string }) {
+interface WhatsAppAuthShellProps {
+  autoStart?: boolean;
+  currentPath: string;
+  initialPhone?: string;
+  isPhoneLocked?: boolean;
+  primaryButtonLabel?: string;
+  title?: string;
+}
+
+const DEFAULT_PRIMARY_BUTTON_LABEL = "Send code in WhatsApp";
+const DEFAULT_TITLE = "Continue on this page";
+
+export default function WhatsAppAuthShell({
+  autoStart = false,
+  currentPath,
+  initialPhone,
+  isPhoneLocked = false,
+  primaryButtonLabel = DEFAULT_PRIMARY_BUTTON_LABEL,
+  title = DEFAULT_TITLE,
+}: WhatsAppAuthShellProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [phone, setPhone] = useState("");
+  const autoStartTriggered = useRef(false);
+  const [phone, setPhone] = useState(initialPhone ?? "");
   const [normalizedPhone, setNormalizedPhone] = useState<string | null>(null);
   const [maskedPhone, setMaskedPhone] = useState<string | null>(null);
   const [verificationType, setVerificationType] = useState<"magiclink" | "email">("magiclink");
@@ -27,6 +47,14 @@ export default function WhatsAppAuthShell({ currentPath }: { currentPath: string
       setPhone(nextPhone);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    if (!initialPhone) {
+      return;
+    }
+
+    setPhone((currentPhone) => currentPhone || initialPhone);
+  }, [initialPhone]);
 
   async function handleStart(): Promise<void> {
     setIsSubmitting(true);
@@ -97,6 +125,15 @@ export default function WhatsAppAuthShell({ currentPath }: { currentPath: string
     }
   }
 
+  useEffect(() => {
+    if (!autoStart || !phone || step !== "phone" || isSubmitting || autoStartTriggered.current) {
+      return;
+    }
+
+    autoStartTriggered.current = true;
+    void handleStart();
+  }, [autoStart, isSubmitting, phone, step]);
+
   return (
     <div className="mx-auto max-w-xl">
       <div className="settings-panel">
@@ -104,7 +141,7 @@ export default function WhatsAppAuthShell({ currentPath }: { currentPath: string
           WhatsApp Login
         </div>
         <h1 className="mt-2 text-[28px] font-semibold text-[var(--text-primary)]">
-          Continue on this page
+          {title}
         </h1>
         <p className="mt-3 text-[14px] leading-6 text-[var(--text-secondary)]">
           Enter the WhatsApp number that should receive your login code. We keep you on this
@@ -119,7 +156,7 @@ export default function WhatsAppAuthShell({ currentPath }: { currentPath: string
               value={phone}
               onChange={(event) => setPhone(event.target.value)}
               placeholder="+1 555 123 4567"
-              disabled={isSubmitting || step === "code"}
+              disabled={isSubmitting || step === "code" || isPhoneLocked}
               className="border border-[var(--border-color)] bg-[var(--bg-main)] px-3 py-3 text-[15px] text-[var(--text-primary)] outline-none"
             />
           </label>
@@ -160,7 +197,7 @@ export default function WhatsAppAuthShell({ currentPath }: { currentPath: string
               disabled={isSubmitting || phone.trim().length === 0}
               className="bg-[var(--btn-primary-bg)] px-4 py-2 text-[13px] font-semibold text-[var(--btn-primary-text)] disabled:opacity-50"
             >
-              {isSubmitting ? "Sending..." : "Send code in WhatsApp"}
+              {isSubmitting ? "Sending..." : primaryButtonLabel}
             </button>
           ) : (
             <>
