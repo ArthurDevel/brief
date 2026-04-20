@@ -12,6 +12,11 @@
 // CONSTANTS
 // ============================================================================
 
+const WHATSAPP_TEMPLATE_LANGUAGE = "en";
+const GMAIL_CONNECT_TEMPLATE_NAME = "composio_connect_gmail";
+const NOTION_CONNECT_TEMPLATE_NAME = "composio_connect_notion";
+const CONNECTOR_OVERVIEW_TEMPLATE_NAME = "composio_connector_overview";
+
 export interface WhatsAppAuthMessageConfig {
   accessToken: string;
   apiVersion: string;
@@ -129,8 +134,7 @@ export function getWhatsAppAuthMessageConfig(): WhatsAppAuthMessageConfig {
 }
 
 /**
- * Sends a temporary plain-text WhatsApp message with the Gmail connector URL.
- * The template version is intentionally commented out until WhatsApp approves it.
+ * Sends the approved WhatsApp Gmail utility template.
  * @param config - WhatsApp config
  * @param phone - Normalized E.164 phone number
  * @returns Promise that resolves when the message is accepted by the Graph API
@@ -139,12 +143,17 @@ export async function sendWhatsAppGmailConnectMessage(
   config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const connectUrl = buildWhatsAppGmailConnectorUrl(config.webBaseUrl, phone);
-  await sendWhatsAppTextMessage(config, phone, `Open this link to connect Gmail: ${connectUrl}`);
+  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
+  await sendWhatsAppUtilityTemplateMessage(
+    config,
+    phone,
+    GMAIL_CONNECT_TEMPLATE_NAME,
+    phoneUrlVariable
+  );
 }
 
 /**
- * Sends a temporary plain-text WhatsApp message with the Notion connector URL.
+ * Sends the approved WhatsApp Notion utility template.
  * @param config - WhatsApp config
  * @param phone - Normalized E.164 phone number
  * @returns Promise that resolves when the message is accepted by the Graph API
@@ -153,12 +162,17 @@ export async function sendWhatsAppNotionConnectMessage(
   config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const connectUrl = buildWhatsAppNotionConnectorUrl(config.webBaseUrl, phone);
-  await sendWhatsAppTextMessage(config, phone, `Open this link to connect Notion: ${connectUrl}`);
+  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
+  await sendWhatsAppUtilityTemplateMessage(
+    config,
+    phone,
+    NOTION_CONNECT_TEMPLATE_NAME,
+    phoneUrlVariable
+  );
 }
 
 /**
- * Sends a temporary plain-text WhatsApp message with the connectors overview URL.
+ * Sends the approved WhatsApp connector overview utility template.
  * @param config - WhatsApp config
  * @param phone - Normalized E.164 phone number
  * @returns Promise that resolves when the message is accepted by the Graph API
@@ -167,8 +181,13 @@ export async function sendWhatsAppOverviewMessage(
   config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const overviewUrl = buildWhatsAppConnectorOverviewUrl(config.webBaseUrl, phone);
-  await sendWhatsAppTextMessage(config, phone, `Open this link to view your connectors: ${overviewUrl}`);
+  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
+  await sendWhatsAppUtilityTemplateMessage(
+    config,
+    phone,
+    CONNECTOR_OVERVIEW_TEMPLATE_NAME,
+    phoneUrlVariable
+  );
 }
 
 /**
@@ -192,25 +211,6 @@ async function sendWhatsAppTextMessage(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      // Temporary fallback while the CTA template is still under review.
-      // type: "template",
-      // template: {
-      //   name: "composio_connect_gmail",
-      //   language: { code: "en" },
-      //   components: [
-      //     {
-      //       type: "button",
-      //       sub_type: "url",
-      //       index: "0",
-      //       parameters: [
-      //         {
-      //           type: "text",
-      //           text: connectUrl,
-      //         },
-      //       ],
-      //     },
-      //   ],
-      // },
       messaging_product: "whatsapp",
       recipient_type: "individual",
       to: phone.replace(/[^\d]/g, ""),
@@ -225,6 +225,59 @@ async function sendWhatsAppTextMessage(
   if (!response.ok) {
     const payload = await response.text();
     throw new Error(`WhatsApp Gmail message send failed: ${payload}`);
+  }
+}
+
+/**
+ * Sends a WhatsApp utility template with one URL button variable.
+ * @param config - WhatsApp config
+ * @param phone - Normalized E.164 phone number
+ * @param templateName - Approved WhatsApp template name
+ * @param urlVariable - URL variable value passed to the template button
+ * @returns Promise that resolves when the message is accepted by the Graph API
+ */
+async function sendWhatsAppUtilityTemplateMessage(
+  config: WhatsAppAuthMessageConfig,
+  phone: string,
+  templateName: string,
+  urlVariable: string
+): Promise<void> {
+  const endpoint = `https://graph.facebook.com/${config.apiVersion}/${config.phoneNumberId}/messages`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: phone.replace(/[^\d]/g, ""),
+      type: "template",
+      template: {
+        name: templateName,
+        language: { code: WHATSAPP_TEMPLATE_LANGUAGE },
+        components: [
+          {
+            type: "button",
+            sub_type: "url",
+            index: "0",
+            parameters: [
+              {
+                type: "text",
+                text: urlVariable,
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.text();
+    throw new Error(`WhatsApp template send failed: ${payload}`);
   }
 }
 
@@ -260,6 +313,15 @@ function buildWhatsAppConnectorUrl(
   const url = new URL(`/whatsapp/connectors/${routeSegment}`, webBaseUrl);
   url.searchParams.set("phone", phone);
   return url.toString();
+}
+
+/**
+ * Builds the phone query value used by the approved utility templates.
+ * @param phone - Normalized WhatsApp phone number
+ * @returns URL-safe phone value for the template variable
+ */
+function buildWhatsAppPhoneUrlVariable(phone: string): string {
+  return encodeURIComponent(phone);
 }
 
 /**
