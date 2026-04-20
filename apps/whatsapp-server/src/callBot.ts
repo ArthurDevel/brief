@@ -5,11 +5,15 @@ import { LiveKitRoomManager } from "./roomManager.js";
 import {
   getWhatsAppAuthMessageConfig,
   isAuthenticateGmailCommand,
+  isAuthenticateGoogleCalendarCommand,
   isAuthenticateNotionCommand,
+  isAuthenticateOutlookCommand,
   isAuthenticateOverviewCommand,
   normalizeWhatsAppCallerPhone,
   sendWhatsAppGmailConnectMessage,
+  sendWhatsAppGoogleCalendarConnectMessage,
   sendWhatsAppNotionConnectMessage,
+  sendWhatsAppOutlookConnectMessage,
   sendWhatsAppOverviewMessage,
 } from "./whatsappAuthCommands.js";
 
@@ -240,7 +244,9 @@ export class WhatsAppCallBot {
     const normalizedPhone = normalizeWhatsAppCallerPhone(from);
     if (
       isAuthenticateGmailCommand(body) ||
+      isAuthenticateGoogleCalendarCommand(body) ||
       isAuthenticateNotionCommand(body) ||
+      isAuthenticateOutlookCommand(body) ||
       isAuthenticateOverviewCommand(body)
     ) {
       if (!normalizedPhone) {
@@ -264,8 +270,18 @@ export class WhatsAppCallBot {
         return;
       }
 
+      if (isAuthenticateGoogleCalendarCommand(body)) {
+        await sendWhatsAppGoogleCalendarConnectMessage(messageConfig, normalizedPhone);
+        return;
+      }
+
       if (isAuthenticateNotionCommand(body)) {
         await sendWhatsAppNotionConnectMessage(messageConfig, normalizedPhone);
+        return;
+      }
+
+      if (isAuthenticateOutlookCommand(body)) {
+        await sendWhatsAppOutlookConnectMessage(messageConfig, normalizedPhone);
         return;
       }
 

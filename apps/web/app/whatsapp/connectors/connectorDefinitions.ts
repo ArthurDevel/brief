@@ -11,7 +11,11 @@
 // TYPES
 // ============================================================================
 
-export type WhatsAppConnectorToolkit = "gmail" | "notion";
+export type WhatsAppConnectorToolkit =
+  | "gmail"
+  | "googlecalendar"
+  | "notion"
+  | "outlook";
 
 export interface WhatsAppConnectorDefinition {
   toolkit: WhatsAppConnectorToolkit;
@@ -52,6 +56,24 @@ const CONNECTOR_DEFINITIONS: Record<
       "We could not start the Gmail connection. Please try again.",
     loadingLabel: "Opening Gmail...",
   },
+  googlecalendar: {
+    toolkit: "googlecalendar",
+    label: "Google Calendar",
+    routeSegment: "googlecalendar",
+    navDescription:
+      "Start the WhatsApp-scoped Google Calendar auth flow that stores a user-specific Composio connection.",
+    pageDescription:
+      "This page keeps the WhatsApp sign-in flow inline, then starts the Composio Google Calendar connection in-browser.",
+    successMessage:
+      "Google Calendar is connected. Future WhatsApp requests can use your calendar.",
+    authRequiredMessage:
+      "Sign in with your WhatsApp number before you connect Google Calendar.",
+    connectionFailedMessage:
+      "Google Calendar was not connected. Please try again.",
+    startFailedMessage:
+      "We could not start the Google Calendar connection. Please try again.",
+    loadingLabel: "Opening Google Calendar...",
+  },
   notion: {
     toolkit: "notion",
     label: "Notion",
@@ -69,6 +91,24 @@ const CONNECTOR_DEFINITIONS: Record<
     startFailedMessage:
       "We could not start the Notion connection. Please try again.",
     loadingLabel: "Opening Notion...",
+  },
+  outlook: {
+    toolkit: "outlook",
+    label: "Outlook",
+    routeSegment: "outlook",
+    navDescription:
+      "Start the WhatsApp-scoped Outlook auth flow that stores a user-specific Composio connection.",
+    pageDescription:
+      "This page keeps the WhatsApp sign-in flow inline, then starts the Composio Outlook connection in-browser.",
+    successMessage:
+      "Outlook is connected. Future WhatsApp requests can use your account.",
+    authRequiredMessage:
+      "Sign in with your WhatsApp number before you connect Outlook.",
+    connectionFailedMessage:
+      "Outlook was not connected. Please try again.",
+    startFailedMessage:
+      "We could not start the Outlook connection. Please try again.",
+    loadingLabel: "Opening Outlook...",
   },
 };
 

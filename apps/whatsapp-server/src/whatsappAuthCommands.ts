@@ -14,7 +14,9 @@
 
 const WHATSAPP_TEMPLATE_LANGUAGE = "en";
 const GMAIL_CONNECT_TEMPLATE_NAME = "composio_connect_gmail";
+const GOOGLE_CALENDAR_CONNECT_TEMPLATE_NAME = "composio_connect_google_calendar";
 const NOTION_CONNECT_TEMPLATE_NAME = "composio_connect_notion";
+const OUTLOOK_CONNECT_TEMPLATE_NAME = "composio_connect_outlook";
 const CONNECTOR_OVERVIEW_TEMPLATE_NAME = "composio_connector_overview";
 
 export interface WhatsAppAuthMessageConfig {
@@ -38,12 +40,30 @@ export function isAuthenticateGmailCommand(messageBody: string): boolean {
 }
 
 /**
+ * Returns true when an inbound message should trigger Google Calendar authentication.
+ * @param messageBody - Raw inbound text message body
+ * @returns Whether the message is the supported Google Calendar auth command
+ */
+export function isAuthenticateGoogleCalendarCommand(messageBody: string): boolean {
+  return isAuthenticateCommand(messageBody, "authenticate google calendar");
+}
+
+/**
  * Returns true when an inbound message should trigger Notion authentication.
  * @param messageBody - Raw inbound text message body
  * @returns Whether the message is the supported Notion auth command
  */
 export function isAuthenticateNotionCommand(messageBody: string): boolean {
   return isAuthenticateCommand(messageBody, "authenticate notion");
+}
+
+/**
+ * Returns true when an inbound message should trigger Outlook authentication.
+ * @param messageBody - Raw inbound text message body
+ * @returns Whether the message is the supported Outlook auth command
+ */
+export function isAuthenticateOutlookCommand(messageBody: string): boolean {
+  return isAuthenticateCommand(messageBody, "authenticate outlook");
 }
 
 /**
@@ -88,6 +108,19 @@ export function buildWhatsAppGmailConnectorUrl(
 }
 
 /**
+ * Builds the Google Calendar connector URL that keeps users inside the /whatsapp auth shell.
+ * @param webBaseUrl - Public base URL of the web app
+ * @param phone - Normalized WhatsApp phone number
+ * @returns Full URL to the Google Calendar connector page
+ */
+export function buildWhatsAppGoogleCalendarConnectorUrl(
+  webBaseUrl: string,
+  phone: string
+): string {
+  return buildWhatsAppConnectorUrl(webBaseUrl, phone, "googlecalendar");
+}
+
+/**
  * Builds the Notion connector URL that keeps users inside the /whatsapp auth shell.
  * @param webBaseUrl - Public base URL of the web app
  * @param phone - Normalized WhatsApp phone number
@@ -98,6 +131,19 @@ export function buildWhatsAppNotionConnectorUrl(
   phone: string
 ): string {
   return buildWhatsAppConnectorUrl(webBaseUrl, phone, "notion");
+}
+
+/**
+ * Builds the Outlook connector URL that keeps users inside the /whatsapp auth shell.
+ * @param webBaseUrl - Public base URL of the web app
+ * @param phone - Normalized WhatsApp phone number
+ * @returns Full URL to the Outlook connector page
+ */
+export function buildWhatsAppOutlookConnectorUrl(
+  webBaseUrl: string,
+  phone: string
+): string {
+  return buildWhatsAppConnectorUrl(webBaseUrl, phone, "outlook");
 }
 
 /**
@@ -153,6 +199,25 @@ export async function sendWhatsAppGmailConnectMessage(
 }
 
 /**
+ * Sends the approved WhatsApp Google Calendar utility template.
+ * @param config - WhatsApp config
+ * @param phone - Normalized E.164 phone number
+ * @returns Promise that resolves when the message is accepted by the Graph API
+ */
+export async function sendWhatsAppGoogleCalendarConnectMessage(
+  config: WhatsAppAuthMessageConfig,
+  phone: string
+): Promise<void> {
+  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
+  await sendWhatsAppUtilityTemplateMessage(
+    config,
+    phone,
+    GOOGLE_CALENDAR_CONNECT_TEMPLATE_NAME,
+    phoneUrlVariable
+  );
+}
+
+/**
  * Sends the approved WhatsApp Notion utility template.
  * @param config - WhatsApp config
  * @param phone - Normalized E.164 phone number
@@ -167,6 +232,25 @@ export async function sendWhatsAppNotionConnectMessage(
     config,
     phone,
     NOTION_CONNECT_TEMPLATE_NAME,
+    phoneUrlVariable
+  );
+}
+
+/**
+ * Sends the approved WhatsApp Outlook utility template.
+ * @param config - WhatsApp config
+ * @param phone - Normalized E.164 phone number
+ * @returns Promise that resolves when the message is accepted by the Graph API
+ */
+export async function sendWhatsAppOutlookConnectMessage(
+  config: WhatsAppAuthMessageConfig,
+  phone: string
+): Promise<void> {
+  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
+  await sendWhatsAppUtilityTemplateMessage(
+    config,
+    phone,
+    OUTLOOK_CONNECT_TEMPLATE_NAME,
     phoneUrlVariable
   );
 }

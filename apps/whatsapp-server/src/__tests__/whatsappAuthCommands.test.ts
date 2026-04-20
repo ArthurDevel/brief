@@ -2,13 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildWhatsAppConnectorOverviewUrl,
   buildWhatsAppGmailConnectorUrl,
+  buildWhatsAppGoogleCalendarConnectorUrl,
   buildWhatsAppNotionConnectorUrl,
+  buildWhatsAppOutlookConnectorUrl,
   isAuthenticateGmailCommand,
+  isAuthenticateGoogleCalendarCommand,
   isAuthenticateNotionCommand,
+  isAuthenticateOutlookCommand,
   isAuthenticateOverviewCommand,
   normalizeWhatsAppCallerPhone,
   sendWhatsAppGmailConnectMessage,
+  sendWhatsAppGoogleCalendarConnectMessage,
   sendWhatsAppNotionConnectMessage,
+  sendWhatsAppOutlookConnectMessage,
   sendWhatsAppOverviewMessage,
 } from "../whatsappAuthCommands.js";
 
@@ -33,6 +39,16 @@ describe("isAuthenticateGmailCommand", () => {
   });
 });
 
+describe("isAuthenticateGoogleCalendarCommand", () => {
+  it("matches the hardcoded google calendar auth command", () => {
+    expect(isAuthenticateGoogleCalendarCommand(" authenticate google calendar ")).toBe(true);
+  });
+
+  it("rejects other messages", () => {
+    expect(isAuthenticateGoogleCalendarCommand("authenticate gmail")).toBe(false);
+  });
+});
+
 describe("isAuthenticateOverviewCommand", () => {
   it("matches the hardcoded overview auth command", () => {
     expect(isAuthenticateOverviewCommand(" authenticate overview ")).toBe(true);
@@ -50,6 +66,16 @@ describe("isAuthenticateNotionCommand", () => {
 
   it("rejects other messages", () => {
     expect(isAuthenticateNotionCommand("authenticate gmail")).toBe(false);
+  });
+});
+
+describe("isAuthenticateOutlookCommand", () => {
+  it("matches the hardcoded outlook auth command", () => {
+    expect(isAuthenticateOutlookCommand(" authenticate outlook ")).toBe(true);
+  });
+
+  it("rejects other messages", () => {
+    expect(isAuthenticateOutlookCommand("authenticate notion")).toBe(false);
   });
 });
 
@@ -71,6 +97,14 @@ describe("buildWhatsAppGmailConnectorUrl", () => {
   });
 });
 
+describe("buildWhatsAppGoogleCalendarConnectorUrl", () => {
+  it("builds the whatsapp google calendar connector deep link", () => {
+    expect(
+      buildWhatsAppGoogleCalendarConnectorUrl("https://app.example.com", "+15551234567")
+    ).toBe("https://app.example.com/whatsapp/connectors/googlecalendar?phone=%2B15551234567");
+  });
+});
+
 describe("buildWhatsAppConnectorOverviewUrl", () => {
   it("builds the whatsapp connectors overview deep link", () => {
     expect(
@@ -84,6 +118,14 @@ describe("buildWhatsAppNotionConnectorUrl", () => {
     expect(
       buildWhatsAppNotionConnectorUrl("https://app.example.com", "+15551234567")
     ).toBe("https://app.example.com/whatsapp/connectors/notion?phone=%2B15551234567");
+  });
+});
+
+describe("buildWhatsAppOutlookConnectorUrl", () => {
+  it("builds the whatsapp outlook connector deep link", () => {
+    expect(
+      buildWhatsAppOutlookConnectorUrl("https://app.example.com", "+15551234567")
+    ).toBe("https://app.example.com/whatsapp/connectors/outlook?phone=%2B15551234567");
   });
 });
 
@@ -127,6 +169,46 @@ describe("sendWhatsAppGmailConnectMessage", () => {
   });
 });
 
+describe("sendWhatsAppGoogleCalendarConnectMessage", () => {
+  it("sends the approved google calendar utility template with the encoded phone variable", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendWhatsAppGoogleCalendarConnectMessage(TEST_MESSAGE_CONFIG, "+15551234567");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v23.0/123456789/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: "15551234567",
+          type: "template",
+          template: {
+            name: "composio_connect_google_calendar",
+            language: { code: "en" },
+            components: [
+              {
+                type: "button",
+                sub_type: "url",
+                index: "0",
+                parameters: [
+                  {
+                    type: "text",
+                    text: "%2B15551234567",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      })
+    );
+  });
+});
+
 describe("sendWhatsAppNotionConnectMessage", () => {
   it("sends the approved notion utility template with the encoded phone variable", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
@@ -146,6 +228,46 @@ describe("sendWhatsAppNotionConnectMessage", () => {
           type: "template",
           template: {
             name: "composio_connect_notion",
+            language: { code: "en" },
+            components: [
+              {
+                type: "button",
+                sub_type: "url",
+                index: "0",
+                parameters: [
+                  {
+                    type: "text",
+                    text: "%2B15551234567",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      })
+    );
+  });
+});
+
+describe("sendWhatsAppOutlookConnectMessage", () => {
+  it("sends the approved outlook utility template with the encoded phone variable", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendWhatsAppOutlookConnectMessage(TEST_MESSAGE_CONFIG, "+15551234567");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v23.0/123456789/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: "15551234567",
+          type: "template",
+          template: {
+            name: "composio_connect_outlook",
             language: { code: "en" },
             components: [
               {
