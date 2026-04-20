@@ -1,5 +1,10 @@
 import { WhatsApp } from "meta-cloud-api";
 import { MediaStreamTrackFactory, RTCPeerConnection, type MediaStreamTrack, type RTCIceServer } from "werift";
+import {
+  DeepgramVoiceMessageTranscriber,
+  type VoiceMessageTranscriber,
+  type VoiceMessageTranscriptionResult,
+} from "./deepgramVoiceMessageTranscriber.js";
 import { WhatsAppLiveKitBridge } from "./livekitBridge.js";
 import { LiveKitRoomManager } from "./roomManager.js";
 import {
@@ -36,6 +41,12 @@ interface WhatsAppMessage {
   text?: {
     body?: string;
   };
+  audio?: {
+    id?: string;
+    mime_type?: string;
+    url?: string;
+    voice?: boolean;
+  };
 }
 
 interface WhatsAppCallChangeValue {
@@ -64,6 +75,63 @@ interface ActiveCallSession {
   readonly roomName: string;
   bridge: WhatsAppLiveKitBridge | null;
   cleanedUp: boolean;
+}
+
+interface InboundTextMessage {
+  body: string;
+  from: string;
+  replyMessageId?: string;
+}
+
+interface WhatsAppClient {
+  messages: {
+    text(params: {
+      body: string;
+      to: string;
+      replyMessageId?: string;
+    }): Promise<unknown>;
+  };
+  media: {
+    getMediaById(mediaId: string): Promise<{
+      url: string;
+      mime_type: string;
+    }>;
+  };
+  calling: {
+    preAcceptCall(params: {
+      call_id: string;
+      session: {
+        sdp_type: "answer";
+        sdp: string;
+      };
+    }): Promise<unknown>;
+    acceptCall(params: {
+      call_id: string;
+      session: {
+        sdp_type: "answer";
+        sdp: string;
+      };
+      biz_opaque_callback_data: string;
+    }): Promise<unknown>;
+    rejectCall(params: { call_id: string }): Promise<unknown>;
+  };
+}
+
+interface CallSessionManager {
+  createCallSession(callId: string, caller: string | undefined): Promise<{
+    roomName: string;
+    participantIdentity: string;
+    token: string;
+    url: string;
+  }>;
+  cleanupCallSession(roomName: string): Promise<void>;
+}
+
+interface WhatsAppBotDependencies {
+  client?: WhatsAppClient;
+  roomManager?: CallSessionManager;
+  voiceMessageTranscriber?: VoiceMessageTranscriber;
+  fetchImplementation?: typeof fetch;
 }
 
 interface VoiceBotEnv {
@@ -191,10 +259,20 @@ function isCallTerminate(call: WhatsAppCall): boolean {
   return call.event === "terminate";
 }
 
-export class WhatsAppCallBot {
-  private readonly client = createClient();
+export class WhatsAppBot {
+  private readonly client: WhatsAppClient;
   private readonly activeCalls = new Map<string, ActiveCallSession>();
-  private readonly roomManager = new LiveKitRoomManager();
+  private readonly roomManager: CallSessionManager;
+  private readonly voiceMessageTranscriber: VoiceMessageTranscriber;
+  private readonly fetchImplementation: typeof fetch;
+
+  constructor(dependencies: WhatsAppBotDependencies = {}) {
+    this.client = dependencies.client ?? createClient();
+    this.roomManager = dependencies.roomManager ?? new LiveKitRoomManager();
+    this.voiceMessageTranscriber =
+      dependencies.voiceMessageTranscriber ?? new DeepgramVoiceMessageTranscriber();
+    this.fetchImplementation = dependencies.fetchImplementation ?? fetch;
+  }
 
   async handleWebhook(body: WhatsAppWebhookBody): Promise<void> {
     for (const entry of body.entry ?? []) {
@@ -231,17 +309,93 @@ export class WhatsAppCallBot {
   }
 
   private async handleIncomingMessage(message: WhatsAppMessage): Promise<void> {
-    if (message.type !== "text") {
+    if (message.type === "text") {
+      await this.handleIncomingTextMessage(message);
       return;
     }
 
-    const body = message.text?.body?.trim() ?? "";
+    if (message.type === "audio") {
+      await this.handleIncomingAudioMessage(message);
+    }
+  }
+
+  private async handleIncomingTextMessage(message: WhatsAppMessage): Promise<void> {
     const from = message.from?.trim();
     if (!from) {
       return;
     }
 
-    const normalizedPhone = normalizeWhatsAppCallerPhone(from);
+    await this.sendTypingIndicator(message).catch((error) => {
+      console.warn("[whatsapp-server] failed to send typing indicator", {
+        messageId: message.id ?? null,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+
+    const body = message.text?.body?.trim() ?? "";
+    await this.processInboundTextMessage({
+      body,
+      from,
+      replyMessageId: message.id
+    });
+  }
+
+  private async handleIncomingAudioMessage(message: WhatsAppMessage): Promise<void> {
+    const from = message.from?.trim();
+    if (!from) {
+      return;
+    }
+
+    await this.sendTypingIndicator(message).catch((error) => {
+      console.warn("[whatsapp-server] failed to send typing indicator", {
+        messageId: message.id ?? null,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+
+    try {
+      const transcription = await this.transcribeAudioMessage(message);
+      console.info("[whatsapp-server] transcribed voice message", {
+        from,
+        messageId: message.id ?? null,
+        isVoiceNote: message.audio?.voice ?? false,
+        confidence: transcription.confidence,
+        transcript: transcription.transcript
+      });
+
+      const handled = await this.processInboundTextMessage({
+        body: transcription.transcript,
+        from,
+        replyMessageId: message.id
+      });
+
+      if (handled) {
+        return;
+      }
+
+      await this.replyWithTranscript(from, message.id, transcription.transcript);
+    } catch (error) {
+      console.error("[whatsapp-server] failed to process voice message", {
+        from,
+        messageId: message.id ?? null,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      await this.client.messages.text({
+        body: "I couldn't transcribe your voice message. Please try again.",
+        to: from,
+        replyMessageId: message.id
+      });
+    }
+  }
+
+  private async processInboundTextMessage(message: InboundTextMessage): Promise<boolean> {
+    const body = message.body.trim();
+    if (!body) {
+      return false;
+    }
+
+    const normalizedPhone = normalizeWhatsAppCallerPhone(message.from);
     if (
       isAuthenticateGmailCommand(body) ||
       isAuthenticateGoogleCalendarCommand(body) ||
@@ -251,53 +405,141 @@ export class WhatsAppCallBot {
     ) {
       if (!normalizedPhone) {
         console.warn("[whatsapp-server] could not normalize sender phone for auth command", {
-          rawPhone: from,
-          messageId: message.id ?? null,
+          rawPhone: message.from,
+          messageId: message.replyMessageId ?? null,
         });
-        return;
+        return true;
       }
 
       console.info("[whatsapp-server] sending auth command message", {
         phone: normalizedPhone,
         command: body.toLowerCase(),
-        messageId: message.id ?? null,
+        messageId: message.replyMessageId ?? null,
       });
 
       const messageConfig = getWhatsAppAuthMessageConfig();
 
       if (isAuthenticateGmailCommand(body)) {
         await sendWhatsAppGmailConnectMessage(messageConfig, normalizedPhone);
-        return;
+        return true;
       }
 
       if (isAuthenticateGoogleCalendarCommand(body)) {
         await sendWhatsAppGoogleCalendarConnectMessage(messageConfig, normalizedPhone);
-        return;
+        return true;
       }
 
       if (isAuthenticateNotionCommand(body)) {
         await sendWhatsAppNotionConnectMessage(messageConfig, normalizedPhone);
-        return;
+        return true;
       }
 
       if (isAuthenticateOutlookCommand(body)) {
         await sendWhatsAppOutlookConnectMessage(messageConfig, normalizedPhone);
-        return;
+        return true;
       }
 
       await sendWhatsAppOverviewMessage(messageConfig, normalizedPhone);
-      return;
+      return true;
     }
 
     if (body.toLowerCase() !== "hello world") {
+      return false;
+    }
+
+    console.log(`[whatsapp-server] replying to text message from ${message.from}`);
+    await this.client.messages.text({
+      body: "received",
+      to: message.from,
+      replyMessageId: message.replyMessageId
+    });
+    return true;
+  }
+
+  private async transcribeAudioMessage(
+    message: WhatsAppMessage
+  ): Promise<VoiceMessageTranscriptionResult> {
+    const audioId = message.audio?.id?.trim();
+    if (!audioId) {
+      throw new Error("Incoming audio message is missing audio.id");
+    }
+
+    const media = message.audio?.url
+      ? null
+      : await this.client.media.getMediaById(audioId);
+    const mediaUrl = message.audio?.url?.trim() || media?.url?.trim();
+    if (!mediaUrl) {
+      throw new Error(`WhatsApp media ${audioId} is missing a download URL`);
+    }
+
+    const mimeType = message.audio?.mime_type?.trim() || media?.mime_type?.trim();
+    if (!mimeType) {
+      throw new Error(`WhatsApp media ${audioId} is missing a MIME type`);
+    }
+
+    const audioBuffer = await this.downloadWhatsAppMediaBuffer(mediaUrl);
+    return await this.voiceMessageTranscriber.transcribeVoiceMessage({
+      audioBuffer,
+      mimeType
+    });
+  }
+
+  private async downloadWhatsAppMediaBuffer(mediaUrl: string): Promise<Buffer> {
+    const response = await this.fetchImplementation(mediaUrl, {
+      headers: {
+        Authorization: `Bearer ${getVoiceBotEnv().accessToken}`
+      }
+    });
+
+    if (!response.ok) {
+      const payload = await response.text();
+      throw new Error(`WhatsApp media download failed: ${payload}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  private async sendTypingIndicator(message: WhatsAppMessage): Promise<void> {
+    const messageId = message.id?.trim();
+    if (!messageId) {
       return;
     }
 
-    console.log(`[whatsapp-server] replying to text message from ${from}`);
+    const env = getVoiceBotEnv();
+    const response = await this.fetchImplementation(
+      `https://graph.facebook.com/v${env.apiVersion}.0/${env.phoneNumberId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          status: "read",
+          message_id: messageId,
+          typing_indicator: {
+            type: "text"
+          }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const payload = await response.text();
+      throw new Error(`WhatsApp typing indicator failed: ${payload}`);
+    }
+  }
+
+  private async replyWithTranscript(
+    to: string,
+    replyMessageId: string | undefined,
+    transcript: string
+  ): Promise<void> {
     await this.client.messages.text({
-      body: "received",
-      to: from,
-      replyMessageId: message.id
+      body: `I transcribed your voice message as:\n\n${transcript}`,
+      to,
+      replyMessageId
     });
   }
 

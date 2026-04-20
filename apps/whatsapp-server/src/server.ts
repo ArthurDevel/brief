@@ -2,7 +2,7 @@ import { config as loadDotEnv } from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
-import { WhatsAppCallBot, type WhatsAppWebhookBody } from "./callBot.js";
+import { WhatsAppBot, type WhatsAppWebhookBody } from "./whatsAppBot.js";
 
 type IncomingEventKind =
   | "user-message"
@@ -33,7 +33,7 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv({ path: path.resolve(currentDir, "../.env") });
 
 const app = express();
-const callBot = new WhatsAppCallBot();
+const whatsAppBot = new WhatsAppBot();
 
 app.use(express.json({ limit: "10mb" }));
 
@@ -127,7 +127,7 @@ app.get("/api/whatsapp/webhook", (req, res) => {
 app.post("/api/whatsapp/webhook", (req, res) => {
   const eventKind = classifyWebhookEvent((req.body ?? {}) as WhatsAppWebhookBody);
   logWebhookRequest(eventKind, req);
-  void callBot.handleWebhook((req.body ?? {}) as WhatsAppWebhookBody).catch((error) => {
+  void whatsAppBot.handleWebhook((req.body ?? {}) as WhatsAppWebhookBody).catch((error) => {
     console.error("[whatsapp-server] failed to process whatsapp webhook", error);
   });
   acknowledge(res, eventKind);
