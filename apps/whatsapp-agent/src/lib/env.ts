@@ -1,4 +1,5 @@
 import { toHttpUrl, toWebSocketUrl } from "./livekitUrls.js";
+import { getDefaultWhatsAppApiVersion } from "./whatsappCustomTools.js";
 
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -19,6 +20,9 @@ export interface AgentEnv {
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
   composioApiKey: string;
+  whatsappAccessToken: string;
+  whatsappPhoneNumberId: string;
+  whatsappApiVersion: string;
   deepgramApiKey: string;
   livekitSttModel: string;
   livekitLlmModel: string;
@@ -50,6 +54,10 @@ export function getEnv(): AgentEnv {
     supabaseUrl: requireEnv("NEXT_PUBLIC_SUPABASE_URL"),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
     composioApiKey: requireEnv("COMPOSIO_API_KEY"),
+    whatsappAccessToken: requireEnv("WHATSAPP_ACCESS_TOKEN"),
+    whatsappPhoneNumberId: requireEnv("WHATSAPP_PHONE_NUMBER_ID"),
+    whatsappApiVersion:
+      process.env.WHATSAPP_API_VERSION?.trim() || getDefaultWhatsAppApiVersion(),
     deepgramApiKey: requireEnv("DEEPGRAM_API_KEY"),
     livekitSttModel: process.env.LIVEKIT_STT_MODEL?.trim() || "deepgram/nova-3:en",
     livekitLlmModel: process.env.LIVEKIT_LLM_MODEL?.trim() || "openai/gpt-4.1-mini",

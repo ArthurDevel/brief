@@ -1,14 +1,18 @@
+/**
+ * Composio session helpers for the WhatsApp voice agent.
+ *
+ * Responsibilities:
+ * - Create one Composio session per caller with connected accounts and custom tools
+ * - Load session-native tool definitions through `session.tools()`
+ * - Adapt Composio's OpenAI-style tool definitions into LiveKit function tools
+ */
+
 import { llm } from "@livekit/agents";
 import type { llm as llmNamespace } from "@livekit/agents";
 import { Composio } from "@composio/core";
 import type { AgentEnv } from "./env.js";
+import { createWhatsAppCustomTools } from "./whatsappCustomTools.js";
 import type { WhatsAppCallerContext } from "./whatsappRuntime.js";
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const TOOL_PAGE_LIMIT = 50;
 
 // ============================================================================
 // TYPES
@@ -17,20 +21,6 @@ const TOOL_PAGE_LIMIT = 50;
 interface HeaderEntry {
   name?: string;
   value?: string;
-}
-
-interface RawToolDefinition {
-  slug?: string;
-  name?: string;
-  description?: string;
-  inputParameters?: unknown;
-  parameters?: unknown;
-}
-
-interface RawToolListResponse {
-  items?: unknown[];
-  nextCursor?: string;
-  next_cursor?: string;
 }
 
 interface GmailMessage {
@@ -59,14 +49,184 @@ interface ToolExecutionResult {
   logId?: string;
 }
 
-interface RawToolListQuery {
-  cursor?: string;
-  limit: number;
-  toolkits: string[];
+interface SessionToolDefinition {
+  type?: string;
+  function?: {
+    description?: string | null;
+    name?: string | null;
+    parameters?: unknown;
+  };
 }
 
-function normalizeParametersSchema(tool: RawToolDefinition): Record<string, unknown> {
-  const candidate = tool.inputParameters ?? tool.parameters;
+interface SessionLike {
+  sessionId: string;
+  execute: (
+    slug: string,
+    arguments_: Record<string, unknown>
+  ) => Promise<ToolExecutionResult>;
+}
+
+/**
+ * User-scoped Composio session returned by `composio.create`.
+ * Used to execute tools on behalf of the WhatsApp caller.
+ */
+export type ComposioUserSession = Awaited<ReturnType<Composio["create"]>>;
+
+// ============================================================================
+// MAIN HELPERS
+// ============================================================================
+
+/**
+ * Creates a user-scoped Composio session for the caller.
+ * The session is required for both tool registration and direct tool execution
+ * (for example fetching Gmail context before the main call starts).
+ * @param env - Agent environment config
+ * @param callerContext - Resolved caller context with connected toolkit accounts
+ * @returns Composio user session ready to execute tools
+ */
+export async function createComposioSession(
+  env: AgentEnv,
+  callerContext: WhatsAppCallerContext
+): Promise<ComposioUserSession> {
+  const startedAt = Date.now();
+  const toolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
+  const customTools = createWhatsAppCustomTools(env, callerContext);
+
+  console.info("[whatsapp-agent] createComposioSession start", {
+    supabaseUserId: callerContext.supabaseUserId,
+    toolkitSlugs,
+    customToolSlugs: customTools.map((tool) => tool.slug),
+  });
+
+  const composio = new Composio({
+    apiKey: env.composioApiKey,
+  });
+  const session = await composio.create(callerContext.supabaseUserId, {
+    manageConnections: false,
+    connectedAccounts: callerContext.connectedAccountsByToolkit,
+    experimental: {
+      customTools,
+    },
+    ...(toolkitSlugs.length > 0 ? { toolkits: toolkitSlugs } : {}),
+  });
+  console.info("[whatsapp-agent] createComposioSession complete", {
+    supabaseUserId: callerContext.supabaseUserId,
+    toolkitSlugs,
+    customToolSlugs: customTools.map((tool) => tool.slug),
+    hasSession: Boolean(session),
+    elapsedMs: Date.now() - startedAt,
+  });
+
+  return session;
+}
+
+/**
+ * Wraps the caller's Composio session tools as LiveKit LLM tools.
+ * Reuses the supplied user session so we do not re-authenticate per tool batch.
+ * @param env - Agent environment config
+ * @param callerContext - Resolved caller context with connected toolkit accounts
+ * @param session - Active Composio user session created by `createComposioSession`
+ * @returns LiveKit-compatible tool context for the LLM
+ */
+export async function createComposioTools(
+  env: AgentEnv,
+  callerContext: WhatsAppCallerContext,
+  session: ComposioUserSession
+): Promise<llmNamespace.ToolContext> {
+  const startedAt = Date.now();
+  const toolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
+  console.info("[whatsapp-agent] createComposioTools start", {
+    supabaseUserId: callerContext.supabaseUserId,
+    toolkitSlugs,
+  });
+
+  const composio = new Composio({
+    apiKey: env.composioApiKey,
+  });
+
+  const toolLoadStartedAt = Date.now();
+  const sessionTools = (await session.tools()) as SessionToolDefinition[];
+  const registeredCustomTools = session.customTools().map((tool) => tool.slug);
+  console.info("[whatsapp-agent] session.tools complete", {
+    supabaseUserId: callerContext.supabaseUserId,
+    sessionToolCount: sessionTools.length,
+    sessionToolNames: sessionTools
+      .map((tool) => tool.function?.name?.trim())
+      .filter((toolName): toolName is string => Boolean(toolName)),
+    registeredCustomTools,
+    elapsedMs: Date.now() - toolLoadStartedAt,
+    totalElapsedMs: Date.now() - startedAt,
+  });
+
+  if (sessionTools.length === 0) {
+    throw new Error("Composio did not return any tools for this caller.");
+  }
+
+  const tools = mapSessionToolsToLiveKitTools(sessionTools, composio, session);
+  console.info("[whatsapp-agent] tool registration complete", {
+    supabaseUserId: callerContext.supabaseUserId,
+    registeredToolCount: Object.keys(tools).length,
+    registeredToolKeys: Object.keys(tools),
+    totalElapsedMs: Date.now() - startedAt,
+  });
+
+  return tools;
+}
+
+/**
+ * Converts session-native Composio tools into the LiveKit tool registry.
+ * @param sessionTools - OpenAI-style tool definitions returned by `session.tools()`
+ * @param composio - Composio SDK client used for meta-tool execution
+ * @param session - Composio session used to execute tool calls
+ * @returns LiveKit tool context keyed by the Composio tool name
+ */
+export function mapSessionToolsToLiveKitTools(
+  sessionTools: SessionToolDefinition[],
+  composio: Composio,
+  session: SessionLike
+): llmNamespace.ToolContext {
+  const toolEntries = sessionTools.map((tool) => {
+    const slug = tool.function?.name?.trim();
+    if (!slug) {
+      throw new Error("Composio returned a session tool without a function name.");
+    }
+
+    return [
+      slug,
+      llm.tool({
+        description: normalizeToolDescription(tool, slug),
+        parameters: normalizeParametersSchema(tool),
+        execute: async (rawArguments) => {
+          const result = isComposioMetaTool(slug)
+            ? await composio.tools.executeMetaTool(slug, {
+                sessionId: session.sessionId,
+                arguments: (rawArguments ?? {}) as Record<string, unknown>,
+              })
+            : await session.execute(
+                slug,
+                (rawArguments ?? {}) as Record<string, unknown>
+              );
+
+          return formatToolResult(slug, result);
+        },
+      }),
+    ] as const;
+  });
+
+  return Object.fromEntries(toolEntries) as llmNamespace.ToolContext;
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Returns the JSON schema for one session-native tool.
+ * @param tool - One OpenAI-style session tool definition
+ * @returns JSON schema compatible with LiveKit tools
+ */
+function normalizeParametersSchema(tool: SessionToolDefinition): Record<string, unknown> {
+  const candidate = tool.function?.parameters;
   if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
     return candidate as Record<string, unknown>;
   }
@@ -74,64 +234,55 @@ function normalizeParametersSchema(tool: RawToolDefinition): Record<string, unkn
   return {
     type: "object",
     properties: {},
-    additionalProperties: true
+    additionalProperties: true,
   };
 }
 
-function normalizeToolDescription(tool: RawToolDefinition, slug: string): string {
-  return tool.description?.trim() || `Execute the Composio tool ${slug}.`;
+/**
+ * Returns a safe fallback description for one session-native tool.
+ * @param tool - One OpenAI-style session tool definition
+ * @param slug - Composio tool slug
+ * @returns Final tool description for LiveKit
+ */
+function normalizeToolDescription(tool: SessionToolDefinition, slug: string): string {
+  return tool.function?.description?.trim() || `Execute the Composio tool ${slug}.`;
 }
 
-function toToolKey(slug: string): string {
-  return slug
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+/**
+ * Returns whether one session tool is a Composio meta tool.
+ * @param toolSlug - Tool slug exposed by Composio
+ * @returns True when the tool should execute through `executeMetaTool`
+ */
+function isComposioMetaTool(toolSlug: string): boolean {
+  return toolSlug.startsWith("COMPOSIO_");
 }
 
-function normalizeRawToolList(response: unknown): RawToolDefinition[] {
-  if (Array.isArray(response)) {
-    return response as RawToolDefinition[];
-  }
-
-  if (
-    response
-    && typeof response === "object"
-    && Array.isArray((response as RawToolListResponse).items)
-  ) {
-    return (response as RawToolListResponse).items as RawToolDefinition[];
-  }
-
-  return [];
-}
-
-function getNextCursor(response: unknown): string | null {
-  if (!response || typeof response !== "object") {
-    return null;
-  }
-
-  const nextCursor = (response as RawToolListResponse).nextCursor;
-  if (typeof nextCursor === "string" && nextCursor.trim()) {
-    return nextCursor.trim();
-  }
-
-  const snakeCaseCursor = (response as RawToolListResponse).next_cursor;
-  if (typeof snakeCaseCursor === "string" && snakeCaseCursor.trim()) {
-    return snakeCaseCursor.trim();
-  }
-
-  return null;
-}
-
+/**
+ * Returns one named email header value.
+ * @param message - Gmail message payload
+ * @param name - Target header name
+ * @returns Trimmed header value when present
+ */
 function extractHeader(message: GmailMessage, name: string): string | undefined {
   const target = name.toLowerCase();
   return message.payload?.headers?.find((header) => header.name?.toLowerCase() === target)?.value?.trim();
 }
 
+/**
+ * Compacts repeated whitespace into single spaces.
+ * @param value - Raw text value
+ * @returns Cleaned single-line text
+ */
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Truncates a string for spoken-friendly summaries.
+ * @param value - Raw text value
+ * @param maxLength - Maximum allowed string length
+ * @returns Truncated string
+ */
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;
@@ -140,6 +291,11 @@ function truncate(value: string, maxLength: number): string {
   return `${value.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+/**
+ * Maps one Gmail message into a smaller summary payload.
+ * @param message - Raw Gmail message payload
+ * @returns Simplified message summary
+ */
 function summarizeGmailMessage(message: GmailMessage): Record<string, unknown> {
   const subject = message.subject?.trim()
     || message.preview?.subject?.trim()
@@ -158,10 +314,15 @@ function summarizeGmailMessage(message: GmailMessage): Record<string, unknown> {
     receivedAt: message.messageTimestamp,
     unread: message.labelIds?.includes("UNREAD") ?? false,
     labels: (message.labelIds ?? []).filter((label) => label !== "UNREAD"),
-    url: message.display_url
+    url: message.display_url,
   };
 }
 
+/**
+ * Formats Gmail fetch results into a smaller JSON payload.
+ * @param result - Raw Composio execution result
+ * @returns Stringified JSON payload
+ */
 function formatGmailFetchResult(result: ToolExecutionResult): string {
   const data = result.data;
   if (!data || typeof data !== "object") {
@@ -181,12 +342,17 @@ function formatGmailFetchResult(result: ToolExecutionResult): string {
     resultSizeEstimate:
       typeof (data as { resultSizeEstimate?: unknown }).resultSizeEstimate === "number"
         ? (data as { resultSizeEstimate: number }).resultSizeEstimate
-        : messages.length
+        : messages.length,
   };
 
   return JSON.stringify(formatted);
 }
 
+/**
+ * Formats Gmail label results into a smaller JSON payload.
+ * @param result - Raw Composio execution result
+ * @returns Stringified JSON payload
+ */
 function formatGmailLabelResult(result: ToolExecutionResult): string {
   const data = result.data;
   if (!data || typeof data !== "object") {
@@ -197,13 +363,18 @@ function formatGmailLabelResult(result: ToolExecutionResult): string {
     ? (data as { labels: Array<{ id?: string; name?: string; type?: string }> }).labels.map((label) => ({
         id: label.id,
         name: label.name,
-        type: label.type
+        type: label.type,
       }))
     : [];
 
   return JSON.stringify({ labels });
 }
 
+/**
+ * Formats Gmail send results into a smaller JSON payload.
+ * @param result - Raw Composio execution result
+ * @returns Stringified JSON payload
+ */
 function formatGmailSendResult(result: ToolExecutionResult): string {
   const data = result.data;
   if (!data || typeof data !== "object") {
@@ -214,10 +385,16 @@ function formatGmailSendResult(result: ToolExecutionResult): string {
   return JSON.stringify({
     id: payload.id,
     threadId: payload.threadId,
-    labelIds: payload.labelIds
+    labelIds: payload.labelIds,
   });
 }
 
+/**
+ * Formats selected Composio tool results into smaller spoken-friendly payloads.
+ * @param toolSlug - Executed Composio tool slug
+ * @param result - Raw Composio execution result
+ * @returns Stringified result payload for the LLM
+ */
 function formatToolResult(toolSlug: string, result: ToolExecutionResult): string {
   if (result.error) {
     return JSON.stringify(result);
@@ -233,192 +410,4 @@ function formatToolResult(toolSlug: string, result: ToolExecutionResult): string
     default:
       return JSON.stringify(result.data ?? result);
   }
-}
-
-/**
- * Loads every raw tool definition for the caller's connected toolkits.
- * @param composio - Composio SDK client
- * @param toolkitSlugs - Connected toolkit slugs for the caller
- * @returns Raw tool definitions keyed by Composio slug
- */
-async function getRawToolsForConnectedToolkits(
-  composio: Composio,
-  toolkitSlugs: string[]
-): Promise<RawToolDefinition[]> {
-  const toolsBySlug = new Map<string, RawToolDefinition>();
-  let cursor: string | undefined;
-  let pageNumber = 0;
-
-  do {
-    pageNumber += 1;
-    const query: RawToolListQuery = {
-      toolkits: toolkitSlugs,
-      limit: TOOL_PAGE_LIMIT,
-    };
-    if (cursor) {
-      query.cursor = cursor;
-    }
-
-    const pageStartedAt = Date.now();
-    console.info("[whatsapp-agent] getRawComposioTools begin", {
-      pageNumber,
-      toolkitSlugs,
-      cursor: cursor ?? null,
-      limit: TOOL_PAGE_LIMIT,
-    });
-    const response = await composio.tools.getRawComposioTools(query);
-    const pageTools = normalizeRawToolList(response);
-    const nextCursor = getNextCursor(response);
-    console.info("[whatsapp-agent] getRawComposioTools complete", {
-      pageNumber,
-      toolkitSlugs,
-      toolCount: pageTools.length,
-      nextCursor,
-      responseKeys:
-        response && typeof response === "object"
-          ? Object.keys(response as unknown as Record<string, unknown>)
-          : [],
-      elapsedMs: Date.now() - pageStartedAt,
-    });
-
-    for (const tool of pageTools) {
-      const slug = tool.slug?.trim();
-      if (!slug) {
-        continue;
-      }
-
-      toolsBySlug.set(slug, tool);
-    }
-
-    cursor = nextCursor ?? undefined;
-  } while (cursor);
-
-  return Array.from(toolsBySlug.values());
-}
-
-/**
- * User-scoped Composio session returned by `composio.create`.
- * Used to execute tools on behalf of the WhatsApp caller.
- */
-export type ComposioUserSession = Awaited<ReturnType<Composio["create"]>>;
-
-/**
- * Creates a user-scoped Composio session for the caller.
- * The session is required for both tool registration and direct tool execution
- * (e.g. fetching greeting context such as unread email counts).
- * @param env - Agent environment config
- * @param callerContext - Resolved caller context with connected toolkit accounts
- * @returns Composio user session ready to execute tools
- */
-export async function createComposioSession(
-  env: AgentEnv,
-  callerContext: WhatsAppCallerContext
-): Promise<ComposioUserSession> {
-  const toolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
-  if (toolkitSlugs.length === 0) {
-    throw new Error("No connected Composio accounts were found for this caller.");
-  }
-
-  const startedAt = Date.now();
-  console.info("[whatsapp-agent] createComposioSession start", {
-    supabaseUserId: callerContext.supabaseUserId,
-    toolkitSlugs,
-  });
-
-  const composio = new Composio({
-    apiKey: env.composioApiKey
-  });
-  const session = await composio.create(callerContext.supabaseUserId, {
-    connectedAccounts: callerContext.connectedAccountsByToolkit,
-    toolkits: toolkitSlugs,
-    manageConnections: false
-  });
-  console.info("[whatsapp-agent] createComposioSession complete", {
-    supabaseUserId: callerContext.supabaseUserId,
-    toolkitSlugs,
-    hasSession: Boolean(session),
-    elapsedMs: Date.now() - startedAt,
-  });
-
-  return session;
-}
-
-/**
- * Wraps the caller's Composio tools as LiveKit LLM tools.
- * Reuses the supplied user session so we do not re-authenticate per tool batch.
- * @param env - Agent environment config
- * @param callerContext - Resolved caller context with connected toolkit accounts
- * @param session - Active Composio user session created by `createComposioSession`
- * @returns LiveKit-compatible tool context for the LLM
- */
-export async function createComposioTools(
-  env: AgentEnv,
-  callerContext: WhatsAppCallerContext,
-  session: ComposioUserSession
-): Promise<llmNamespace.ToolContext> {
-  const startedAt = Date.now();
-  const toolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
-  if (toolkitSlugs.length === 0) {
-    throw new Error("No connected Composio accounts were found for this caller.");
-  }
-  console.info("[whatsapp-agent] createComposioTools start", {
-    supabaseUserId: callerContext.supabaseUserId,
-    toolkitSlugs,
-  });
-
-  // The Composio client is only needed here for raw tool discovery. The
-  // user-scoped session passed in handles all tool execution below.
-  const composio = new Composio({
-    apiKey: env.composioApiKey
-  });
-
-  const discoveryStartedAt = Date.now();
-  const rawTools = await getRawToolsForConnectedToolkits(composio, toolkitSlugs);
-  console.info("[whatsapp-agent] raw tool discovery complete", {
-    supabaseUserId: callerContext.supabaseUserId,
-    toolkitSlugs,
-    rawToolCount: rawTools.length,
-    rawToolSlugs: rawTools.map((tool) => tool.slug).filter(Boolean),
-    elapsedMs: Date.now() - discoveryStartedAt,
-    totalElapsedMs: Date.now() - startedAt,
-  });
-
-  if (rawTools.length === 0) {
-    throw new Error("No Composio tools are available for the caller's connected apps.");
-  }
-
-  const tools = await Promise.all(
-    rawTools.map(async (rawTool) => {
-      const slug = rawTool.slug?.trim();
-      if (!slug) {
-        throw new Error("Composio returned a tool without a slug.");
-      }
-
-      const parameters = normalizeParametersSchema(rawTool);
-
-      return [
-        toToolKey(slug),
-        llm.tool({
-          description: normalizeToolDescription(rawTool, slug),
-          parameters,
-          execute: async (rawArguments) => {
-            const result = await session.execute(
-              slug,
-              (rawArguments ?? {}) as Record<string, unknown>
-            ) as ToolExecutionResult;
-
-            return formatToolResult(slug, result);
-          }
-        })
-      ] as const;
-    })
-  );
-  console.info("[whatsapp-agent] tool registration complete", {
-    supabaseUserId: callerContext.supabaseUserId,
-    registeredToolCount: tools.length,
-    registeredToolKeys: tools.map(([toolKey]) => toolKey),
-    totalElapsedMs: Date.now() - startedAt,
-  });
-
-  return Object.fromEntries(tools) as llmNamespace.ToolContext;
 }

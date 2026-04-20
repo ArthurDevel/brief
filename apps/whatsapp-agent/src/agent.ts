@@ -9,6 +9,7 @@ import {
   voice
 } from "@livekit/agents";
 import { getEnv } from "./lib/env.js";
+import { buildAssistantInstructions } from "./lib/assistantInstructions.js";
 import {
   createComposioSession,
   createComposioTools,
@@ -107,6 +108,8 @@ async function buildAssistant(
   const startedAt = Date.now();
   console.info("[whatsapp-agent] buildAssistant start", {
     supabaseUserId: callerContext.supabaseUserId,
+    toolkitCount: Object.keys(callerContext.connectedAccountsByToolkit).length,
+    hasConnectionGuidanceMessage: Boolean(callerContext.connectionGuidanceMessage),
   });
 
   const tools = await createComposioTools(env, callerContext, composioSession);
@@ -236,8 +239,12 @@ async function entry(ctx: JobContext): Promise<void> {
       lastCallDateTime: lastCallEndedAt?.toISOString() ?? null,
     };
 
+    const baseInstructions = buildAssistantInstructions(
+      env.livekitAgentInstructions,
+      callerContext
+    );
     const instructions = buildSystemPrompt({
-      baseInstructions: env.livekitAgentInstructions,
+      baseInstructions,
       memoryEntries,
       sessionContext,
       emailContext,

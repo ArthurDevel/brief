@@ -40,6 +40,7 @@ interface ComposioConnectedAccountRow {
 
 export interface WhatsAppCallerContext {
   callerPhone: string;
+  connectionGuidanceMessage: string | null;
   connectedAccountsByToolkit: Record<string, string>;
   supabaseUserId: string;
   voiceConfig: WhatsAppVoiceConfig;
@@ -133,12 +134,9 @@ export async function resolveWhatsAppCallerContext(
     totalElapsedMs: Date.now() - startedAt,
   });
 
-  if (Object.keys(connectedAccountsByToolkit).length === 0) {
-    throw new Error(buildMissingConnectionsMessage(connections));
-  }
-
   return {
     callerPhone: metadata.caller,
+    connectionGuidanceMessage: buildConnectionGuidanceMessage(connections),
     connectedAccountsByToolkit,
     supabaseUserId: userId,
     voiceConfig,
@@ -199,13 +197,17 @@ function buildConnectedAccountsByToolkit(
 }
 
 /**
- * Returns the spoken error message when no usable Composio connection exists.
+ * Returns the spoken guidance when the caller still needs to connect or reconnect apps.
  * @param connections - Existing connection rows, if any
- * @returns Spoken guidance for the caller
+ * @returns Spoken guidance for the caller, or null when no extra guidance is needed
  */
-function buildMissingConnectionsMessage(
+function buildConnectionGuidanceMessage(
   connections: ComposioConnectedAccountRow[]
-): string {
+): string | null {
+  if (connections.some((connection) => connection.status === "ACTIVE")) {
+    return null;
+  }
+
   if (connections.some((connection) => connection.status === "EXPIRED" || connection.status === "INACTIVE")) {
     return "One of your connected apps needs to be reconnected. Send authenticate overview in WhatsApp and try again.";
   }
