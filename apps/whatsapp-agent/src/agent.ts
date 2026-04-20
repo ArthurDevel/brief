@@ -10,21 +10,71 @@ import {
 } from "@livekit/agents";
 import { getEnv } from "./lib/env.js";
 import { createComposioTools } from "./lib/composio.js";
-import { resolveWhatsAppCallerContext } from "./lib/whatsappRuntime.js";
+import {
+  resolveWhatsAppCallerContext,
+  type WhatsAppCallerContext
+} from "./lib/whatsappRuntime.js";
+import {
+  createWhatsAppSession,
+  finalizeWhatsAppSession
+} from "./lib/sessionStore.js";
+import { notifyWhatsAppEndOfSession } from "./lib/webApp.js";
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const KNOWN_STT_REJECTION_MESSAGE_PREFIX = "failed to recognize speech after";
+const KNOWN_STT_REJECTION_STACK_FRAGMENT = "SpeechStream.mainTask";
+
+// ============================================================================
+// MAIN ENTRYPOINT HELPERS
+// ============================================================================
+
+/**
+ * Registers a narrow unhandled-rejection guard for the known LiveKit STT shutdown bug.
+ * @returns Void
+ */
+function registerUnhandledRejectionHandler(): void {
+  process.on("unhandledRejection", (reason: unknown) => {
+    if (isIgnorableSttShutdownRejection(reason)) {
+      console.warn("[whatsapp-agent] ignoring known STT shutdown rejection", {
+        error: reason instanceof Error ? reason.message : String(reason),
+      });
+      return;
+    }
+
+    setImmediate(() => {
+      throw reason instanceof Error ? reason : new Error(String(reason));
+    });
+  });
+}
+
+/**
+ * Returns true when the rejection matches the known LiveKit STT shutdown error.
+ * @param reason - Unhandled rejection reason from Node.js
+ * @returns True when the rejection is safe to ignore
+ */
+function isIgnorableSttShutdownRejection(reason: unknown): boolean {
+  if (!(reason instanceof Error)) {
+    return false;
+  }
+
+  const hasKnownMessage = reason.message.startsWith(KNOWN_STT_REJECTION_MESSAGE_PREFIX);
+  const hasKnownStack =
+    typeof reason.stack === "string" && reason.stack.includes(KNOWN_STT_REJECTION_STACK_FRAGMENT);
+
+  return hasKnownMessage && hasKnownStack;
+}
 
 const env = getEnv();
 
-async function buildAssistant(participantMetadata: string): Promise<voice.Agent> {
+registerUnhandledRejectionHandler();
+
+async function buildAssistant(callerContext: WhatsAppCallerContext): Promise<voice.Agent> {
   const startedAt = Date.now();
   console.info("[whatsapp-agent] buildAssistant start", {
-    participantMetadataLength: participantMetadata.length,
-  });
-
-  const callerContext = await resolveWhatsAppCallerContext(env, participantMetadata);
-  console.info("[whatsapp-agent] caller context resolved", {
     supabaseUserId: callerContext.supabaseUserId,
-    toolkitCount: Object.keys(callerContext.connectedAccountsByToolkit).length,
-    elapsedMs: Date.now() - startedAt,
   });
 
   const tools = await createComposioTools(env, callerContext);
@@ -57,9 +107,37 @@ async function entry(ctx: JobContext): Promise<void> {
 
   let agent: voice.Agent;
   let greeting = env.livekitAgentGreeting;
+  let callerContext: WhatsAppCallerContext | null = null;
+  let appSessionId: string | null = null;
+  const sessionStartedAt = new Date();
 
   try {
-    agent = await buildAssistant(participant.metadata);
+    callerContext = await resolveWhatsAppCallerContext(env, participant.metadata);
+    console.info("[whatsapp-agent] caller context resolved", {
+      supabaseUserId: callerContext.supabaseUserId,
+      toolkitCount: Object.keys(callerContext.connectedAccountsByToolkit).length,
+      elapsedMs: Date.now() - startedAt,
+    });
+
+    try {
+      appSessionId = await createWhatsAppSession(
+        env,
+        callerContext.supabaseUserId,
+        sessionStartedAt
+      );
+      console.info("[whatsapp-agent] session row created", {
+        sessionId: appSessionId,
+        supabaseUserId: callerContext.supabaseUserId,
+        elapsedMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      console.error("[whatsapp-agent] failed to create session row", {
+        supabaseUserId: callerContext.supabaseUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    agent = await buildAssistant(callerContext);
   } catch (error) {
     const message = error instanceof Error
       ? error.message
@@ -109,10 +187,42 @@ async function entry(ctx: JobContext): Promise<void> {
     elapsedMs: Date.now() - startedAt,
   });
 
-  await closed;
-  console.info("[whatsapp-agent] session closed", {
-    elapsedMs: Date.now() - startedAt,
-  });
+  try {
+    await closed;
+    console.info("[whatsapp-agent] session closed", {
+      elapsedMs: Date.now() - startedAt,
+    });
+  } finally {
+    if (appSessionId) {
+      const sessionEndedAt = new Date();
+
+      try {
+        await finalizeWhatsAppSession(
+          env,
+          appSessionId,
+          session,
+          sessionStartedAt,
+          sessionEndedAt
+        );
+        console.info("[whatsapp-agent] session row finalized", {
+          sessionId: appSessionId,
+          elapsedMs: Date.now() - startedAt,
+        });
+
+        void notifyWhatsAppEndOfSession(env, appSessionId).catch((error) => {
+          console.error("[whatsapp-agent] whatsapp-end-of-session callback failed", {
+            sessionId: appSessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      } catch (error) {
+        console.error("[whatsapp-agent] failed to finalize session row", {
+          sessionId: appSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
 }
 
 const worker = defineAgent({

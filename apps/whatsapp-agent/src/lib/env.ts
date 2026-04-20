@@ -22,6 +22,8 @@ export interface AgentEnv {
   livekitSttModel: string;
   livekitLlmModel: string;
   livekitTtsModel: string;
+  webAppUrl: string;
+  internalApiKey: string;
 }
 
 let cachedEnv: AgentEnv | null = null;
@@ -52,7 +54,9 @@ export function getEnv(): AgentEnv {
     livekitLlmModel: process.env.LIVEKIT_LLM_MODEL?.trim() || "openai/gpt-4.1-mini",
     livekitTtsModel:
       process.env.LIVEKIT_TTS_MODEL?.trim() ||
-      "cartesia/sonic-3:794f9389-aac1-45b6-b726-9d9369183238"
+      "cartesia/sonic-3:794f9389-aac1-45b6-b726-9d9369183238",
+    webAppUrl: requireEnv("WEB_APP_URL"),
+    internalApiKey: requireEnv("INTERNAL_API_KEY"),
   };
 
   return cachedEnv;
