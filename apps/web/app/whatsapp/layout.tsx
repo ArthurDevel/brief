@@ -36,7 +36,7 @@ export default async function WhatsAppLayout({ children }: { children: React.Rea
             <div className="mt-1 text-[22px] font-semibold">WhatsApp Dashboard</div>
           </div>
 
-          <nav className="flex items-center gap-2">
+          <nav className="flex flex-wrap items-center justify-end gap-2">
             <Link
               href="/whatsapp"
               className="border border-[var(--border-color)] px-3 py-2 text-[13px] font-medium hover:border-[var(--text-primary)]"
@@ -54,6 +54,12 @@ export default async function WhatsAppLayout({ children }: { children: React.Rea
               className="border border-[var(--border-color)] px-3 py-2 text-[13px] font-medium hover:border-[var(--text-primary)]"
             >
               Overview
+            </Link>
+            <Link
+              href="/whatsapp/settings/voice"
+              className="border border-[var(--border-color)] px-3 py-2 text-[13px] font-medium hover:border-[var(--text-primary)]"
+            >
+              Voice
             </Link>
             {connectorDefinitions.map((definition) => (
               <Link

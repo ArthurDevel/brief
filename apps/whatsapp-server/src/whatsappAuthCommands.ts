@@ -18,6 +18,7 @@ const GOOGLE_CALENDAR_CONNECT_TEMPLATE_NAME = "composio_connect_google_calendar"
 const NOTION_CONNECT_TEMPLATE_NAME = "composio_connect_notion";
 const OUTLOOK_CONNECT_TEMPLATE_NAME = "composio_connect_outlook";
 const CONNECTOR_OVERVIEW_TEMPLATE_NAME = "composio_connector_overview";
+const VOICE_SETTINGS_TEMPLATE_NAME = "voice_settings";
 
 export interface WhatsAppAuthMessageConfig {
   accessToken: string;
@@ -73,6 +74,15 @@ export function isAuthenticateOutlookCommand(messageBody: string): boolean {
  */
 export function isAuthenticateOverviewCommand(messageBody: string): boolean {
   return messageBody.trim().toLowerCase() === "authenticate overview";
+}
+
+/**
+ * Returns true when an inbound message should open the WhatsApp voice settings page.
+ * @param messageBody - Raw inbound text message body
+ * @returns Whether the message is the supported voice settings command
+ */
+export function isVoiceSettingsCommand(messageBody: string): boolean {
+  return messageBody.trim().toLowerCase() === "voice settings";
 }
 
 /**
@@ -157,6 +167,21 @@ export function buildWhatsAppConnectorOverviewUrl(
   phone: string
 ): string {
   const url = new URL("/whatsapp/connectors/overview", webBaseUrl);
+  url.searchParams.set("phone", phone);
+  return url.toString();
+}
+
+/**
+ * Builds the WhatsApp voice settings URL that keeps users inside the auth shell.
+ * @param webBaseUrl - Public base URL of the web app
+ * @param phone - Normalized WhatsApp phone number
+ * @returns Full URL to the WhatsApp voice settings page
+ */
+export function buildWhatsAppVoiceSettingsUrl(
+  webBaseUrl: string,
+  phone: string
+): string {
+  const url = new URL("/whatsapp/settings/voice", webBaseUrl);
   url.searchParams.set("phone", phone);
   return url.toString();
 }
@@ -270,6 +295,25 @@ export async function sendWhatsAppOverviewMessage(
     config,
     phone,
     CONNECTOR_OVERVIEW_TEMPLATE_NAME,
+    phoneUrlVariable
+  );
+}
+
+/**
+ * Sends the approved WhatsApp voice settings utility template.
+ * @param config - WhatsApp config
+ * @param phone - Normalized E.164 phone number
+ * @returns Promise that resolves when the message is accepted by the Graph API
+ */
+export async function sendWhatsAppVoiceSettingsMessage(
+  config: WhatsAppAuthMessageConfig,
+  phone: string
+): Promise<void> {
+  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
+  await sendWhatsAppUtilityTemplateMessage(
+    config,
+    phone,
+    VOICE_SETTINGS_TEMPLATE_NAME,
     phoneUrlVariable
   );
 }

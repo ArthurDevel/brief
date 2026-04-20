@@ -5,17 +5,20 @@ import {
   buildWhatsAppGoogleCalendarConnectorUrl,
   buildWhatsAppNotionConnectorUrl,
   buildWhatsAppOutlookConnectorUrl,
+  buildWhatsAppVoiceSettingsUrl,
   isAuthenticateGmailCommand,
   isAuthenticateGoogleCalendarCommand,
   isAuthenticateNotionCommand,
   isAuthenticateOutlookCommand,
   isAuthenticateOverviewCommand,
+  isVoiceSettingsCommand,
   normalizeWhatsAppCallerPhone,
   sendWhatsAppGmailConnectMessage,
   sendWhatsAppGoogleCalendarConnectMessage,
   sendWhatsAppNotionConnectMessage,
   sendWhatsAppOutlookConnectMessage,
   sendWhatsAppOverviewMessage,
+  sendWhatsAppVoiceSettingsMessage,
 } from "../whatsappAuthCommands.js";
 
 const TEST_MESSAGE_CONFIG = {
@@ -79,6 +82,16 @@ describe("isAuthenticateOutlookCommand", () => {
   });
 });
 
+describe("isVoiceSettingsCommand", () => {
+  it("matches the hardcoded voice settings command", () => {
+    expect(isVoiceSettingsCommand(" voice settings ")).toBe(true);
+  });
+
+  it("rejects other messages", () => {
+    expect(isVoiceSettingsCommand("authenticate overview")).toBe(false);
+  });
+});
+
 describe("normalizeWhatsAppCallerPhone", () => {
   it("normalizes digit-only whatsapp senders to E.164", () => {
     expect(normalizeWhatsAppCallerPhone("15551234567")).toBe("+15551234567");
@@ -126,6 +139,14 @@ describe("buildWhatsAppOutlookConnectorUrl", () => {
     expect(
       buildWhatsAppOutlookConnectorUrl("https://app.example.com", "+15551234567")
     ).toBe("https://app.example.com/whatsapp/connectors/outlook?phone=%2B15551234567");
+  });
+});
+
+describe("buildWhatsAppVoiceSettingsUrl", () => {
+  it("builds the whatsapp voice settings deep link", () => {
+    expect(
+      buildWhatsAppVoiceSettingsUrl("https://app.example.com", "+15551234567")
+    ).toBe("https://app.example.com/whatsapp/settings/voice?phone=%2B15551234567");
   });
 });
 
@@ -308,6 +329,46 @@ describe("sendWhatsAppOverviewMessage", () => {
           type: "template",
           template: {
             name: "composio_connector_overview",
+            language: { code: "en" },
+            components: [
+              {
+                type: "button",
+                sub_type: "url",
+                index: "0",
+                parameters: [
+                  {
+                    type: "text",
+                    text: "%2B15551234567",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      })
+    );
+  });
+});
+
+describe("sendWhatsAppVoiceSettingsMessage", () => {
+  it("sends the approved voice settings utility template with the encoded phone variable", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendWhatsAppVoiceSettingsMessage(TEST_MESSAGE_CONFIG, "+15551234567");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v23.0/123456789/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: "15551234567",
+          type: "template",
+          template: {
+            name: "voice_settings",
             language: { code: "en" },
             components: [
               {

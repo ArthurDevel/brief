@@ -19,9 +19,9 @@ export interface AgentEnv {
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
   composioApiKey: string;
+  deepgramApiKey: string;
   livekitSttModel: string;
   livekitLlmModel: string;
-  livekitTtsModel: string;
   webAppUrl: string;
   internalApiKey: string;
 }
@@ -50,11 +50,9 @@ export function getEnv(): AgentEnv {
     supabaseUrl: requireEnv("NEXT_PUBLIC_SUPABASE_URL"),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
     composioApiKey: requireEnv("COMPOSIO_API_KEY"),
+    deepgramApiKey: requireEnv("DEEPGRAM_API_KEY"),
     livekitSttModel: process.env.LIVEKIT_STT_MODEL?.trim() || "deepgram/nova-3:en",
     livekitLlmModel: process.env.LIVEKIT_LLM_MODEL?.trim() || "openai/gpt-4.1-mini",
-    livekitTtsModel:
-      process.env.LIVEKIT_TTS_MODEL?.trim() ||
-      "cartesia/sonic-3:794f9389-aac1-45b6-b726-9d9369183238",
     webAppUrl: requireEnv("WEB_APP_URL"),
     internalApiKey: requireEnv("INTERNAL_API_KEY"),
   };

@@ -10,6 +10,10 @@
 import { Composio } from "@composio/core";
 import { createClient } from "@supabase/supabase-js";
 import type { AgentEnv } from "./env.js";
+import {
+  parseStoredWhatsAppVoiceConfig,
+  type WhatsAppVoiceConfig,
+} from "./whatsappVoice.js";
 
 // ============================================================================
 // TYPES
@@ -21,6 +25,7 @@ interface WhatsAppParticipantMetadata {
 
 interface CallerLookupRow {
   user_id: string;
+  whatsapp_voice_config: unknown | null;
 }
 
 interface ComposioConnectedAccountRow {
@@ -37,6 +42,7 @@ export interface WhatsAppCallerContext {
   callerPhone: string;
   connectedAccountsByToolkit: Record<string, string>;
   supabaseUserId: string;
+  voiceConfig: WhatsAppVoiceConfig;
 }
 
 // ============================================================================
@@ -77,7 +83,7 @@ export async function resolveWhatsAppCallerContext(
   const callerLookupStartedAt = Date.now();
   const { data: callerRow, error: callerError } = await supabase
     .from("user_settings")
-    .select("user_id")
+    .select("user_id, whatsapp_voice_config")
     .eq("whatsapp_phone", metadata.caller)
     .maybeSingle();
   console.info("[whatsapp-agent] user_settings lookup complete", {
@@ -96,6 +102,9 @@ export async function resolveWhatsAppCallerContext(
   }
 
   const userId = (callerRow as CallerLookupRow).user_id;
+  const voiceConfig = parseStoredWhatsAppVoiceConfig(
+    (callerRow as CallerLookupRow).whatsapp_voice_config
+  );
   const composio = createComposioClient(env);
   const connectionsLookupStartedAt = Date.now();
   const connectionResponse = await composio.connectedAccounts.list({
@@ -132,6 +141,7 @@ export async function resolveWhatsAppCallerContext(
     callerPhone: metadata.caller,
     connectedAccountsByToolkit,
     supabaseUserId: userId,
+    voiceConfig,
   };
 }
 

@@ -19,6 +19,13 @@ import {
   finalizeWhatsAppSession
 } from "./lib/sessionStore.js";
 import { notifyWhatsAppEndOfSession } from "./lib/webApp.js";
+import {
+  createWhatsAppTts,
+  getDefaultWhatsAppVoiceConfig,
+  type WhatsAppVoiceConfig,
+} from "./lib/whatsappVoice.js";
+
+const env = getEnv();
 
 // ============================================================================
 // CONSTANTS
@@ -67,11 +74,14 @@ function isIgnorableSttShutdownRejection(reason: unknown): boolean {
   return hasKnownMessage && hasKnownStack;
 }
 
-const env = getEnv();
-
 registerUnhandledRejectionHandler();
 
-async function buildAssistant(callerContext: WhatsAppCallerContext): Promise<voice.Agent> {
+interface BuiltAssistant {
+  agent: voice.Agent;
+  voiceConfig: WhatsAppVoiceConfig;
+}
+
+async function buildAssistant(callerContext: WhatsAppCallerContext): Promise<BuiltAssistant> {
   const startedAt = Date.now();
   console.info("[whatsapp-agent] buildAssistant start", {
     supabaseUserId: callerContext.supabaseUserId,
@@ -83,10 +93,13 @@ async function buildAssistant(callerContext: WhatsAppCallerContext): Promise<voi
     elapsedMs: Date.now() - startedAt,
   });
 
-  return new voice.Agent({
-    instructions: env.livekitAgentInstructions,
-    tools
-  });
+  return {
+    agent: new voice.Agent({
+      instructions: env.livekitAgentInstructions,
+      tools
+    }),
+    voiceConfig: callerContext.voiceConfig
+  };
 }
 
 async function entry(ctx: JobContext): Promise<void> {
@@ -110,6 +123,7 @@ async function entry(ctx: JobContext): Promise<void> {
   let callerContext: WhatsAppCallerContext | null = null;
   let appSessionId: string | null = null;
   const sessionStartedAt = new Date();
+  let voiceConfig = getDefaultWhatsAppVoiceConfig();
 
   try {
     callerContext = await resolveWhatsAppCallerContext(env, participant.metadata);
@@ -137,7 +151,9 @@ async function entry(ctx: JobContext): Promise<void> {
       });
     }
 
-    agent = await buildAssistant(callerContext);
+    const builtAssistant = await buildAssistant(callerContext);
+    agent = builtAssistant.agent;
+    voiceConfig = builtAssistant.voiceConfig;
   } catch (error) {
     const message = error instanceof Error
       ? error.message
@@ -158,7 +174,7 @@ async function entry(ctx: JobContext): Promise<void> {
   const session = new voice.AgentSession({
     stt: env.livekitSttModel,
     llm: env.livekitLlmModel,
-    tts: env.livekitTtsModel
+    tts: createWhatsAppTts(env.deepgramApiKey, voiceConfig)
   });
 
   const closed = new Promise<void>((resolve) => {

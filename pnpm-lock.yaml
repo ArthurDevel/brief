@@ -111,6 +111,12 @@ importers:
       '@livekit/agents':
         specifier: 1.2.7
         version: 1.2.7(@livekit/rtc-node@0.13.25)(typescript@5.9.3)(zod@3.25.76)
+      '@livekit/agents-plugin-deepgram':
+        specifier: 1.2.7
+        version: 1.2.7(@livekit/agents@1.2.7(@livekit/rtc-node@0.13.25)(typescript@5.9.3)(zod@3.25.76))(@livekit/rtc-node@0.13.25)
+      '@livekit/rtc-node':
+        specifier: 0.13.25
+        version: 0.13.25
       '@supabase/supabase-js':
         specifier: ^2.49.1
         version: 2.99.1
@@ -678,6 +684,12 @@ packages:
 
   '@leichtgewicht/ip-codec@2.0.5':
     resolution: {integrity: sha512-Vo+PSpZG2/fmgmiNzYK9qWRh8h/CHrwD0mo1h1DzL4yzHNSfWYujGTYsWGreD000gcgmZ7K4Ys6Tx9TxtsKdDw==}
+
+  '@livekit/agents-plugin-deepgram@1.2.7':
+    resolution: {integrity: sha512-MCvEzkeTvBuQUom6wNLdqZ5JeU2h5T/5t7tHwMga/vtWu20R7DbcKvORfxNQZ2TJIuEQ4OPOhtwIt1EDYmgzQw==}
+    peerDependencies:
+      '@livekit/agents': 1.2.7
+      '@livekit/rtc-node': ^0.13.25
 
   '@livekit/agents@1.2.7':
     resolution: {integrity: sha512-vCoTMFhGRw69vCgEsuqlwpEEfd1yax4RDoZ9gAXs8fq3K3PB+MXxFwMU8eQQXzwGNTEMMqAaIK6qxTd7kGhFWg==}
@@ -3470,6 +3482,15 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.5
 
   '@leichtgewicht/ip-codec@2.0.5': {}
+
+  '@livekit/agents-plugin-deepgram@1.2.7(@livekit/agents@1.2.7(@livekit/rtc-node@0.13.25)(typescript@5.9.3)(zod@3.25.76))(@livekit/rtc-node@0.13.25)':
+    dependencies:
+      '@livekit/agents': 1.2.7(@livekit/rtc-node@0.13.25)(typescript@5.9.3)(zod@3.25.76)
+      '@livekit/rtc-node': 0.13.25
+      ws: 8.19.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   '@livekit/agents@1.2.7(@livekit/rtc-node@0.13.25)(typescript@5.9.3)(zod@3.25.76)':
     dependencies:

@@ -11,6 +11,8 @@
   "dependencies": {
     "@composio/core": "^0.6.10",
     "@livekit/agents": "1.2.7",
+    "@livekit/agents-plugin-deepgram": "1.2.7",
+    "@livekit/rtc-node": "0.13.25",
     "@supabase/supabase-js": "^2.49.1",
     "dotenv": "^16.4.7",
     "zod": "^3.24.2"

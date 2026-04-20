@@ -14,12 +14,14 @@ import {
   isAuthenticateNotionCommand,
   isAuthenticateOutlookCommand,
   isAuthenticateOverviewCommand,
+  isVoiceSettingsCommand,
   normalizeWhatsAppCallerPhone,
   sendWhatsAppGmailConnectMessage,
   sendWhatsAppGoogleCalendarConnectMessage,
   sendWhatsAppNotionConnectMessage,
   sendWhatsAppOutlookConnectMessage,
   sendWhatsAppOverviewMessage,
+  sendWhatsAppVoiceSettingsMessage,
 } from "./whatsappAuthCommands.js";
 
 interface WhatsAppCallSession {
@@ -401,7 +403,8 @@ export class WhatsAppBot {
       isAuthenticateGoogleCalendarCommand(body) ||
       isAuthenticateNotionCommand(body) ||
       isAuthenticateOutlookCommand(body) ||
-      isAuthenticateOverviewCommand(body)
+      isAuthenticateOverviewCommand(body) ||
+      isVoiceSettingsCommand(body)
     ) {
       if (!normalizedPhone) {
         console.warn("[whatsapp-server] could not normalize sender phone for auth command", {
@@ -436,6 +439,11 @@ export class WhatsAppBot {
 
       if (isAuthenticateOutlookCommand(body)) {
         await sendWhatsAppOutlookConnectMessage(messageConfig, normalizedPhone);
+        return true;
+      }
+
+      if (isVoiceSettingsCommand(body)) {
+        await sendWhatsAppVoiceSettingsMessage(messageConfig, normalizedPhone);
         return true;
       }
 
