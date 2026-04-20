@@ -5,9 +5,11 @@ import { LiveKitRoomManager } from "./roomManager.js";
 import {
   getWhatsAppAuthMessageConfig,
   isAuthenticateGmailCommand,
+  isAuthenticateNotionCommand,
   isAuthenticateOverviewCommand,
   normalizeWhatsAppCallerPhone,
   sendWhatsAppGmailConnectMessage,
+  sendWhatsAppNotionConnectMessage,
   sendWhatsAppOverviewMessage,
 } from "./whatsappAuthCommands.js";
 
@@ -236,7 +238,11 @@ export class WhatsAppCallBot {
     }
 
     const normalizedPhone = normalizeWhatsAppCallerPhone(from);
-    if (isAuthenticateGmailCommand(body) || isAuthenticateOverviewCommand(body)) {
+    if (
+      isAuthenticateGmailCommand(body) ||
+      isAuthenticateNotionCommand(body) ||
+      isAuthenticateOverviewCommand(body)
+    ) {
       if (!normalizedPhone) {
         console.warn("[whatsapp-server] could not normalize sender phone for auth command", {
           rawPhone: from,
@@ -255,6 +261,11 @@ export class WhatsAppCallBot {
 
       if (isAuthenticateGmailCommand(body)) {
         await sendWhatsAppGmailConnectMessage(messageConfig, normalizedPhone);
+        return;
+      }
+
+      if (isAuthenticateNotionCommand(body)) {
+        await sendWhatsAppNotionConnectMessage(messageConfig, normalizedPhone);
         return;
       }
 

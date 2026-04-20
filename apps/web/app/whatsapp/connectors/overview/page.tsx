@@ -12,6 +12,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/client";
 import { listUserComposioConnections } from "@/lib/composio-connections";
 import type { ComposioConnectionSummary } from "@/lib/types";
 import { getWhatsAppProfile } from "@/lib/whatsapp-auth";
+import { getWhatsAppConnectorLabel } from "../connectorDefinitions";
 
 // ============================================================================
 // MAIN ENTRYPOINT
@@ -134,7 +135,9 @@ function ConnectorSummaryCard(props: {
     <div className="border border-[var(--border-color)] px-4 py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-[16px] font-semibold">{getToolkitLabel(props.connection.toolkit)}</div>
+          <div className="text-[16px] font-semibold">
+            {getWhatsAppConnectorLabel(props.connection.toolkit)}
+          </div>
           <div className="mt-1 text-[13px] text-[var(--text-secondary)]">
             Toolkit: {props.connection.toolkit}
           </div>
@@ -183,19 +186,6 @@ function ConnectorSummaryCard(props: {
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
-
-/**
- * Returns a readable label for the toolkit slug.
- * @param toolkit - Raw toolkit slug from the database
- * @returns Human-readable toolkit label
- */
-function getToolkitLabel(toolkit: string): string {
-  if (toolkit === "gmail") {
-    return "Gmail";
-  }
-
-  return toolkit.charAt(0).toUpperCase() + toolkit.slice(1);
-}
 
 /**
  * Returns a readable label for a connector status.

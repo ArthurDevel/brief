@@ -128,8 +128,8 @@ export interface CustomEmailAccountInput {
 
 /**
  * Summary of a user's saved Composio toolkit connection.
- * Used by the WhatsApp Gmail connector flow.
- * @param toolkit - Toolkit slug, currently "gmail"
+ * Used by the WhatsApp connector flows.
+ * @param toolkit - Toolkit slug, for example "gmail" or "notion"
  * @param provider - Connection provider, currently always "composio"
  * @param connectedAccountId - Saved Composio connected account ID
  * @param status - Current connection status

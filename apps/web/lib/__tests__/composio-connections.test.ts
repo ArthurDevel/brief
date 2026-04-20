@@ -104,5 +104,5 @@ function createListSupabaseMock(
         },
       };
     },
-  } as Parameters<typeof listUserComposioConnections>[0];
+  } as unknown as Parameters<typeof listUserComposioConnections>[0];
 }

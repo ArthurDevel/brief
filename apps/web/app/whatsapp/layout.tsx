@@ -4,8 +4,10 @@ import { createServerSupabaseClient } from "@/lib/supabase/client";
 import { getWhatsAppProfile, sanitizeWhatsAppRedirectPath } from "@/lib/whatsapp-auth";
 import WhatsAppAuthShell from "./_components/WhatsAppAuthShell";
 import WhatsAppSignOutButton from "./_components/WhatsAppSignOutButton";
+import { listWhatsAppConnectorDefinitions } from "./connectors/connectorDefinitions";
 
 export default async function WhatsAppLayout({ children }: { children: React.ReactNode }) {
+  const connectorDefinitions = listWhatsAppConnectorDefinitions();
   const cookieStore = await cookies();
   const headerStore = await headers();
   const supabase = createServerSupabaseClient(cookieStore);
@@ -53,12 +55,15 @@ export default async function WhatsAppLayout({ children }: { children: React.Rea
             >
               Overview
             </Link>
-            <Link
-              href="/whatsapp/connectors/gmail"
-              className="border border-[var(--border-color)] px-3 py-2 text-[13px] font-medium hover:border-[var(--text-primary)]"
-            >
-              Gmail
-            </Link>
+            {connectorDefinitions.map((definition) => (
+              <Link
+                key={definition.toolkit}
+                href={`/whatsapp/connectors/${definition.routeSegment}`}
+                className="border border-[var(--border-color)] px-3 py-2 text-[13px] font-medium hover:border-[var(--text-primary)]"
+              >
+                {definition.label}
+              </Link>
+            ))}
             <WhatsAppSignOutButton />
           </nav>
         </div>

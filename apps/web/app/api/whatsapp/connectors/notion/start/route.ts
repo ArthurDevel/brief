@@ -1,10 +1,10 @@
 /**
- * Starts the WhatsApp-scoped Gmail connection flow.
+ * Starts the WhatsApp-scoped Notion connection flow.
  *
  * Responsibilities:
  * - Require an authenticated WhatsApp/Supabase session
  * - Rate limit repeated connect-link creation
- * - Create a Composio Gmail auth URL for the signed-in user
+ * - Create a Composio Notion auth URL for the signed-in user
  */
 
 import { cookies } from "next/headers";
@@ -26,14 +26,14 @@ const START_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 // ============================================================================
 
 /**
- * Creates a Composio Gmail connect URL for the current signed-in user.
+ * Creates a Composio Notion connect URL for the current signed-in user.
  * @param request - Incoming request used for rate limiting
  * @returns JSON containing the redirect URL
  */
 export async function POST(
   request: NextRequest
 ): Promise<NextResponse<{ redirectUrl: string } | { code: string; error: string }>> {
-  const definition = getWhatsAppConnectorDefinition("gmail");
+  const definition = getWhatsAppConnectorDefinition("notion");
   const cookieStore = await cookies();
   const supabase = createServerSupabaseClient(cookieStore);
   const {
@@ -52,7 +52,7 @@ export async function POST(
 
   const ipAddress = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
   const rateLimit = checkRateLimit(
-    "whatsapp-gmail-connect-start",
+    "whatsapp-notion-connect-start",
     `${user.id}:${ipAddress}`,
     START_LIMIT_MAX,
     START_LIMIT_WINDOW_MS
@@ -70,7 +70,7 @@ export async function POST(
 
   try {
     const callbackUrl = new URL(
-      "/api/whatsapp/connectors/gmail/callback",
+      "/api/whatsapp/connectors/notion/callback",
       request.nextUrl.origin
     ).toString();
     const connectionRequest = await createComposioConnectionRequest(
@@ -79,7 +79,7 @@ export async function POST(
       callbackUrl
     );
 
-    console.info("[whatsapp-gmail/start] created connect link", {
+    console.info("[whatsapp-notion/start] created connect link", {
       userId: user.id,
       callbackUrl,
     });
@@ -88,7 +88,7 @@ export async function POST(
       redirectUrl: connectionRequest.redirectUrl,
     });
   } catch (error) {
-    console.error("[whatsapp-gmail/start] failed to create connect link", {
+    console.error("[whatsapp-notion/start] failed to create connect link", {
       userId: user.id,
       error: error instanceof Error ? error.message : String(error),
     });

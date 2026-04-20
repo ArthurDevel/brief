@@ -1,10 +1,10 @@
 /**
- * WhatsApp-scoped Gmail connector page.
+ * WhatsApp-scoped Notion connector page.
  *
  * Responsibilities:
  * - Stay inside the existing /whatsapp auth shell
- * - Load the signed-in user's Gmail connection summary
- * - Render the Gmail connect CTA and any callback notices
+ * - Load the signed-in user's Notion connection summary
+ * - Render the Notion connect CTA and any callback notices
  */
 
 import { cookies } from "next/headers";
@@ -19,7 +19,7 @@ import { getConnectorNotice } from "../connectorLogic";
 // TYPES
 // ============================================================================
 
-interface GmailConnectorPageProps {
+interface NotionConnectorPageProps {
   searchParams: Promise<{
     connected?: string;
     error?: string;
@@ -31,14 +31,14 @@ interface GmailConnectorPageProps {
 // ============================================================================
 
 /**
- * Loads the current Gmail connection state for the signed-in WhatsApp user.
- * @param props - Page search params used for success/error notices
- * @returns Gmail connector page inside the WhatsApp layout
+ * Loads the current Notion connection state for the signed-in WhatsApp user.
+ * @param props - Page search params used for success and error notices
+ * @returns Notion connector page inside the WhatsApp layout
  */
-export default async function GmailConnectorPage(
-  props: GmailConnectorPageProps
+export default async function NotionConnectorPage(
+  props: NotionConnectorPageProps
 ) {
-  const definition = getWhatsAppConnectorDefinition("gmail");
+  const definition = getWhatsAppConnectorDefinition("notion");
   const searchParams = await props.searchParams;
   const cookieStore = await cookies();
   const supabase = createServerSupabaseClient(cookieStore);
@@ -52,7 +52,7 @@ export default async function GmailConnectorPage(
 
   const [profile, connection] = await Promise.all([
     getWhatsAppProfile(supabase, user),
-    getUserComposioConnection(supabase, user.id, "gmail"),
+    getUserComposioConnection(supabase, user.id, "notion"),
   ]);
 
   return (

@@ -190,15 +190,15 @@ function buildMissingConnectionsMessage(
   connections: ComposioConnectionLookupRow[]
 ): string {
   if (connections.some((connection) => connection.status === "reconnect_required")) {
-    return "One of your connected apps needs to be reconnected. Send authenticate gmail in WhatsApp and try again.";
+    return "One of your connected apps needs to be reconnected. Send authenticate overview in WhatsApp and try again.";
   }
 
   const failedConnection = connections.find(
     (connection) => connection.status === "error" && connection.last_error
   );
   if (failedConnection?.last_error) {
-    return `${failedConnection.last_error} Send authenticate gmail in WhatsApp and try again.`;
+    return `${failedConnection.last_error} Send authenticate overview in WhatsApp and try again.`;
   }
 
-  return "You do not have any connected apps yet. Send authenticate gmail in WhatsApp and try again.";
+  return "You do not have any connected apps yet. Send authenticate overview in WhatsApp and connect one first.";
 }

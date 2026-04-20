@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildWhatsAppConnectorOverviewUrl,
   buildWhatsAppGmailConnectorUrl,
+  buildWhatsAppNotionConnectorUrl,
   isAuthenticateGmailCommand,
+  isAuthenticateNotionCommand,
   isAuthenticateOverviewCommand,
   normalizeWhatsAppCallerPhone,
 } from "../whatsappAuthCommands.js";
@@ -24,6 +26,16 @@ describe("isAuthenticateOverviewCommand", () => {
 
   it("rejects other messages", () => {
     expect(isAuthenticateOverviewCommand("authenticate gmail")).toBe(false);
+  });
+});
+
+describe("isAuthenticateNotionCommand", () => {
+  it("matches the hardcoded notion auth command", () => {
+    expect(isAuthenticateNotionCommand(" authenticate notion ")).toBe(true);
+  });
+
+  it("rejects other messages", () => {
+    expect(isAuthenticateNotionCommand("authenticate gmail")).toBe(false);
   });
 });
 
@@ -50,5 +62,13 @@ describe("buildWhatsAppConnectorOverviewUrl", () => {
     expect(
       buildWhatsAppConnectorOverviewUrl("https://app.example.com", "+15551234567")
     ).toBe("https://app.example.com/whatsapp/connectors/overview?phone=%2B15551234567");
+  });
+});
+
+describe("buildWhatsAppNotionConnectorUrl", () => {
+  it("builds the whatsapp notion connector deep link", () => {
+    expect(
+      buildWhatsAppNotionConnectorUrl("https://app.example.com", "+15551234567")
+    ).toBe("https://app.example.com/whatsapp/connectors/notion?phone=%2B15551234567");
   });
 });

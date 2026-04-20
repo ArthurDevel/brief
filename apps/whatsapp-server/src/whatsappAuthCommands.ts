@@ -29,7 +29,16 @@ export interface WhatsAppAuthMessageConfig {
  * @returns Whether the message is the supported Gmail auth command
  */
 export function isAuthenticateGmailCommand(messageBody: string): boolean {
-  return messageBody.trim().toLowerCase() === "authenticate gmail";
+  return isAuthenticateCommand(messageBody, "authenticate gmail");
+}
+
+/**
+ * Returns true when an inbound message should trigger Notion authentication.
+ * @param messageBody - Raw inbound text message body
+ * @returns Whether the message is the supported Notion auth command
+ */
+export function isAuthenticateNotionCommand(messageBody: string): boolean {
+  return isAuthenticateCommand(messageBody, "authenticate notion");
 }
 
 /**
@@ -70,9 +79,20 @@ export function buildWhatsAppGmailConnectorUrl(
   webBaseUrl: string,
   phone: string
 ): string {
-  const url = new URL("/whatsapp/connectors/gmail", webBaseUrl);
-  url.searchParams.set("phone", phone);
-  return url.toString();
+  return buildWhatsAppConnectorUrl(webBaseUrl, phone, "gmail");
+}
+
+/**
+ * Builds the Notion connector URL that keeps users inside the /whatsapp auth shell.
+ * @param webBaseUrl - Public base URL of the web app
+ * @param phone - Normalized WhatsApp phone number
+ * @returns Full URL to the Notion connector page
+ */
+export function buildWhatsAppNotionConnectorUrl(
+  webBaseUrl: string,
+  phone: string
+): string {
+  return buildWhatsAppConnectorUrl(webBaseUrl, phone, "notion");
 }
 
 /**
@@ -121,6 +141,20 @@ export async function sendWhatsAppGmailConnectMessage(
 ): Promise<void> {
   const connectUrl = buildWhatsAppGmailConnectorUrl(config.webBaseUrl, phone);
   await sendWhatsAppTextMessage(config, phone, `Open this link to connect Gmail: ${connectUrl}`);
+}
+
+/**
+ * Sends a temporary plain-text WhatsApp message with the Notion connector URL.
+ * @param config - WhatsApp config
+ * @param phone - Normalized E.164 phone number
+ * @returns Promise that resolves when the message is accepted by the Graph API
+ */
+export async function sendWhatsAppNotionConnectMessage(
+  config: WhatsAppAuthMessageConfig,
+  phone: string
+): Promise<void> {
+  const connectUrl = buildWhatsAppNotionConnectorUrl(config.webBaseUrl, phone);
+  await sendWhatsAppTextMessage(config, phone, `Open this link to connect Notion: ${connectUrl}`);
 }
 
 /**
@@ -197,6 +231,36 @@ async function sendWhatsAppTextMessage(
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+/**
+ * Returns true when an inbound message matches one auth command.
+ * @param messageBody - Raw inbound text message body
+ * @param supportedCommand - Supported command in normalized form
+ * @returns Whether the incoming text matches the supported command
+ */
+function isAuthenticateCommand(
+  messageBody: string,
+  supportedCommand: string
+): boolean {
+  return messageBody.trim().toLowerCase() === supportedCommand;
+}
+
+/**
+ * Builds a connector deep link that preserves the WhatsApp auth shell.
+ * @param webBaseUrl - Public base URL of the web app
+ * @param phone - Normalized WhatsApp phone number
+ * @param routeSegment - Connector route segment
+ * @returns Full URL to the connector page
+ */
+function buildWhatsAppConnectorUrl(
+  webBaseUrl: string,
+  phone: string,
+  routeSegment: string
+): string {
+  const url = new URL(`/whatsapp/connectors/${routeSegment}`, webBaseUrl);
+  url.searchParams.set("phone", phone);
+  return url.toString();
+}
 
 /**
  * Reads a required environment variable.

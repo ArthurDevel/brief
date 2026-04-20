@@ -1,31 +1,38 @@
 "use client";
 
 /**
- * Client-side WhatsApp Gmail connector card.
+ * Client-side card for one WhatsApp Composio connector.
  *
  * Responsibilities:
- * - Render the current Gmail connection state
+ * - Render the current connector state
  * - Start the server-side Composio auth flow
  * - Show only safe, predefined error copy in the UI
  */
 
 import { useState } from "react";
 import type { ComposioConnectionSummary } from "@/lib/types";
+import type { ConnectorNotice } from "./connectorLogic";
+import {
+  getConnectorStartErrorMessage,
+} from "./connectorLogic";
+import type { WhatsAppConnectorDefinition } from "./connectorDefinitions";
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-interface StartRouteResponse {
+interface StartRouteSuccessResponse {
   redirectUrl: string;
 }
 
-interface GmailConnectorCardProps {
+interface StartRouteErrorResponse {
+  code?: string;
+}
+
+interface ComposioConnectorCardProps {
   connection: ComposioConnectionSummary | null;
-  notice: {
-    kind: "success" | "error";
-    message: string;
-  } | null;
+  definition: WhatsAppConnectorDefinition;
+  notice: ConnectorNotice | null;
   whatsappPhone: string | null;
 }
 
@@ -34,12 +41,12 @@ interface GmailConnectorCardProps {
 // ============================================================================
 
 /**
- * Renders the Gmail connector state and CTA inside the WhatsApp auth island.
- * @param props - Current connection state plus any server notice to show
- * @returns Interactive Gmail connector card
+ * Renders one connector state and CTA inside the WhatsApp auth shell.
+ * @param props - Current connection state plus shared connector copy
+ * @returns Interactive connector card
  */
-export default function GmailConnectorCard(
-  props: GmailConnectorCardProps
+export default function ComposioConnectorCard(
+  props: ComposioConnectorCardProps
 ) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -49,29 +56,36 @@ export default function GmailConnectorCard(
     setErrorMessage(null);
 
     try {
-      const response = await fetch("/api/whatsapp/connectors/gmail/start", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+      const response = await fetch(
+        `/api/whatsapp/connectors/${props.definition.routeSegment}/start`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
+        const payload = data as StartRouteErrorResponse | null;
         throw new Error(
-          typeof data?.error === "string"
-            ? data.error
-            : "We could not start the Gmail connection. Please try again."
+          getConnectorStartErrorMessage(props.definition, payload?.code)
         );
       }
 
-      const payload = data as StartRouteResponse;
-      window.location.href = payload.redirectUrl;
+      const payload = data as StartRouteSuccessResponse;
+      window.location.assign(payload.redirectUrl);
     } catch (error) {
+      console.error("[whatsapp-connector/card] failed to start connector", {
+        toolkit: props.definition.toolkit,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "We could not start the Gmail connection. Please try again."
+          : "Something went wrong. Please try again."
       );
     } finally {
       setIsSubmitting(false);
@@ -80,18 +94,20 @@ export default function GmailConnectorCard(
 
   const buttonLabel =
     props.connection?.status === "connected"
-      ? "Reconnect Gmail"
-      : "Connect with Gmail";
+      ? `Reconnect ${props.definition.label}`
+      : `Connect ${props.definition.label}`;
 
   return (
     <div className="grid gap-6">
       <section className="settings-panel">
         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
-          Gmail Connector
+          {props.definition.label} Connector
         </div>
-        <h1 className="mt-2 text-[28px] font-semibold">Connect Gmail from WhatsApp</h1>
+        <h1 className="mt-2 text-[28px] font-semibold">
+          Connect {props.definition.label} from WhatsApp
+        </h1>
         <p className="mt-3 text-[14px] leading-6 text-[var(--text-secondary)]">
-          This page keeps the WhatsApp sign-in flow inline, then starts the Composio Gmail connection in-browser.
+          {props.definition.pageDescription}
         </p>
 
         {props.notice && (
@@ -153,7 +169,7 @@ export default function GmailConnectorCard(
             disabled={isSubmitting}
             className="bg-[var(--btn-primary-bg)] px-4 py-2 text-[13px] font-semibold text-[var(--btn-primary-text)] disabled:opacity-50"
           >
-            {isSubmitting ? "Opening Gmail..." : buttonLabel}
+            {isSubmitting ? props.definition.loadingLabel : buttonLabel}
           </button>
         </div>
       </section>
@@ -167,7 +183,7 @@ export default function GmailConnectorCard(
 
 /**
  * Returns the human-readable label for the current connector state.
- * @param connection - Current Gmail connection summary
+ * @param connection - Current connector connection summary
  * @returns Human-readable status label
  */
 function getConnectionStatusLabel(

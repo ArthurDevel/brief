@@ -1,6 +1,9 @@
 import Link from "next/link";
+import { listWhatsAppConnectorDefinitions } from "./connectors/connectorDefinitions";
 
 export default function WhatsAppPage() {
+  const connectorDefinitions = listWhatsAppConnectorDefinitions();
+
   return (
     <div className="grid gap-6">
       <section className="settings-panel">
@@ -25,18 +28,23 @@ export default function WhatsAppPage() {
           </p>
         </Link>
 
-        <Link
-          href="/whatsapp/connectors/gmail"
-          className="settings-panel block transition hover:border-[var(--text-primary)]"
-        >
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
-            Gmail
-          </div>
-          <h2 className="mt-2 text-[20px] font-semibold">Connect Gmail</h2>
-          <p className="mt-2 text-[14px] leading-6 text-[var(--text-secondary)]">
-            Start the WhatsApp-scoped Gmail auth flow that stores a user-specific Composio connection.
-          </p>
-        </Link>
+        {connectorDefinitions.map((definition) => (
+          <Link
+            key={definition.toolkit}
+            href={`/whatsapp/connectors/${definition.routeSegment}`}
+            className="settings-panel block transition hover:border-[var(--text-primary)]"
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
+              {definition.label}
+            </div>
+            <h2 className="mt-2 text-[20px] font-semibold">
+              Connect {definition.label}
+            </h2>
+            <p className="mt-2 text-[14px] leading-6 text-[var(--text-secondary)]">
+              {definition.navDescription}
+            </p>
+          </Link>
+        ))}
 
         <Link
           href="/whatsapp/connectors/overview"

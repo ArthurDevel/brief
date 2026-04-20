@@ -63,7 +63,7 @@ async function entry(ctx: JobContext): Promise<void> {
   } catch (error) {
     const message = error instanceof Error
       ? error.message
-      : "I could not reach your connected apps. Send authenticate gmail in WhatsApp and try again.";
+      : "I could not reach your connected tools. Send authenticate overview in WhatsApp and try again.";
 
     console.error("[whatsapp-agent] failed to resolve caller context", {
       participantIdentity: participant.identity,
