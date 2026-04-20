@@ -296,9 +296,65 @@ async function getRawToolsForConnectedToolkits(
   return Array.from(toolsBySlug.values());
 }
 
-export async function createComposioTools(
+/**
+ * User-scoped Composio session returned by `composio.create`.
+ * Used to execute tools on behalf of the WhatsApp caller.
+ */
+export type ComposioUserSession = Awaited<ReturnType<Composio["create"]>>;
+
+/**
+ * Creates a user-scoped Composio session for the caller.
+ * The session is required for both tool registration and direct tool execution
+ * (e.g. fetching greeting context such as unread email counts).
+ * @param env - Agent environment config
+ * @param callerContext - Resolved caller context with connected toolkit accounts
+ * @returns Composio user session ready to execute tools
+ */
+export async function createComposioSession(
   env: AgentEnv,
   callerContext: WhatsAppCallerContext
+): Promise<ComposioUserSession> {
+  const toolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
+  if (toolkitSlugs.length === 0) {
+    throw new Error("No connected Composio accounts were found for this caller.");
+  }
+
+  const startedAt = Date.now();
+  console.info("[whatsapp-agent] createComposioSession start", {
+    supabaseUserId: callerContext.supabaseUserId,
+    toolkitSlugs,
+  });
+
+  const composio = new Composio({
+    apiKey: env.composioApiKey
+  });
+  const session = await composio.create(callerContext.supabaseUserId, {
+    connectedAccounts: callerContext.connectedAccountsByToolkit,
+    toolkits: toolkitSlugs,
+    manageConnections: false
+  });
+  console.info("[whatsapp-agent] createComposioSession complete", {
+    supabaseUserId: callerContext.supabaseUserId,
+    toolkitSlugs,
+    hasSession: Boolean(session),
+    elapsedMs: Date.now() - startedAt,
+  });
+
+  return session;
+}
+
+/**
+ * Wraps the caller's Composio tools as LiveKit LLM tools.
+ * Reuses the supplied user session so we do not re-authenticate per tool batch.
+ * @param env - Agent environment config
+ * @param callerContext - Resolved caller context with connected toolkit accounts
+ * @param session - Active Composio user session created by `createComposioSession`
+ * @returns LiveKit-compatible tool context for the LLM
+ */
+export async function createComposioTools(
+  env: AgentEnv,
+  callerContext: WhatsAppCallerContext,
+  session: ComposioUserSession
 ): Promise<llmNamespace.ToolContext> {
   const startedAt = Date.now();
   const toolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
@@ -310,21 +366,10 @@ export async function createComposioTools(
     toolkitSlugs,
   });
 
+  // The Composio client is only needed here for raw tool discovery. The
+  // user-scoped session passed in handles all tool execution below.
   const composio = new Composio({
     apiKey: env.composioApiKey
-  });
-  const sessionStartedAt = Date.now();
-  const session = await composio.create(callerContext.supabaseUserId, {
-    connectedAccounts: callerContext.connectedAccountsByToolkit,
-    toolkits: toolkitSlugs,
-    manageConnections: false
-  });
-  console.info("[whatsapp-agent] composio.create complete", {
-    supabaseUserId: callerContext.supabaseUserId,
-    toolkitSlugs,
-    elapsedMs: Date.now() - sessionStartedAt,
-    totalElapsedMs: Date.now() - startedAt,
-    hasSession: Boolean(session),
   });
 
   const discoveryStartedAt = Date.now();

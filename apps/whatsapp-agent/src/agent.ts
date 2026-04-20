@@ -9,7 +9,11 @@ import {
   voice
 } from "@livekit/agents";
 import { getEnv } from "./lib/env.js";
-import { createComposioTools } from "./lib/composio.js";
+import {
+  createComposioSession,
+  createComposioTools,
+  type ComposioUserSession
+} from "./lib/composio.js";
 import {
   resolveWhatsAppCallerContext,
   type WhatsAppCallerContext
@@ -24,6 +28,10 @@ import {
   getDefaultWhatsAppVoiceConfig,
   type WhatsAppVoiceConfig,
 } from "./lib/whatsappVoice.js";
+import { getLastCallEndedAt } from "./lib/lastCall.js";
+import { buildGmailContextLine } from "./lib/gmailContext.js";
+import { buildSystemPrompt, type SessionContext } from "./lib/promptBuilder.js";
+import { getUserMemoryEntries, type MemoryEntry } from "./lib/memory.js";
 
 const env = getEnv();
 
@@ -33,6 +41,9 @@ const env = getEnv();
 
 const KNOWN_STT_REJECTION_MESSAGE_PREFIX = "failed to recognize speech after";
 const KNOWN_STT_REJECTION_STACK_FRAGMENT = "SpeechStream.mainTask";
+
+// Toolkit slug used to detect Gmail connectivity for context injection.
+const GMAIL_TOOLKIT_SLUG = "gmail";
 
 // ============================================================================
 // MAIN ENTRYPOINT HELPERS
@@ -81,13 +92,24 @@ interface BuiltAssistant {
   voiceConfig: WhatsAppVoiceConfig;
 }
 
-async function buildAssistant(callerContext: WhatsAppCallerContext): Promise<BuiltAssistant> {
+/**
+ * Builds the LiveKit voice agent with caller-scoped tools and a composed prompt.
+ * @param callerContext - Resolved caller context (toolkits, voice config)
+ * @param composioSession - Composio user session for tool execution
+ * @param instructions - Composed system prompt (base + injected context sections)
+ * @returns Voice agent + voice config to use for the session
+ */
+async function buildAssistant(
+  callerContext: WhatsAppCallerContext,
+  composioSession: ComposioUserSession,
+  instructions: string
+): Promise<BuiltAssistant> {
   const startedAt = Date.now();
   console.info("[whatsapp-agent] buildAssistant start", {
     supabaseUserId: callerContext.supabaseUserId,
   });
 
-  const tools = await createComposioTools(env, callerContext);
+  const tools = await createComposioTools(env, callerContext, composioSession);
   console.info("[whatsapp-agent] composio tools created", {
     toolCount: Object.keys(tools).length,
     elapsedMs: Date.now() - startedAt,
@@ -95,7 +117,7 @@ async function buildAssistant(callerContext: WhatsAppCallerContext): Promise<Bui
 
   return {
     agent: new voice.Agent({
-      instructions: env.livekitAgentInstructions,
+      instructions,
       tools
     }),
     voiceConfig: callerContext.voiceConfig
@@ -151,7 +173,84 @@ async function entry(ctx: JobContext): Promise<void> {
       });
     }
 
-    const builtAssistant = await buildAssistant(callerContext);
+    // Look up the user's last completed call so we can mention "since last call"
+    // counts in the greeting. Soft-fail: a missing value just means we treat this
+    // as a first call.
+    let lastCallEndedAt: Date | null = null;
+    try {
+      lastCallEndedAt = await getLastCallEndedAt(env, callerContext.supabaseUserId);
+      console.info("[whatsapp-agent] last call lookup complete", {
+        supabaseUserId: callerContext.supabaseUserId,
+        hasLastCall: lastCallEndedAt !== null,
+        elapsedMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      console.warn("[whatsapp-agent] failed to fetch last call end time, treating as first call", {
+        supabaseUserId: callerContext.supabaseUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Load the user's saved memory entries for injection into the system prompt.
+    // Soft-fail: a lookup failure should not block the call from starting.
+    let memoryEntries: MemoryEntry[] = [];
+    try {
+      memoryEntries = await getUserMemoryEntries(env, callerContext.supabaseUserId);
+      console.info("[whatsapp-agent] user memory loaded", {
+        supabaseUserId: callerContext.supabaseUserId,
+        entryCount: memoryEntries.length,
+        elapsedMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      console.warn("[whatsapp-agent] failed to load user memory, continuing without it", {
+        supabaseUserId: callerContext.supabaseUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Create the Composio user session up-front so it can be reused by both the
+    // greeting context fetch (e.g. Gmail unread count) and the LLM tool wrappers.
+    const composioSession = await createComposioSession(env, callerContext);
+
+    // Build the email context line only if Gmail is one of the connected toolkits.
+    // Soft-fail: an API hiccup must not block the call from starting.
+    let emailContext: string | null = null;
+    if (GMAIL_TOOLKIT_SLUG in callerContext.connectedAccountsByToolkit) {
+      try {
+        emailContext = await buildGmailContextLine(composioSession, lastCallEndedAt);
+        console.info("[whatsapp-agent] gmail context line built", {
+          supabaseUserId: callerContext.supabaseUserId,
+          hasContext: emailContext !== null,
+          elapsedMs: Date.now() - startedAt,
+        });
+      } catch (error) {
+        console.warn("[whatsapp-agent] failed to build gmail context line, continuing without it", {
+          supabaseUserId: callerContext.supabaseUserId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const sessionContext: SessionContext = {
+      currentDateTime: new Date().toISOString(),
+      lastCallDateTime: lastCallEndedAt?.toISOString() ?? null,
+    };
+
+    const instructions = buildSystemPrompt({
+      baseInstructions: env.livekitAgentInstructions,
+      memoryEntries,
+      sessionContext,
+      emailContext,
+    });
+    console.info("[whatsapp-agent] system prompt built", {
+      supabaseUserId: callerContext.supabaseUserId,
+      promptChars: instructions.length,
+      memoryEntryCount: memoryEntries.length,
+      hasEmailContext: emailContext !== null,
+      elapsedMs: Date.now() - startedAt,
+    });
+
+    const builtAssistant = await buildAssistant(callerContext, composioSession, instructions);
     agent = builtAssistant.agent;
     voiceConfig = builtAssistant.voiceConfig;
   } catch (error) {
