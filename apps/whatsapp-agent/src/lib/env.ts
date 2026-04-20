@@ -28,9 +28,9 @@ export interface AgentEnv {
   livekitWsUrl: string;
   livekitApiKey: string;
   livekitApiSecret: string;
+  supabaseUrl: string;
+  supabaseServiceRoleKey: string;
   composioApiKey: string;
-  composioUserId: string;
-  composioConnectedAccountId?: string;
   composioAllowedTools: string[];
   livekitSttModel: string;
   livekitLlmModel: string;
@@ -58,10 +58,14 @@ export function getEnv(): AgentEnv {
     livekitWsUrl: toWebSocketUrl(livekitUrl),
     livekitApiKey: requireEnv("LIVEKIT_API_KEY"),
     livekitApiSecret: requireEnv("LIVEKIT_API_SECRET"),
+    supabaseUrl: requireEnv("NEXT_PUBLIC_SUPABASE_URL"),
+    supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
     composioApiKey: requireEnv("COMPOSIO_API_KEY"),
-    composioUserId: process.env.COMPOSIO_USER_ID?.trim() || "demo",
-    composioConnectedAccountId: process.env.COMPOSIO_CONNECTED_ACCOUNT_ID?.trim() || undefined,
-    composioAllowedTools: splitCsv(process.env.COMPOSIO_ALLOWED_TOOLS, ["HACKERNEWS_GET_LATEST_POSTS"]),
+    composioAllowedTools: splitCsv(process.env.COMPOSIO_ALLOWED_TOOLS, [
+      "GMAIL_FETCH_EMAILS",
+      "GMAIL_LIST_LABELS",
+      "GMAIL_SEND_EMAIL",
+    ]),
     livekitSttModel: process.env.LIVEKIT_STT_MODEL?.trim() || "deepgram/nova-3:en",
     livekitLlmModel: process.env.LIVEKIT_LLM_MODEL?.trim() || "openai/gpt-4.1-mini",
     livekitTtsModel:

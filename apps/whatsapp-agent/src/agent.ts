@@ -10,11 +10,13 @@ import {
 } from "@livekit/agents";
 import { getEnv } from "./lib/env.js";
 import { createComposioTools } from "./lib/composio.js";
+import { resolveWhatsAppCallerContext } from "./lib/whatsappRuntime.js";
 
 const env = getEnv();
 
-async function buildAssistant(): Promise<voice.Agent> {
-  const tools = await createComposioTools(env);
+async function buildAssistant(participantMetadata: string): Promise<voice.Agent> {
+  const callerContext = await resolveWhatsAppCallerContext(env, participantMetadata);
+  const tools = await createComposioTools(env, callerContext);
 
   return new voice.Agent({
     instructions: env.livekitAgentInstructions,
@@ -24,8 +26,29 @@ async function buildAssistant(): Promise<voice.Agent> {
 
 async function entry(ctx: JobContext): Promise<void> {
   await ctx.connect();
+  const participant = await ctx.waitForParticipant();
 
-  const agent = await buildAssistant();
+  let agent: voice.Agent;
+  let greeting = env.livekitAgentGreeting;
+
+  try {
+    agent = await buildAssistant(participant.metadata);
+  } catch (error) {
+    const message = error instanceof Error
+      ? error.message
+      : "I could not reach your Gmail connection. Send authenticate gmail in WhatsApp and try again.";
+
+    console.error("[whatsapp-agent] failed to resolve caller context", {
+      participantIdentity: participant.identity,
+      error: message,
+    });
+
+    greeting = message;
+    agent = new voice.Agent({
+      instructions: message,
+    });
+  }
+
   const session = new voice.AgentSession({
     stt: env.livekitSttModel,
     llm: env.livekitLlmModel,
@@ -42,9 +65,8 @@ async function entry(ctx: JobContext): Promise<void> {
     record: false
   });
 
-  await ctx.waitForParticipant();
   session.generateReply({
-    instructions: env.livekitAgentGreeting
+    instructions: greeting
   });
 
   await closed;

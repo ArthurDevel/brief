@@ -2,6 +2,12 @@ import { WhatsApp } from "meta-cloud-api";
 import { MediaStreamTrackFactory, RTCPeerConnection, type MediaStreamTrack, type RTCIceServer } from "werift";
 import { WhatsAppLiveKitBridge } from "./livekitBridge.js";
 import { LiveKitRoomManager } from "./roomManager.js";
+import {
+  getWhatsAppGmailMessageConfig,
+  isAuthenticateGmailCommand,
+  normalizeWhatsAppCallerPhone,
+  sendWhatsAppGmailConnectMessage,
+} from "./whatsappGmailAuth.js";
 
 interface WhatsAppCallSession {
   sdp_type?: "offer" | "answer";
@@ -221,9 +227,33 @@ export class WhatsAppCallBot {
       return;
     }
 
-    const body = message.text?.body?.trim().toLowerCase();
+    const body = message.text?.body?.trim() ?? "";
     const from = message.from?.trim();
-    if (body !== "hello world" || !from) {
+    if (!from) {
+      return;
+    }
+
+    const normalizedPhone = normalizeWhatsAppCallerPhone(from);
+    if (isAuthenticateGmailCommand(body)) {
+      if (!normalizedPhone) {
+        console.warn("[whatsapp-server] could not normalize sender phone for gmail auth", {
+          rawPhone: from,
+          messageId: message.id ?? null,
+        });
+        return;
+      }
+
+      console.info("[whatsapp-server] sending gmail auth message", {
+        phone: normalizedPhone,
+        messageId: message.id ?? null,
+      });
+
+      const messageConfig = getWhatsAppGmailMessageConfig();
+      await sendWhatsAppGmailConnectMessage(messageConfig, normalizedPhone);
+      return;
+    }
+
+    if (body.toLowerCase() !== "hello world") {
       return;
     }
 
@@ -241,7 +271,9 @@ export class WhatsAppCallBot {
       return;
     }
 
-    console.log(`[whatsapp-server] answering call ${callId} from ${call.from ?? "unknown"}`);
+    const normalizedCaller = normalizeWhatsAppCallerPhone(call.from?.trim());
+
+    console.log(`[whatsapp-server] answering call ${callId} from ${normalizedCaller ?? call.from ?? "unknown"}`);
 
     const [audioTrack, audioPort, disposeAudioTrack] = await MediaStreamTrackFactory.rtpSource({
       kind: "audio"
@@ -250,7 +282,7 @@ export class WhatsAppCallBot {
       iceServers: getVoiceBotEnv().iceServers
     });
     const incomingTrackPromise = this.waitForIncomingAudioTrack(peerConnection);
-    const liveKitSession = await this.roomManager.createCallSession(callId, call.from?.trim());
+    const liveKitSession = await this.roomManager.createCallSession(callId, normalizedCaller ?? undefined);
 
     const activeCall: ActiveCallSession = {
       callId,

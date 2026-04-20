@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@composio/core": "^0.6.10",
     "@dublin/email": "workspace:*",
     "@dublin/tools": "workspace:*",
     "@posthog/next": "^0.1.0",

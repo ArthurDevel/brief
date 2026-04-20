@@ -9,6 +9,7 @@ function makeSettings(overrides: Partial<UserSettings> = {}): UserSettings {
     voiceSpeed: 1,
     toolApprovalConfig: {},
     phone: null,
+    whatsappPhone: null,
     hasPin: false,
     callSchedule: null,
     ...overrides,

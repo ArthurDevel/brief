@@ -122,6 +122,31 @@ export interface CustomEmailAccountInput {
   smtpPassword?: string;
 }
 
+// ============================================================================
+// COMPOSIO CONNECTIONS
+// ============================================================================
+
+/**
+ * Summary of a user's saved Composio toolkit connection.
+ * Used by the WhatsApp Gmail connector flow.
+ * @param toolkit - Toolkit slug, currently "gmail"
+ * @param provider - Connection provider, currently always "composio"
+ * @param connectedAccountId - Saved Composio connected account ID
+ * @param status - Current connection status
+ * @param externalUserId - External user ID used in Composio
+ * @param connectedAt - Timestamp when the toolkit was connected
+ * @param lastError - Most recent safe error message, if any
+ */
+export interface ComposioConnectionSummary {
+  toolkit: string;
+  provider: "composio";
+  connectedAccountId: string | null;
+  status: "connected" | "reconnect_required" | "pending" | "error" | "not_connected";
+  externalUserId: string | null;
+  connectedAt: string | null;
+  lastError: string | null;
+}
+
 /** User configuration as returned by the settings API. Passwords are never exposed. */
 export interface UserSettings {
   emailAccount: EmailAccountSummary | null;

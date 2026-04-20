@@ -47,6 +47,12 @@ export default async function WhatsAppLayout({ children }: { children: React.Rea
             >
               Account
             </Link>
+            <Link
+              href="/whatsapp/connectors/gmail"
+              className="border border-[var(--border-color)] px-3 py-2 text-[13px] font-medium hover:border-[var(--text-primary)]"
+            >
+              Gmail
+            </Link>
             <WhatsAppSignOutButton />
           </nav>
         </div>

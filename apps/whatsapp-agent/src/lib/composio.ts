@@ -2,6 +2,7 @@ import { llm } from "@livekit/agents";
 import type { llm as llmNamespace } from "@livekit/agents";
 import { Composio } from "@composio/core";
 import type { AgentEnv } from "./env.js";
+import type { WhatsAppCallerContext } from "./whatsappRuntime.js";
 
 interface HeaderEntry {
   name?: string;
@@ -182,7 +183,10 @@ function formatToolResult(toolSlug: string, result: ToolExecutionResult): string
   }
 }
 
-export async function createComposioTools(env: AgentEnv): Promise<llmNamespace.ToolContext> {
+export async function createComposioTools(
+  env: AgentEnv,
+  callerContext: WhatsAppCallerContext
+): Promise<llmNamespace.ToolContext> {
   const composio = new Composio({
     apiKey: env.composioApiKey
   });
@@ -192,12 +196,10 @@ export async function createComposioTools(env: AgentEnv): Promise<llmNamespace.T
     acc[toolkitSlug].push(slug);
     return acc;
   }, {});
-  const connectedAccounts: Record<string, string> = {};
-  if (env.composioConnectedAccountId) {
-    connectedAccounts.gmail = env.composioConnectedAccountId;
-  }
-  const session = await composio.create(env.composioUserId, {
-    connectedAccounts,
+  const session = await composio.create(callerContext.supabaseUserId, {
+    connectedAccounts: {
+      gmail: callerContext.gmailConnectedAccountId,
+    },
     tools: toolsByToolkit,
     manageConnections: false
   });
