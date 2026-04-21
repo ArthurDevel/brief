@@ -3,6 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
 import { WhatsAppBot, type WhatsAppWebhookBody } from "./whatsAppBot.js";
+import {
+  getMetaAppSecret,
+  isJsonContentType,
+  isValidMetaWebhookSignature,
+} from "./webhookSecurity.js";
 
 type IncomingEventKind =
   | "user-message"
@@ -29,13 +34,25 @@ interface WhatsAppEntry {
 }
 
 const DEFAULT_PORT = 3020;
+const WEBHOOK_REQUEST_BODY_LIMIT = "256kb";
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv({ path: path.resolve(currentDir, "../.env") });
 
 const app = express();
 const whatsAppBot = new WhatsAppBot();
+const metaAppSecret = getMetaAppSecret();
 
-app.use(express.json({ limit: "10mb" }));
+interface RequestWithRawBody extends Request {
+  rawBody?: Buffer;
+}
+
+const webhookJsonMiddleware = express.json({
+  limit: WEBHOOK_REQUEST_BODY_LIMIT,
+  type: "application/json",
+  verify: (req, _res, buffer) => {
+    (req as RequestWithRawBody).rawBody = Buffer.from(buffer);
+  }
+});
 
 function getPort(): number {
   const rawPort = process.env.PORT ?? String(DEFAULT_PORT);
@@ -99,6 +116,56 @@ function acknowledge(res: Response, kind: IncomingEventKind): void {
   });
 }
 
+/**
+ * Rejects webhook requests that are not JSON.
+ * @param req - Incoming Express request
+ * @param res - Express response
+ * @param next - Express next callback
+ * @returns Void
+ */
+function requireJsonContentType(
+  req: Request,
+  res: Response,
+  next: express.NextFunction
+): void {
+  const contentType = req.get("content-type");
+
+  if (!isJsonContentType(contentType)) {
+    res.status(415).json({ error: "Webhook requests must use application/json" });
+    return;
+  }
+
+  next();
+}
+
+/**
+ * Rejects webhook requests with an invalid Meta signature.
+ * @param req - Incoming Express request with a captured raw body
+ * @param res - Express response
+ * @param next - Express next callback
+ * @returns Void
+ */
+function verifyMetaWebhookSignature(
+  req: Request,
+  res: Response,
+  next: express.NextFunction
+): void {
+  const requestWithRawBody = req as RequestWithRawBody;
+  const signatureHeader = req.get("x-hub-signature-256");
+
+  if (!requestWithRawBody.rawBody) {
+    res.status(400).json({ error: "Webhook request body is required" });
+    return;
+  }
+
+  if (!isValidMetaWebhookSignature(requestWithRawBody.rawBody, signatureHeader, metaAppSecret)) {
+    res.status(401).json({ error: "Invalid webhook signature" });
+    return;
+  }
+
+  next();
+}
+
 app.get("/health", (_req, res) => {
   res.status(200).json({ ok: true });
 });
@@ -124,18 +191,34 @@ app.get("/api/whatsapp/webhook", (req, res) => {
   res.status(200).type("text/plain").send(challenge);
 });
 
-app.post("/api/whatsapp/webhook", (req, res) => {
-  const eventKind = classifyWebhookEvent((req.body ?? {}) as WhatsAppWebhookBody);
-  logWebhookRequest(eventKind, req);
-  void whatsAppBot.handleWebhook((req.body ?? {}) as WhatsAppWebhookBody).catch((error) => {
-    console.error("[whatsapp-server] failed to process whatsapp webhook", error);
-  });
-  acknowledge(res, eventKind);
-});
+app.post(
+  "/api/whatsapp/webhook",
+  requireJsonContentType,
+  webhookJsonMiddleware,
+  verifyMetaWebhookSignature,
+  (req, res) => {
+    const eventKind = classifyWebhookEvent((req.body ?? {}) as WhatsAppWebhookBody);
+    logWebhookRequest(eventKind, req);
+    void whatsAppBot.handleWebhook((req.body ?? {}) as WhatsAppWebhookBody).catch((error) => {
+      console.error("[whatsapp-server] failed to process whatsapp webhook", error);
+    });
+    acknowledge(res, eventKind);
+  }
+);
 
-app.use((error: Error, _req: Request, res: Response, _next: express.NextFunction) => {
+app.use((error: Error & { status?: number; type?: string }, _req: Request, res: Response, _next: express.NextFunction) => {
+  if (error.type === "entity.too.large") {
+    res.status(413).json({ error: "Webhook request body is too large" });
+    return;
+  }
+
+  if (error.type === "entity.parse.failed") {
+    res.status(400).json({ error: "Webhook request body must be valid JSON" });
+    return;
+  }
+
   console.error("[whatsapp-server] unhandled error", error);
-  res.status(500).json({ error: error.message || "Internal server error" });
+  res.status(error.status ?? 500).json({ error: error.message || "Internal server error" });
 });
 
 const port = getPort();

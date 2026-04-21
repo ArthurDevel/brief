@@ -132,6 +132,7 @@ cp apps/whatsapp-emulator/.env.example apps/whatsapp-emulator/.env
 Important values:
 - `apps/whatsapp-server/.env`
   - `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+  - `META_APP_SECRET`
   - `WHATSAPP_ACCESS_TOKEN`
   - `WHATSAPP_PHONE_NUMBER_ID`
   - `WHATSAPP_BUSINESS_ACCOUNT_ID`
