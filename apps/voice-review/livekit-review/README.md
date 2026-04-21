@@ -15,7 +15,7 @@ Currently supported:
 ## Setup
 
 ```bash
-cd apps/voice-review/livekit-deepgram
+cd apps/voice-review/livekit-review
 pnpm install --ignore-workspace
 cp .env.example .env
 pnpm dev
