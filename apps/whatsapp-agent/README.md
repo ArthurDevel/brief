@@ -19,6 +19,17 @@ pnpm install
 pnpm dev
 ```
 
+## Coolify deployment
+
+Deploy this app from the monorepo root, not from `apps/whatsapp-agent`.
+
+- Base Directory: `/`
+- Install Command: `corepack enable && pnpm install --frozen-lockfile`
+- Build Command: `pnpm --filter @dublin/whatsapp-agent build`
+- Start Command: `pnpm --filter @dublin/whatsapp-agent start`
+
+This app depends on the root `pnpm-workspace.yaml` and `pnpm-lock.yaml`, so app-level deployment from `apps/whatsapp-agent` will fall back to `npm` and break the expected workspace setup.
+
 ## LiveKit Cloud deployment
 
 1. Install the LiveKit CLI.
