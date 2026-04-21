@@ -24,6 +24,11 @@ interface MockWhatsAppClient {
   };
 }
 
+interface DeferredPromise {
+  promise: Promise<void>;
+  resolve: () => void;
+}
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
@@ -84,6 +89,21 @@ function createAudioWebhookBody(): WhatsAppWebhookBody {
   };
 }
 
+/**
+ * Creates a deferred promise for coordinating async test flow.
+ * @returns Promise with an external resolve function
+ */
+function createDeferredPromise(): DeferredPromise {
+  let resolvePromise!: () => void;
+
+  return {
+    promise: new Promise<void>((resolve) => {
+      resolvePromise = resolve;
+    }),
+    resolve: resolvePromise,
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -122,6 +142,131 @@ function createTranscriber(transcript: string): VoiceMessageTranscriber {
 // ============================================================================
 
 describe("WhatsAppBot voice messages", () => {
+  it("starts multiple call connect events in parallel when they arrive in one webhook", async () => {
+    const client = createMockClient();
+    const firstCall = createDeferredPromise();
+    const secondCall = createDeferredPromise();
+    const bot = new WhatsAppBot({
+      client: client as any,
+      roomManager: {
+        createCallSession: vi.fn(),
+        cleanupCallSession: vi.fn(),
+      },
+      voiceMessageTranscriber: createTranscriber("unused"),
+      fetchImplementation: vi.fn() as typeof fetch,
+    });
+    const handleConnectSpy = vi
+      .spyOn(bot as any, "handleConnect")
+      .mockImplementationOnce(async () => {
+        await firstCall.promise;
+      })
+      .mockImplementationOnce(async () => {
+        await secondCall.promise;
+      });
+
+    const webhookPromise = bot.handleWebhook({
+      entry: [
+        {
+          changes: [
+            {
+              field: "calls",
+              value: {
+                calls: [
+                  {
+                    id: "call-1",
+                    event: "connect",
+                    from: "15551234567",
+                    session: {
+                      sdp_type: "offer",
+                      sdp: "v=0",
+                    },
+                  },
+                  {
+                    id: "call-2",
+                    event: "connect",
+                    from: "15557654321",
+                    session: {
+                      sdp_type: "offer",
+                      sdp: "v=0",
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(handleConnectSpy).toHaveBeenCalledTimes(2);
+    });
+
+    firstCall.resolve();
+    secondCall.resolve();
+    await webhookPromise;
+  });
+
+  it("ignores duplicate connect events for the same call while setup is still in flight", async () => {
+    const client = createMockClient();
+    const activeCall = createDeferredPromise();
+    const bot = new WhatsAppBot({
+      client: client as any,
+      roomManager: {
+        createCallSession: vi.fn(),
+        cleanupCallSession: vi.fn(),
+      },
+      voiceMessageTranscriber: createTranscriber("unused"),
+      fetchImplementation: vi.fn() as typeof fetch,
+    });
+    const handleConnectSpy = vi
+      .spyOn(bot as any, "handleConnect")
+      .mockImplementation(async () => {
+        await activeCall.promise;
+      });
+
+    const webhookPromise = bot.handleWebhook({
+      entry: [
+        {
+          changes: [
+            {
+              field: "calls",
+              value: {
+                calls: [
+                  {
+                    id: "call-1",
+                    event: "connect",
+                    from: "15551234567",
+                    session: {
+                      sdp_type: "offer",
+                      sdp: "v=0",
+                    },
+                  },
+                  {
+                    id: "call-1",
+                    event: "connect",
+                    from: "15551234567",
+                    session: {
+                      sdp_type: "offer",
+                      sdp: "v=0",
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(handleConnectSpy).toHaveBeenCalledTimes(1);
+    });
+
+    activeCall.resolve();
+    await webhookPromise;
+  });
+
   it("reuses the text handler when a voice note transcribes to hello world", async () => {
     const client = createMockClient();
     const transcriber = createTranscriber("hello world");

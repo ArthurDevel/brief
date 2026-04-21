@@ -264,6 +264,7 @@ function isCallTerminate(call: WhatsAppCall): boolean {
 export class WhatsAppBot {
   private readonly client: WhatsAppClient;
   private readonly activeCalls = new Map<string, ActiveCallSession>();
+  private readonly connectingCallIds = new Set<string>();
   private readonly roomManager: CallSessionManager;
   private readonly voiceMessageTranscriber: VoiceMessageTranscriber;
   private readonly fetchImplementation: typeof fetch;
@@ -277,6 +278,8 @@ export class WhatsAppBot {
   }
 
   async handleWebhook(body: WhatsAppWebhookBody): Promise<void> {
+    const pendingCallTasks: Promise<void>[] = [];
+
     for (const entry of body.entry ?? []) {
       for (const change of entry.changes ?? []) {
         if (change.field === "messages") {
@@ -294,10 +297,15 @@ export class WhatsAppBot {
             }
 
             if (isCallConnect(call)) {
-              if (this.activeCalls.has(callId)) {
+              if (this.activeCalls.has(callId) || this.connectingCallIds.has(callId)) {
                 continue;
               }
-              await this.handleConnect(callId, call);
+
+              this.connectingCallIds.add(callId);
+              const callTask = this.handleConnect(callId, call).finally(() => {
+                this.connectingCallIds.delete(callId);
+              });
+              pendingCallTasks.push(callTask);
               continue;
             }
 
@@ -308,6 +316,8 @@ export class WhatsAppBot {
         }
       }
     }
+
+    await Promise.all(pendingCallTasks);
   }
 
   private async handleIncomingMessage(message: WhatsAppMessage): Promise<void> {
