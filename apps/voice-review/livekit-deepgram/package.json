@@ -1,5 +1,5 @@
 {
-  "name": "livekit-deepgram",
+  "name": "livekit-review",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,14 +15,17 @@
     "worker:start": "node dist/worker.js start"
   },
   "dependencies": {
-    "@livekit/agents": "1.2.3",
-    "@livekit/agents-plugin-deepgram": "1.2.3",
-    "@livekit/agents-plugin-openai": "1.2.3",
-    "@livekit/agents-plugin-silero": "1.2.3",
+    "@livekit/agents": "1.2.8",
+    "@livekit/agents-plugin-deepgram": "1.2.8",
+    "@livekit/agents-plugin-openai": "1.2.8",
+    "@livekit/agents-plugin-silero": "1.2.8",
+    "@livekit/agents-plugin-xai": "1.2.8",
+    "@livekit/rtc-node": "0.13.25",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "livekit-client": "2.18.1",
-    "livekit-server-sdk": "2.15.0"
+    "livekit-server-sdk": "2.15.0",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.1",

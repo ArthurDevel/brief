@@ -11,7 +11,8 @@ function requireEnv(name: string): string {
 
 export interface AppEnv {
   port: number;
-  deepgramApiKey: string;
+  deepgramApiKey?: string;
+  xaiApiKey?: string;
   openrouterApiKey: string;
   openrouterModel: string;
   livekitHttpUrl: string;
@@ -37,7 +38,8 @@ export function getEnv(): AppEnv {
 
   cachedEnv = {
     port: parsedPort,
-    deepgramApiKey: requireEnv("DEEPGRAM_API_KEY"),
+    deepgramApiKey: process.env.DEEPGRAM_API_KEY?.trim() || undefined,
+    xaiApiKey: process.env.XAI_API_KEY?.trim() || undefined,
     openrouterApiKey: requireEnv("OPENROUTER_API_KEY"),
     openrouterModel: process.env.OPENROUTER_MODEL?.trim() || "google/gemini-3-flash-preview",
     livekitHttpUrl: toHttpUrl(livekitUrl),

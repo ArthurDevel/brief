@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Voice Review - LiveKit Deepgram</title>
+  <title>LiveKit Review</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -236,11 +236,16 @@
 </head>
 <body>
   <h1>Voice Review</h1>
-  <p class="subtitle">LiveKit + Deepgram Aura 2 -- WSOLA speed processing + RMS normalization</p>
+  <p class="subtitle">LiveKit review sandbox for comparing TTS and STT providers with the same LLM and post-processing chain.</p>
 
   <div class="tabs">
     <div class="tab active" data-tab="tts">TTS Preview</div>
     <div class="tab" data-tab="call">Live Call</div>
+  </div>
+
+  <div class="section">
+    <label>TTS Provider</label>
+    <select id="ttsProviderSelect"></select>
   </div>
 
   <div class="section">
@@ -277,6 +282,11 @@
 
   <div class="tab-content" id="tab-call">
     <div class="section">
+      <label>STT Provider</label>
+      <select id="sttProviderSelect"></select>
+    </div>
+
+    <div class="section">
       <label>Call Mode</label>
       <select id="modeSelect">
         <option value="chat">Open Conversation</option>
@@ -297,7 +307,7 @@
         <span class="call-timer" id="callTimer" style="display:none">00:00</span>
       </div>
       <div class="call-info">
-        Starts a LiveKit room with an LLM using the selected voice and speed.
+        Starts a LiveKit room with the selected STT provider, TTS provider, voice, and speed.
         Open Conversation keeps the call free-form. Demo Mode steers the LLM with a short brief so you can record more qualitative, product-style samples without any tool calls.
       </div>
     </div>
