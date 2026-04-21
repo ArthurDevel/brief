@@ -20,6 +20,7 @@ import {
   sendWhatsAppOverviewMessage,
   sendWhatsAppVoiceSettingsMessage,
 } from "../whatsappAuthCommands.js";
+import type { WhatsAppTransport } from "../whatsappTransport.js";
 
 const TEST_MESSAGE_CONFIG = {
   accessToken: "test-access-token",
@@ -31,6 +32,23 @@ const TEST_MESSAGE_CONFIG = {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+/**
+ * Creates a transport mock for auth-command delivery tests.
+ * @returns Transport mock
+ */
+function createTransportMock(): WhatsAppTransport {
+  return {
+    mode: "meta",
+    acceptCall: vi.fn(),
+    getMediaById: vi.fn(),
+    preAcceptCall: vi.fn(),
+    rejectCall: vi.fn(),
+    sendTemplateMessage: vi.fn().mockResolvedValue(undefined),
+    sendTextMessage: vi.fn().mockResolvedValue(undefined),
+    sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+  };
+}
 
 describe("isAuthenticateGmailCommand", () => {
   it("matches the hardcoded gmail auth command", () => {
@@ -152,240 +170,91 @@ describe("buildWhatsAppVoiceSettingsUrl", () => {
 
 describe("sendWhatsAppGmailConnectMessage", () => {
   it("sends the approved gmail utility template with the encoded phone variable", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    const transport = createTransportMock();
 
-    await sendWhatsAppGmailConnectMessage(TEST_MESSAGE_CONFIG, "+15551234567");
+    await sendWhatsAppGmailConnectMessage(transport, TEST_MESSAGE_CONFIG, "+15551234567");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://graph.facebook.com/v23.0/123456789/messages",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: "15551234567",
-          type: "template",
-          template: {
-            name: "composio_connect_gmail",
-            language: { code: "en" },
-            components: [
-              {
-                type: "button",
-                sub_type: "url",
-                index: "0",
-                parameters: [
-                  {
-                    type: "text",
-                    text: "%2B15551234567",
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      })
-    );
+    expect(transport.sendTemplateMessage).toHaveBeenCalledTimes(1);
+    expect(transport.sendTemplateMessage).toHaveBeenCalledWith({
+      fallbackText: "Connect Gmail: https://app.example.com/whatsapp/connectors/gmail?phone=%2B15551234567",
+      templateName: "composio_connect_gmail",
+      to: "+15551234567",
+      urlVariable: "%2B15551234567",
+    });
   });
 });
 
 describe("sendWhatsAppGoogleCalendarConnectMessage", () => {
   it("sends the approved google calendar utility template with the encoded phone variable", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    const transport = createTransportMock();
 
-    await sendWhatsAppGoogleCalendarConnectMessage(TEST_MESSAGE_CONFIG, "+15551234567");
+    await sendWhatsAppGoogleCalendarConnectMessage(transport, TEST_MESSAGE_CONFIG, "+15551234567");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://graph.facebook.com/v23.0/123456789/messages",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: "15551234567",
-          type: "template",
-          template: {
-            name: "composio_connect_google_calendar",
-            language: { code: "en" },
-            components: [
-              {
-                type: "button",
-                sub_type: "url",
-                index: "0",
-                parameters: [
-                  {
-                    type: "text",
-                    text: "%2B15551234567",
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      })
-    );
+    expect(transport.sendTemplateMessage).toHaveBeenCalledWith({
+      fallbackText: "Connect Google Calendar: https://app.example.com/whatsapp/connectors/googlecalendar?phone=%2B15551234567",
+      templateName: "composio_connect_google_calendar",
+      to: "+15551234567",
+      urlVariable: "%2B15551234567",
+    });
   });
 });
 
 describe("sendWhatsAppNotionConnectMessage", () => {
   it("sends the approved notion utility template with the encoded phone variable", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    const transport = createTransportMock();
 
-    await sendWhatsAppNotionConnectMessage(TEST_MESSAGE_CONFIG, "+15551234567");
+    await sendWhatsAppNotionConnectMessage(transport, TEST_MESSAGE_CONFIG, "+15551234567");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://graph.facebook.com/v23.0/123456789/messages",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: "15551234567",
-          type: "template",
-          template: {
-            name: "composio_connect_notion",
-            language: { code: "en" },
-            components: [
-              {
-                type: "button",
-                sub_type: "url",
-                index: "0",
-                parameters: [
-                  {
-                    type: "text",
-                    text: "%2B15551234567",
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      })
-    );
+    expect(transport.sendTemplateMessage).toHaveBeenCalledWith({
+      fallbackText: "Connect Notion: https://app.example.com/whatsapp/connectors/notion?phone=%2B15551234567",
+      templateName: "composio_connect_notion",
+      to: "+15551234567",
+      urlVariable: "%2B15551234567",
+    });
   });
 });
 
 describe("sendWhatsAppOutlookConnectMessage", () => {
   it("sends the approved outlook utility template with the encoded phone variable", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    const transport = createTransportMock();
 
-    await sendWhatsAppOutlookConnectMessage(TEST_MESSAGE_CONFIG, "+15551234567");
+    await sendWhatsAppOutlookConnectMessage(transport, TEST_MESSAGE_CONFIG, "+15551234567");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://graph.facebook.com/v23.0/123456789/messages",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: "15551234567",
-          type: "template",
-          template: {
-            name: "composio_connect_outlook",
-            language: { code: "en" },
-            components: [
-              {
-                type: "button",
-                sub_type: "url",
-                index: "0",
-                parameters: [
-                  {
-                    type: "text",
-                    text: "%2B15551234567",
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      })
-    );
+    expect(transport.sendTemplateMessage).toHaveBeenCalledWith({
+      fallbackText: "Connect Outlook: https://app.example.com/whatsapp/connectors/outlook?phone=%2B15551234567",
+      templateName: "composio_connect_outlook",
+      to: "+15551234567",
+      urlVariable: "%2B15551234567",
+    });
   });
 });
 
 describe("sendWhatsAppOverviewMessage", () => {
   it("sends the approved overview utility template with the encoded phone variable", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    const transport = createTransportMock();
 
-    await sendWhatsAppOverviewMessage(TEST_MESSAGE_CONFIG, "+15551234567");
+    await sendWhatsAppOverviewMessage(transport, TEST_MESSAGE_CONFIG, "+15551234567");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://graph.facebook.com/v23.0/123456789/messages",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: "15551234567",
-          type: "template",
-          template: {
-            name: "composio_connector_overview",
-            language: { code: "en" },
-            components: [
-              {
-                type: "button",
-                sub_type: "url",
-                index: "0",
-                parameters: [
-                  {
-                    type: "text",
-                    text: "%2B15551234567",
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      })
-    );
+    expect(transport.sendTemplateMessage).toHaveBeenCalledWith({
+      fallbackText: "Connected apps overview: https://app.example.com/whatsapp/connectors/overview?phone=%2B15551234567",
+      templateName: "composio_connector_overview",
+      to: "+15551234567",
+      urlVariable: "%2B15551234567",
+    });
   });
 });
 
 describe("sendWhatsAppVoiceSettingsMessage", () => {
   it("sends the approved voice settings utility template with the encoded phone variable", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    const transport = createTransportMock();
 
-    await sendWhatsAppVoiceSettingsMessage(TEST_MESSAGE_CONFIG, "+15551234567");
+    await sendWhatsAppVoiceSettingsMessage(transport, TEST_MESSAGE_CONFIG, "+15551234567");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://graph.facebook.com/v23.0/123456789/messages",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: "15551234567",
-          type: "template",
-          template: {
-            name: "voice_settings",
-            language: { code: "en" },
-            components: [
-              {
-                type: "button",
-                sub_type: "url",
-                index: "0",
-                parameters: [
-                  {
-                    type: "text",
-                    text: "%2B15551234567",
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      })
-    );
+    expect(transport.sendTemplateMessage).toHaveBeenCalledWith({
+      fallbackText: "Voice settings: https://app.example.com/whatsapp/settings/voice?phone=%2B15551234567",
+      templateName: "voice_settings",
+      to: "+15551234567",
+      urlVariable: "%2B15551234567",
+    });
   });
 });

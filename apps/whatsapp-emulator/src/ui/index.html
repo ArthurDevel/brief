@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WhatsApp Emulator</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="hero-card">
+        <div class="eyebrow">WhatsApp Emulator</div>
+        <h1>Browser calls for local voice testing</h1>
+        <p class="hero-copy">
+          Start a dev call with a real linked WhatsApp phone number. The emulator joins LiveKit as the caller and
+          dispatches the existing WhatsApp agent unchanged.
+        </p>
+      </section>
+
+      <section class="panel-grid">
+        <section class="panel">
+          <h2>Call Controls</h2>
+          <label class="field">
+            <span>Caller phone</span>
+            <input
+              id="callerPhone"
+              name="callerPhone"
+              type="tel"
+              placeholder="+15551234567"
+              autocomplete="tel"
+            />
+          </label>
+
+          <div class="button-row">
+            <button id="startCallButton" type="button">Start call</button>
+            <button id="muteButton" type="button" disabled>Mute mic</button>
+            <button id="endCallButton" type="button" disabled>End call</button>
+          </div>
+
+          <dl class="status-grid">
+            <div>
+              <dt>Status</dt>
+              <dd id="statusText">Idle</dd>
+            </div>
+            <div>
+              <dt>Call ID</dt>
+              <dd id="callIdText">-</dd>
+            </div>
+            <div>
+              <dt>Room</dt>
+              <dd id="roomNameText">-</dd>
+            </div>
+          </dl>
+
+          <div id="errorBanner" class="error-banner" hidden></div>
+        </section>
+
+        <section class="panel stack-panel">
+          <section>
+            <h2>Chat</h2>
+            <p class="panel-copy">
+              Send emulator text messages through the existing WhatsApp webhook path. Outbound replies appear here.
+            </p>
+
+            <div id="chatMessages" class="chat-messages">
+              <div class="chat-placeholder">Enter a caller phone number to load messages.</div>
+            </div>
+
+            <div id="typingIndicator" class="typing-indicator" hidden>Assistant is typing...</div>
+
+            <label class="field">
+              <span>Text message</span>
+              <textarea
+                id="chatInput"
+                name="chatInput"
+                rows="4"
+                placeholder="Type a WhatsApp message"
+              ></textarea>
+            </label>
+
+            <div class="button-row">
+              <button id="sendChatButton" type="button">Send message</button>
+            </div>
+          </section>
+
+          <section>
+            <h2>Audio</h2>
+            <p class="panel-copy">
+              Remote agent audio plays here after the room connects. Keep this tab active when the browser asks for
+              microphone access.
+            </p>
+
+            <div id="audioMount" class="audio-mount">
+              <div class="audio-placeholder">Waiting for remote audio</div>
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="/vendor/livekit-client/livekit-client.umd.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

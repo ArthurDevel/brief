@@ -8,11 +8,12 @@
  * - Send temporary WhatsApp text messages with those links
  */
 
+import type { WhatsAppTransport } from "./whatsappTransport.js";
+
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-const WHATSAPP_TEMPLATE_LANGUAGE = "en";
 const GMAIL_CONNECT_TEMPLATE_NAME = "composio_connect_gmail";
 const GOOGLE_CALENDAR_CONNECT_TEMPLATE_NAME = "composio_connect_google_calendar";
 const NOTION_CONNECT_TEMPLATE_NAME = "composio_connect_notion";
@@ -21,9 +22,6 @@ const CONNECTOR_OVERVIEW_TEMPLATE_NAME = "composio_connector_overview";
 const VOICE_SETTINGS_TEMPLATE_NAME = "voice_settings";
 
 export interface WhatsAppAuthMessageConfig {
-  accessToken: string;
-  apiVersion: string;
-  phoneNumberId: string;
   webBaseUrl: string;
 }
 
@@ -191,15 +189,9 @@ export function buildWhatsAppVoiceSettingsUrl(
  * @returns Config for the WhatsApp Graph API
  */
 export function getWhatsAppAuthMessageConfig(): WhatsAppAuthMessageConfig {
-  const accessToken = requireEnv("WHATSAPP_ACCESS_TOKEN");
-  const phoneNumberId = requireEnv("WHATSAPP_PHONE_NUMBER_ID");
   const webBaseUrl = requireEnv("WHATSAPP_WEB_BASE_URL");
-  const apiVersion = normalizeGraphApiVersion(process.env.WHATSAPP_API_VERSION?.trim() || "23");
 
   return {
-    accessToken,
-    apiVersion,
-    phoneNumberId,
     webBaseUrl,
   };
 }
@@ -211,15 +203,16 @@ export function getWhatsAppAuthMessageConfig(): WhatsAppAuthMessageConfig {
  * @returns Promise that resolves when the message is accepted by the Graph API
  */
 export async function sendWhatsAppGmailConnectMessage(
+  transport: WhatsAppTransport,
   config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
-  await sendWhatsAppUtilityTemplateMessage(
-    config,
+  await sendWhatsAppAuthLinkMessage(
+    transport,
     phone,
     GMAIL_CONNECT_TEMPLATE_NAME,
-    phoneUrlVariable
+    buildWhatsAppPhoneUrlVariable(phone),
+    `Connect Gmail: ${buildWhatsAppGmailConnectorUrl(config.webBaseUrl, phone)}`
   );
 }
 
@@ -230,15 +223,16 @@ export async function sendWhatsAppGmailConnectMessage(
  * @returns Promise that resolves when the message is accepted by the Graph API
  */
 export async function sendWhatsAppGoogleCalendarConnectMessage(
+  transport: WhatsAppTransport,
   config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
-  await sendWhatsAppUtilityTemplateMessage(
-    config,
+  await sendWhatsAppAuthLinkMessage(
+    transport,
     phone,
     GOOGLE_CALENDAR_CONNECT_TEMPLATE_NAME,
-    phoneUrlVariable
+    buildWhatsAppPhoneUrlVariable(phone),
+    `Connect Google Calendar: ${buildWhatsAppGoogleCalendarConnectorUrl(config.webBaseUrl, phone)}`
   );
 }
 
@@ -249,15 +243,16 @@ export async function sendWhatsAppGoogleCalendarConnectMessage(
  * @returns Promise that resolves when the message is accepted by the Graph API
  */
 export async function sendWhatsAppNotionConnectMessage(
+  transport: WhatsAppTransport,
   config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
-  await sendWhatsAppUtilityTemplateMessage(
-    config,
+  await sendWhatsAppAuthLinkMessage(
+    transport,
     phone,
     NOTION_CONNECT_TEMPLATE_NAME,
-    phoneUrlVariable
+    buildWhatsAppPhoneUrlVariable(phone),
+    `Connect Notion: ${buildWhatsAppNotionConnectorUrl(config.webBaseUrl, phone)}`
   );
 }
 
@@ -268,15 +263,16 @@ export async function sendWhatsAppNotionConnectMessage(
  * @returns Promise that resolves when the message is accepted by the Graph API
  */
 export async function sendWhatsAppOutlookConnectMessage(
+  transport: WhatsAppTransport,
   config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
-  await sendWhatsAppUtilityTemplateMessage(
-    config,
+  await sendWhatsAppAuthLinkMessage(
+    transport,
     phone,
     OUTLOOK_CONNECT_TEMPLATE_NAME,
-    phoneUrlVariable
+    buildWhatsAppPhoneUrlVariable(phone),
+    `Connect Outlook: ${buildWhatsAppOutlookConnectorUrl(config.webBaseUrl, phone)}`
   );
 }
 
@@ -287,15 +283,16 @@ export async function sendWhatsAppOutlookConnectMessage(
  * @returns Promise that resolves when the message is accepted by the Graph API
  */
 export async function sendWhatsAppOverviewMessage(
+  transport: WhatsAppTransport,
   config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
-  await sendWhatsAppUtilityTemplateMessage(
-    config,
+  await sendWhatsAppAuthLinkMessage(
+    transport,
     phone,
     CONNECTOR_OVERVIEW_TEMPLATE_NAME,
-    phoneUrlVariable
+    buildWhatsAppPhoneUrlVariable(phone),
+    `Connected apps overview: ${buildWhatsAppConnectorOverviewUrl(config.webBaseUrl, phone)}`
   );
 }
 
@@ -306,107 +303,17 @@ export async function sendWhatsAppOverviewMessage(
  * @returns Promise that resolves when the message is accepted by the Graph API
  */
 export async function sendWhatsAppVoiceSettingsMessage(
+  transport: WhatsAppTransport,
   config: WhatsAppAuthMessageConfig,
   phone: string
 ): Promise<void> {
-  const phoneUrlVariable = buildWhatsAppPhoneUrlVariable(phone);
-  await sendWhatsAppUtilityTemplateMessage(
-    config,
+  await sendWhatsAppAuthLinkMessage(
+    transport,
     phone,
     VOICE_SETTINGS_TEMPLATE_NAME,
-    phoneUrlVariable
+    buildWhatsAppPhoneUrlVariable(phone),
+    `Voice settings: ${buildWhatsAppVoiceSettingsUrl(config.webBaseUrl, phone)}`
   );
-}
-
-/**
- * Sends a simple WhatsApp text message.
- * @param config - WhatsApp config
- * @param phone - Normalized E.164 phone number
- * @param body - Text message body
- * @returns Promise that resolves when the message is accepted by the Graph API
- */
-async function sendWhatsAppTextMessage(
-  config: WhatsAppAuthMessageConfig,
-  phone: string,
-  body: string
-): Promise<void> {
-  const endpoint = `https://graph.facebook.com/${config.apiVersion}/${config.phoneNumberId}/messages`;
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to: phone.replace(/[^\d]/g, ""),
-      type: "text",
-      text: {
-        body,
-        preview_url: false,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const payload = await response.text();
-    throw new Error(`WhatsApp Gmail message send failed: ${payload}`);
-  }
-}
-
-/**
- * Sends a WhatsApp utility template with one URL button variable.
- * @param config - WhatsApp config
- * @param phone - Normalized E.164 phone number
- * @param templateName - Approved WhatsApp template name
- * @param urlVariable - URL variable value passed to the template button
- * @returns Promise that resolves when the message is accepted by the Graph API
- */
-async function sendWhatsAppUtilityTemplateMessage(
-  config: WhatsAppAuthMessageConfig,
-  phone: string,
-  templateName: string,
-  urlVariable: string
-): Promise<void> {
-  const endpoint = `https://graph.facebook.com/${config.apiVersion}/${config.phoneNumberId}/messages`;
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to: phone.replace(/[^\d]/g, ""),
-      type: "template",
-      template: {
-        name: templateName,
-        language: { code: WHATSAPP_TEMPLATE_LANGUAGE },
-        components: [
-          {
-            type: "button",
-            sub_type: "url",
-            index: "0",
-            parameters: [
-              {
-                type: "text",
-                text: urlVariable,
-              },
-            ],
-          },
-        ],
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const payload = await response.text();
-    throw new Error(`WhatsApp template send failed: ${payload}`);
-  }
 }
 
 // ============================================================================
@@ -453,6 +360,30 @@ function buildWhatsAppPhoneUrlVariable(phone: string): string {
 }
 
 /**
+ * Sends one auth-link template through the active transport.
+ * @param transport - Active WhatsApp transport
+ * @param phone - Normalized phone number
+ * @param templateName - Approved template name
+ * @param urlVariable - URL template variable
+ * @param fallbackText - Emulator-safe fallback text
+ * @returns Promise that resolves when the message is accepted
+ */
+async function sendWhatsAppAuthLinkMessage(
+  transport: WhatsAppTransport,
+  phone: string,
+  templateName: string,
+  urlVariable: string,
+  fallbackText: string
+): Promise<void> {
+  await transport.sendTemplateMessage({
+    fallbackText,
+    templateName,
+    to: phone,
+    urlVariable
+  });
+}
+
+/**
  * Reads a required environment variable.
  * @param name - Environment variable name
  * @returns Trimmed environment variable value
@@ -464,18 +395,4 @@ function requireEnv(name: string): string {
   }
 
   return value;
-}
-
-/**
- * Normalizes WhatsApp Graph API versions to the expected `v23.0` shape.
- * @param rawVersion - Raw version from the environment
- * @returns Normalized version string for Graph API requests
- */
-function normalizeGraphApiVersion(rawVersion: string): string {
-  const cleaned = rawVersion.replace(/^v/i, "");
-  if (!/^\d+(?:\.0)?$/.test(cleaned)) {
-    throw new Error(`WHATSAPP_API_VERSION must look like 23 or v23.0; received "${rawVersion}"`);
-  }
-
-  return cleaned.includes(".") ? `v${cleaned}` : `v${cleaned}.0`;
 }

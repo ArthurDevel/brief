@@ -6,6 +6,9 @@
   "scripts": {
     "dev:web": "pnpm --filter @dublin/web dev",
     "dev:whatsapp": "pnpm --filter @dublin/whatsapp-server dev",
+    "dev:whatsapp-agent": "pnpm --filter @dublin/whatsapp-agent dev",
+    "dev:whatsapp-emulator": "pnpm --filter @dublin/whatsapp-emulator dev",
+    "dev:whatsapp-stack": "./start-dev.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "node --env-file=.env.test.local node_modules/vitest/vitest.mjs run --config vitest.e2e.config.ts"

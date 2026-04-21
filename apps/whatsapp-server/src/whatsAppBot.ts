@@ -1,4 +1,3 @@
-import { WhatsApp } from "meta-cloud-api";
 import { MediaStreamTrackFactory, RTCPeerConnection, type MediaStreamTrack, type RTCIceServer } from "werift";
 import {
   DeepgramVoiceMessageTranscriber,
@@ -7,6 +6,12 @@ import {
 } from "./deepgramVoiceMessageTranscriber.js";
 import { WhatsAppLiveKitBridge } from "./livekitBridge.js";
 import { LiveKitRoomManager } from "./roomManager.js";
+import {
+  createWhatsAppTransport,
+  type LegacyWhatsAppClient,
+  type WhatsAppCallSessionParams,
+  type WhatsAppTransport,
+} from "./whatsappTransport.js";
 import {
   getWhatsAppAuthMessageConfig,
   isAuthenticateGmailCommand,
@@ -85,40 +90,6 @@ interface InboundTextMessage {
   replyMessageId?: string;
 }
 
-interface WhatsAppClient {
-  messages: {
-    text(params: {
-      body: string;
-      to: string;
-      replyMessageId?: string;
-    }): Promise<unknown>;
-  };
-  media: {
-    getMediaById(mediaId: string): Promise<{
-      url: string;
-      mime_type: string;
-    }>;
-  };
-  calling: {
-    preAcceptCall(params: {
-      call_id: string;
-      session: {
-        sdp_type: "answer";
-        sdp: string;
-      };
-    }): Promise<unknown>;
-    acceptCall(params: {
-      call_id: string;
-      session: {
-        sdp_type: "answer";
-        sdp: string;
-      };
-      biz_opaque_callback_data: string;
-    }): Promise<unknown>;
-    rejectCall(params: { call_id: string }): Promise<unknown>;
-  };
-}
-
 interface CallSessionManager {
   createCallSession(callId: string, caller: string | undefined): Promise<{
     roomName: string;
@@ -130,8 +101,9 @@ interface CallSessionManager {
 }
 
 interface WhatsAppBotDependencies {
-  client?: WhatsAppClient;
+  client?: LegacyWhatsAppClient;
   roomManager?: CallSessionManager;
+  transport?: WhatsAppTransport;
   voiceMessageTranscriber?: VoiceMessageTranscriber;
   fetchImplementation?: typeof fetch;
 }
@@ -217,16 +189,6 @@ function getVoiceBotEnv(): VoiceBotEnv {
   return cachedEnv;
 }
 
-function createClient(): WhatsApp {
-  const env = getVoiceBotEnv();
-  return new WhatsApp({
-    accessToken: env.accessToken,
-    phoneNumberId: env.phoneNumberId,
-    businessAcctId: env.businessAcctId,
-    apiVersion: env.apiVersion
-  });
-}
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -262,19 +224,24 @@ function isCallTerminate(call: WhatsAppCall): boolean {
 }
 
 export class WhatsAppBot {
-  private readonly client: WhatsAppClient;
   private readonly activeCalls = new Map<string, ActiveCallSession>();
   private readonly connectingCallIds = new Set<string>();
   private readonly roomManager: CallSessionManager;
+  private readonly transport: WhatsAppTransport;
   private readonly voiceMessageTranscriber: VoiceMessageTranscriber;
   private readonly fetchImplementation: typeof fetch;
 
   constructor(dependencies: WhatsAppBotDependencies = {}) {
-    this.client = dependencies.client ?? createClient();
+    this.fetchImplementation = dependencies.fetchImplementation ?? fetch;
+    this.transport =
+      dependencies.transport
+      ?? createWhatsAppTransport({
+        client: dependencies.client,
+        fetchImplementation: this.fetchImplementation
+      });
     this.roomManager = dependencies.roomManager ?? new LiveKitRoomManager();
     this.voiceMessageTranscriber =
       dependencies.voiceMessageTranscriber ?? new DeepgramVoiceMessageTranscriber();
-    this.fetchImplementation = dependencies.fetchImplementation ?? fetch;
   }
 
   async handleWebhook(body: WhatsAppWebhookBody): Promise<void> {
@@ -393,7 +360,7 @@ export class WhatsAppBot {
         error: error instanceof Error ? error.message : String(error)
       });
 
-      await this.client.messages.text({
+      await this.transport.sendTextMessage({
         body: "I couldn't transcribe your voice message. Please try again.",
         to: from,
         replyMessageId: message.id
@@ -433,31 +400,31 @@ export class WhatsAppBot {
       const messageConfig = getWhatsAppAuthMessageConfig();
 
       if (isAuthenticateGmailCommand(body)) {
-        await sendWhatsAppGmailConnectMessage(messageConfig, normalizedPhone);
+        await sendWhatsAppGmailConnectMessage(this.transport, messageConfig, normalizedPhone);
         return true;
       }
 
       if (isAuthenticateGoogleCalendarCommand(body)) {
-        await sendWhatsAppGoogleCalendarConnectMessage(messageConfig, normalizedPhone);
+        await sendWhatsAppGoogleCalendarConnectMessage(this.transport, messageConfig, normalizedPhone);
         return true;
       }
 
       if (isAuthenticateNotionCommand(body)) {
-        await sendWhatsAppNotionConnectMessage(messageConfig, normalizedPhone);
+        await sendWhatsAppNotionConnectMessage(this.transport, messageConfig, normalizedPhone);
         return true;
       }
 
       if (isAuthenticateOutlookCommand(body)) {
-        await sendWhatsAppOutlookConnectMessage(messageConfig, normalizedPhone);
+        await sendWhatsAppOutlookConnectMessage(this.transport, messageConfig, normalizedPhone);
         return true;
       }
 
       if (isVoiceSettingsCommand(body)) {
-        await sendWhatsAppVoiceSettingsMessage(messageConfig, normalizedPhone);
+        await sendWhatsAppVoiceSettingsMessage(this.transport, messageConfig, normalizedPhone);
         return true;
       }
 
-      await sendWhatsAppOverviewMessage(messageConfig, normalizedPhone);
+      await sendWhatsAppOverviewMessage(this.transport, messageConfig, normalizedPhone);
       return true;
     }
 
@@ -466,7 +433,7 @@ export class WhatsAppBot {
     }
 
     console.log(`[whatsapp-server] replying to text message from ${message.from}`);
-    await this.client.messages.text({
+    await this.transport.sendTextMessage({
       body: "received",
       to: message.from,
       replyMessageId: message.replyMessageId
@@ -484,7 +451,7 @@ export class WhatsAppBot {
 
     const media = message.audio?.url
       ? null
-      : await this.client.media.getMediaById(audioId);
+      : await this.transport.getMediaById(audioId);
     const mediaUrl = message.audio?.url?.trim() || media?.url?.trim();
     if (!mediaUrl) {
       throw new Error(`WhatsApp media ${audioId} is missing a download URL`);
@@ -523,30 +490,10 @@ export class WhatsAppBot {
       return;
     }
 
-    const env = getVoiceBotEnv();
-    const response = await this.fetchImplementation(
-      `https://graph.facebook.com/v${env.apiVersion}.0/${env.phoneNumberId}/messages`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.accessToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          status: "read",
-          message_id: messageId,
-          typing_indicator: {
-            type: "text"
-          }
-        })
-      }
-    );
-
-    if (!response.ok) {
-      const payload = await response.text();
-      throw new Error(`WhatsApp typing indicator failed: ${payload}`);
-    }
+    await this.transport.sendTypingIndicator({
+      messageId,
+      to: message.from?.trim() ?? ""
+    });
   }
 
   private async replyWithTranscript(
@@ -554,7 +501,7 @@ export class WhatsAppBot {
     replyMessageId: string | undefined,
     transcript: string
   ): Promise<void> {
-    await this.client.messages.text({
+    await this.transport.sendTextMessage({
       body: `I transcribed your voice message as:\n\n${transcript}`,
       to,
       replyMessageId
@@ -606,20 +553,13 @@ export class WhatsAppBot {
         throw new Error("failed to generate local SDP answer");
       }
 
-      const session = {
+      const session: WhatsAppCallSessionParams = {
         sdp_type: "answer" as const,
         sdp: localSdp
       };
 
-      await this.client.calling.preAcceptCall({
-        call_id: callId,
-        session
-      });
-      await this.client.calling.acceptCall({
-        call_id: callId,
-        session,
-        biz_opaque_callback_data: "whatsapp-server-greeting"
-      });
+      await this.transport.preAcceptCall(callId, session);
+      await this.transport.acceptCall(callId, session, "whatsapp-server-greeting");
 
       try {
         await waitForConnection(peerConnection, 8000);
@@ -649,7 +589,7 @@ export class WhatsAppBot {
     } catch (error) {
       console.error(`[whatsapp-server] failed to handle call ${callId}`, error);
       try {
-        await this.client.calling.rejectCall({ call_id: callId });
+        await this.transport.rejectCall(callId);
       } catch (rejectError) {
         console.error(`[whatsapp-server] failed to reject call ${callId}`, rejectError);
       }

@@ -126,6 +126,7 @@ For the WhatsApp call flow, run the web app, the WhatsApp webhook server, and th
 cp apps/web/.env.example apps/web/.env.local
 cp apps/whatsapp-server/.env.example apps/whatsapp-server/.env
 cp apps/whatsapp-agent/.env.example apps/whatsapp-agent/.env
+cp apps/whatsapp-emulator/.env.example apps/whatsapp-emulator/.env
 ```
 
 Important values:
@@ -146,8 +147,17 @@ Important values:
   - `LIVEKIT_URL`
   - `LIVEKIT_API_KEY`
   - `LIVEKIT_API_SECRET`
+- `apps/whatsapp-emulator/.env`
+  - `WHATSAPP_SERVER_URL`
+  - `LIVEKIT_URL`
+  - `LIVEKIT_API_KEY`
+  - `LIVEKIT_API_SECRET`
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
 
 Keep `LIVEKIT_AGENT_NAME` the same in both `apps/whatsapp-server/.env` and `apps/whatsapp-agent/.env`.
+Set `WHATSAPP_TRANSPORT_MODE=emulator` and `WHATSAPP_EMULATOR_URL=http://localhost:3030` when you want
+`apps/whatsapp-server` to deliver outbound chat replies into the emulator instead of the real WhatsApp transport.
 
 ### 2. Start the local apps
 
@@ -161,6 +171,18 @@ cd apps/whatsapp-server && pnpm dev
 # Terminal 3
 cd apps/whatsapp-agent && pnpm dev
 ```
+
+Or start the full local WhatsApp stack from the repo root:
+
+```bash
+pnpm dev:whatsapp-stack
+```
+
+This starts:
+- `apps/web`
+- `apps/whatsapp-server`
+- `apps/whatsapp-agent`
+- `apps/whatsapp-emulator`
 
 ### 3. Expose the WhatsApp webhook with ngrok
 

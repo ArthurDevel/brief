@@ -9,7 +9,7 @@ for f in "$CONDUCTOR_ROOT_PATH"/.env*(.N); do
 done
 
 # Symlink .env* files from subdirectories
-for dir in apps/voice-pipeline apps/web apps/whatsapp-server apps/whatsapp-agent; do
+for dir in apps/voice-pipeline apps/web apps/whatsapp-server apps/whatsapp-agent apps/whatsapp-emulator; do
     if [ -d "$CONDUCTOR_ROOT_PATH/$dir" ]; then
         mkdir -p "$dir"
         for f in "$CONDUCTOR_ROOT_PATH/$dir"/.env*(.N); do
