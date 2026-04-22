@@ -1,0 +1,57 @@
+{
+  "applied": true,
+  "createdCount": 8,
+  "dryRunCount": 0,
+  "generatedAt": "2026-04-22T05:36:17.669Z",
+  "results": [
+    {
+      "action": "created",
+      "destinationTemplateId": "1392476319574009",
+      "error": null,
+      "name": "composio_connect_gmail"
+    },
+    {
+      "action": "created",
+      "destinationTemplateId": "1315871867081508",
+      "error": null,
+      "name": "composio_connect_google_calendar"
+    },
+    {
+      "action": "created",
+      "destinationTemplateId": "935054666000853",
+      "error": null,
+      "name": "composio_connect_notion"
+    },
+    {
+      "action": "created",
+      "destinationTemplateId": "864964156603734",
+      "error": null,
+      "name": "composio_connect_outlook"
+    },
+    {
+      "action": "created",
+      "destinationTemplateId": "924858960386891",
+      "error": null,
+      "name": "composio_connector_overview"
+    },
+    {
+      "action": "created",
+      "destinationTemplateId": "1438444981094811",
+      "error": null,
+      "name": "otp_code"
+    },
+    {
+      "action": "created",
+      "destinationTemplateId": "1120646677792110",
+      "error": null,
+      "name": "session_summary"
+    },
+    {
+      "action": "created",
+      "destinationTemplateId": "952272524182302",
+      "error": null,
+      "name": "voice_settings"
+    }
+  ],
+  "skippedCount": 0
+}

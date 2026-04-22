@@ -1,0 +1,326 @@
+{
+  "applyChanges": false,
+  "destinationWabaId": "935045709508184",
+  "generatedAt": "2026-04-22T05:35:48.505Z",
+  "includedStatuses": [
+    "APPROVED"
+  ],
+  "itemCount": 8,
+  "items": [
+    {
+      "action": "create",
+      "category": "UTILITY",
+      "language": "en",
+      "name": "composio_connect_gmail",
+      "payload": {
+        "category": "UTILITY",
+        "components": [
+          {
+            "type": "HEADER",
+            "format": "TEXT",
+            "text": "Connect with Gmail"
+          },
+          {
+            "type": "BODY",
+            "text": "Authenticate with gmail to give Brewdock access. Authentication is securely handled by Composio. We will never store your emails."
+          },
+          {
+            "type": "BUTTONS",
+            "buttons": [
+              {
+                "type": "URL",
+                "text": "Connect with Gmail",
+                "url": "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/gmail?phone={{1}}",
+                "example": [
+                  "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/gmail?phone=%2B14153519653"
+                ]
+              }
+            ]
+          }
+        ],
+        "language": "en",
+        "name": "composio_connect_gmail",
+        "parameter_format": "POSITIONAL"
+      },
+      "reason": "Template does not exist on the destination WABA.",
+      "sourceTemplateId": "1810276187043924",
+      "status": "APPROVED"
+    },
+    {
+      "action": "create",
+      "category": "UTILITY",
+      "language": "en",
+      "name": "composio_connect_google_calendar",
+      "payload": {
+        "category": "UTILITY",
+        "components": [
+          {
+            "type": "HEADER",
+            "format": "TEXT",
+            "text": "Connect with Google Calendar"
+          },
+          {
+            "type": "BODY",
+            "text": "Authenticate with Google Calendar to give Brewdock access. Authentication is securely handled by Composio. We will never store your Calendar entries."
+          },
+          {
+            "type": "BUTTONS",
+            "buttons": [
+              {
+                "type": "URL",
+                "text": "Connect Google Calendar",
+                "url": "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/google-calendar?phone={{1}}",
+                "example": [
+                  "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/google-calendar?phone=%2B14153519653"
+                ]
+              }
+            ]
+          }
+        ],
+        "language": "en",
+        "name": "composio_connect_google_calendar",
+        "parameter_format": "POSITIONAL"
+      },
+      "reason": "Template does not exist on the destination WABA.",
+      "sourceTemplateId": "941842915225816",
+      "status": "APPROVED"
+    },
+    {
+      "action": "create",
+      "category": "UTILITY",
+      "language": "en",
+      "name": "composio_connect_notion",
+      "payload": {
+        "category": "UTILITY",
+        "components": [
+          {
+            "type": "HEADER",
+            "format": "TEXT",
+            "text": "Connect with Notion"
+          },
+          {
+            "type": "BODY",
+            "text": "Authenticate with Notion to give Brewdock access. Authentication is securely handled by Composio. We will never store your documents."
+          },
+          {
+            "type": "BUTTONS",
+            "buttons": [
+              {
+                "type": "URL",
+                "text": "Connect with Notion",
+                "url": "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/gmail?phone={{1}}",
+                "example": [
+                  "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/gmail?phone=%2B14153519653"
+                ]
+              }
+            ]
+          }
+        ],
+        "language": "en",
+        "name": "composio_connect_notion",
+        "parameter_format": "POSITIONAL"
+      },
+      "reason": "Template does not exist on the destination WABA.",
+      "sourceTemplateId": "2269318510266565",
+      "status": "APPROVED"
+    },
+    {
+      "action": "create",
+      "category": "UTILITY",
+      "language": "en",
+      "name": "composio_connect_outlook",
+      "payload": {
+        "category": "UTILITY",
+        "components": [
+          {
+            "type": "HEADER",
+            "format": "TEXT",
+            "text": "Connect with Outlook"
+          },
+          {
+            "type": "BODY",
+            "text": "Authenticate with Outlook to give Brewdock access. Authentication is securely handled by Composio. We will never store your documents."
+          },
+          {
+            "type": "BUTTONS",
+            "buttons": [
+              {
+                "type": "URL",
+                "text": "Connect with Outlook",
+                "url": "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/outlook?phone={{1}}",
+                "example": [
+                  "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/outlook?phone=%2B14153519653"
+                ]
+              }
+            ]
+          }
+        ],
+        "language": "en",
+        "name": "composio_connect_outlook",
+        "parameter_format": "POSITIONAL"
+      },
+      "reason": "Template does not exist on the destination WABA.",
+      "sourceTemplateId": "2370710566746331",
+      "status": "APPROVED"
+    },
+    {
+      "action": "create",
+      "category": "UTILITY",
+      "language": "en",
+      "name": "composio_connector_overview",
+      "payload": {
+        "category": "UTILITY",
+        "components": [
+          {
+            "type": "HEADER",
+            "format": "TEXT",
+            "text": "Connector Overview"
+          },
+          {
+            "type": "BODY",
+            "text": "You requested an overview of your connected applications. You can find an overview on the dashboard below."
+          },
+          {
+            "type": "BUTTONS",
+            "buttons": [
+              {
+                "type": "URL",
+                "text": "Open Dashboard",
+                "url": "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/overview?phone={{1}}",
+                "example": [
+                  "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/connectors/overview?phone=%2B14153519653"
+                ]
+              }
+            ]
+          }
+        ],
+        "language": "en",
+        "name": "composio_connector_overview",
+        "parameter_format": "POSITIONAL"
+      },
+      "reason": "Template does not exist on the destination WABA.",
+      "sourceTemplateId": "3386479051520590",
+      "status": "APPROVED"
+    },
+    {
+      "action": "create",
+      "category": "AUTHENTICATION",
+      "language": "en",
+      "name": "otp_code",
+      "payload": {
+        "category": "AUTHENTICATION",
+        "components": [
+          {
+            "type": "BODY",
+            "add_security_recommendation": true
+          },
+          {
+            "type": "FOOTER",
+            "code_expiration_minutes": 5
+          },
+          {
+            "type": "BUTTONS",
+            "buttons": [
+              {
+                "type": "OTP",
+                "otp_type": "COPY_CODE",
+                "text": "Copy code"
+              }
+            ]
+          }
+        ],
+        "language": "en",
+        "name": "otp_code",
+        "parameter_format": "POSITIONAL",
+        "message_send_ttl_seconds": 300
+      },
+      "reason": "Template does not exist on the destination WABA.",
+      "sourceTemplateId": "4386379111639255",
+      "status": "APPROVED"
+    },
+    {
+      "action": "create",
+      "category": "UTILITY",
+      "language": "en",
+      "name": "session_summary",
+      "payload": {
+        "category": "UTILITY",
+        "components": [
+          {
+            "type": "BODY",
+            "text": "Here is a summary of your latest voice session."
+          },
+          {
+            "type": "BUTTONS",
+            "buttons": [
+              {
+                "type": "URL",
+                "text": "Session Summary",
+                "url": "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/sessions/{{1}}",
+                "example": [
+                  "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/sessions/9d7f4d4f-2d0d-4d4f-8b7d-1a2c3e4f5g6h"
+                ]
+              }
+            ]
+          }
+        ],
+        "language": "en",
+        "name": "session_summary",
+        "parameter_format": "POSITIONAL"
+      },
+      "reason": "Template does not exist on the destination WABA.",
+      "sourceTemplateId": "2449075592232247",
+      "status": "APPROVED"
+    },
+    {
+      "action": "create",
+      "category": "UTILITY",
+      "language": "en",
+      "name": "voice_settings",
+      "payload": {
+        "category": "UTILITY",
+        "components": [
+          {
+            "type": "HEADER",
+            "format": "TEXT",
+            "text": "Voice Settings"
+          },
+          {
+            "type": "BODY",
+            "text": "Adjust your assistant's voice, speed, and other related settings below."
+          },
+          {
+            "type": "BUTTONS",
+            "buttons": [
+              {
+                "type": "URL",
+                "text": "Open Dashboard",
+                "url": "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/settings/voice?phone={{1}}",
+                "example": [
+                  "https://whitney-unreveling-nonconvivially.ngrok-free.dev/whatsapp/settings/voice?phone=%2B14153519653"
+                ]
+              }
+            ]
+          }
+        ],
+        "language": "en",
+        "name": "voice_settings",
+        "parameter_format": "POSITIONAL"
+      },
+      "reason": "Template does not exist on the destination WABA.",
+      "sourceTemplateId": "1486118872995118",
+      "status": "APPROVED"
+    }
+  ],
+  "onlyNames": [
+    "composio_connect_gmail",
+    "composio_connect_google_calendar",
+    "composio_connect_notion",
+    "composio_connect_outlook",
+    "composio_connector_overview",
+    "otp_code",
+    "session_summary",
+    "voice_settings"
+  ],
+  "sourceWabaId": "2859838071037183"
+}
