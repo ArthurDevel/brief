@@ -15,6 +15,32 @@ const START_LIMIT_MAX = 5;
 const START_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const VERIFICATION_TYPE = "magiclink";
 
+/**
+ * Extracts WhatsApp Graph API message IDs from a send response.
+ * @param responseBody - Parsed Graph API response payload
+ * @returns Array of message IDs when present
+ */
+function getGraphMessageIds(responseBody: unknown): string[] {
+  if (!responseBody || typeof responseBody !== "object" || !("messages" in responseBody)) {
+    return [];
+  }
+
+  const messages = (responseBody as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  return messages
+    .map((message) => {
+      if (!message || typeof message !== "object" || !("id" in message)) {
+        return null;
+      }
+
+      return typeof message.id === "string" ? message.id : null;
+    })
+    .filter((messageId): messageId is string => messageId !== null);
+}
+
 async function resolveOrCreateWhatsAppUser(
   supabase: ReturnType<typeof createServiceRoleClient>,
   phone: string
@@ -150,13 +176,33 @@ export async function POST(request: NextRequest) {
   }
 
   const config = getWhatsAppMessagingConfig();
+  console.info("[whatsapp-auth/start] sending otp", {
+    phone,
+    ipAddress,
+    userId: linkedIdentity.userId,
+    senderPhoneNumberId: config.phoneNumberId,
+    templateName: "otp_code",
+  });
+
   try {
-    await sendWhatsAppAuthTemplate(config, phone, data.properties.email_otp);
+    const sendResult = await sendWhatsAppAuthTemplate(config, phone, data.properties.email_otp);
+
+    console.info("[whatsapp-auth/start] whatsapp send accepted", {
+      phone,
+      ipAddress,
+      userId: linkedIdentity.userId,
+      senderPhoneNumberId: sendResult.phoneNumberId,
+      recipient: sendResult.recipient,
+      templateName: sendResult.templateName,
+      messageIds: getGraphMessageIds(sendResult.responseBody),
+      graphResponse: sendResult.responseBody,
+    });
   } catch (sendError) {
     console.error("[whatsapp-auth/start] whatsapp send failed", {
       phone,
       ipAddress,
       userId: linkedIdentity.userId,
+      senderPhoneNumberId: config.phoneNumberId,
       error: sendError instanceof Error ? sendError.message : String(sendError),
     });
     return NextResponse.json({ error: "We could not send the WhatsApp code." }, { status: 502 });
