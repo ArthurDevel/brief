@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase/client";
-import { Mail, Eye, Menu, User, LogOut, ArrowLeft } from "lucide-react";
+import { Mail, Eye, Menu, User, LogOut, ArrowLeft, MessageSquare } from "lucide-react";
 
 // ============================================================================
 // CONSTANTS
@@ -26,6 +26,7 @@ import { Mail, Eye, Menu, User, LogOut, ArrowLeft } from "lucide-react";
 const NAV_ITEMS = [
   { href: "/admin/transactional", label: "Transactional Emails", icon: Mail },
   { href: "/admin/transactional/preview", label: "Email Preview", icon: Eye },
+  { href: "/admin/whatsapp", label: "WhatsApp Conversations", icon: MessageSquare },
 ] as const;
 
 // ============================================================================
