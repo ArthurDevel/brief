@@ -5,6 +5,7 @@ import type {
   VoiceMessageTranscriptionRequest,
   VoiceMessageTranscriptionResult,
 } from "../deepgramVoiceMessageTranscriber.js";
+import type { PreparedInboundTextTurnResultDto } from "../text/types.js";
 
 // ============================================================================
 // TYPES
@@ -27,6 +28,16 @@ interface MockWhatsAppClient {
 interface DeferredPromise {
   promise: Promise<void>;
   resolve: () => void;
+}
+
+interface MockTextAgentDependencies {
+  textConversationStore: {
+    prepareInboundTurn: ReturnType<typeof vi.fn>;
+    recordOutboundReply: ReturnType<typeof vi.fn>;
+  };
+  textInteractionAgent: {
+    generateReply: ReturnType<typeof vi.fn>;
+  };
 }
 
 // ============================================================================
@@ -104,6 +115,48 @@ function createDeferredPromise(): DeferredPromise {
   };
 }
 
+/**
+ * Creates mocked text-agent dependencies so unrelated tests do not boot the real text path.
+ * @returns Mock text conversation store and interaction agent
+ */
+function createTextAgentDependencies(): MockTextAgentDependencies {
+  const defaultPreparedTurn: PreparedInboundTextTurnResultDto = {
+    linkedUser: {
+      userId: "user-1",
+      whatsappPhone: "+15551234567",
+    },
+    status: "ready",
+    turn: {
+      conversationHistory: [],
+      currentMessage: {
+        id: "msg-1",
+        contactPhoneNumber: "+15551234567",
+        createdAt: "2026-04-22T10:00:00.000Z",
+        direction: "inbound",
+        metaMessageId: "wamid.voice",
+        status: "received",
+        text: "hello world",
+        userId: "user-1",
+      },
+      linkedUser: {
+        userId: "user-1",
+        whatsappPhone: "+15551234567",
+      },
+      memoryEntries: [],
+    },
+  };
+
+  return {
+    textConversationStore: {
+      prepareInboundTurn: vi.fn().mockResolvedValue(defaultPreparedTurn),
+      recordOutboundReply: vi.fn().mockResolvedValue(undefined),
+    },
+    textInteractionAgent: {
+      generateReply: vi.fn().mockResolvedValue("mocked text reply"),
+    },
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -146,12 +199,15 @@ describe("WhatsAppBot voice messages", () => {
     const client = createMockClient();
     const firstCall = createDeferredPromise();
     const secondCall = createDeferredPromise();
+    const textDeps = createTextAgentDependencies();
     const bot = new WhatsAppBot({
       client: client as any,
       roomManager: {
         createCallSession: vi.fn(),
         cleanupCallSession: vi.fn(),
       },
+      textConversationStore: textDeps.textConversationStore as any,
+      textInteractionAgent: textDeps.textInteractionAgent as any,
       voiceMessageTranscriber: createTranscriber("unused"),
       fetchImplementation: vi.fn() as typeof fetch,
     });
@@ -210,12 +266,15 @@ describe("WhatsAppBot voice messages", () => {
   it("ignores duplicate connect events for the same call while setup is still in flight", async () => {
     const client = createMockClient();
     const activeCall = createDeferredPromise();
+    const textDeps = createTextAgentDependencies();
     const bot = new WhatsAppBot({
       client: client as any,
       roomManager: {
         createCallSession: vi.fn(),
         cleanupCallSession: vi.fn(),
       },
+      textConversationStore: textDeps.textConversationStore as any,
+      textInteractionAgent: textDeps.textInteractionAgent as any,
       voiceMessageTranscriber: createTranscriber("unused"),
       fetchImplementation: vi.fn() as typeof fetch,
     });
@@ -267,17 +326,20 @@ describe("WhatsAppBot voice messages", () => {
     await webhookPromise;
   });
 
-  it("reuses the text handler when a voice note transcribes to hello world", async () => {
+  it("routes a transcribed voice note through the text interaction agent", async () => {
     const client = createMockClient();
     const transcriber = createTranscriber("hello world");
     const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("voice-note"), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const textDeps = createTextAgentDependencies();
     const bot = new WhatsAppBot({
       client: client as any,
       roomManager: {
         createCallSession: vi.fn(),
         cleanupCallSession: vi.fn(),
       },
+      textConversationStore: textDeps.textConversationStore as any,
+      textInteractionAgent: textDeps.textInteractionAgent as any,
       voiceMessageTranscriber: transcriber,
       fetchImplementation: fetchMock as typeof fetch,
     });
@@ -312,36 +374,61 @@ describe("WhatsAppBot voice messages", () => {
       }
     );
     expect(client.media.getMediaById).not.toHaveBeenCalled();
+    expect(textDeps.textConversationStore.prepareInboundTurn).toHaveBeenCalledWith({
+      fromPhone: "15551234567",
+      messageId: "wamid.voice",
+      rawPayload: {
+        originalMessage: expect.objectContaining({
+          id: "wamid.voice",
+          from: "15551234567",
+          type: "audio",
+        }),
+        transcription: {
+          confidence: 0.98,
+          transcript: "hello world",
+        },
+      },
+      text: "hello world",
+    });
+    expect(textDeps.textInteractionAgent.generateReply).toHaveBeenCalledTimes(1);
     expect(client.messages.text).toHaveBeenCalledTimes(1);
     expect(client.messages.text).toHaveBeenCalledWith({
-      body: "received",
+      body: "mocked text reply",
       to: "15551234567",
       replyMessageId: "wamid.voice",
     });
   });
 
-  it("echoes the transcript back when the voice note does not match an existing text flow", async () => {
+  it("does not send a reply for duplicate transcribed voice-note webhooks", async () => {
     const client = createMockClient();
     const transcriber = createTranscriber("check my inbox");
     const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("voice-note"), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const textDeps = createTextAgentDependencies();
+    textDeps.textConversationStore.prepareInboundTurn.mockResolvedValue({
+      linkedUser: {
+        userId: "user-1",
+        whatsappPhone: "+15551234567",
+      },
+      status: "duplicate",
+      turn: null,
+    } satisfies PreparedInboundTextTurnResultDto);
     const bot = new WhatsAppBot({
       client: client as any,
       roomManager: {
         createCallSession: vi.fn(),
         cleanupCallSession: vi.fn(),
       },
+      textConversationStore: textDeps.textConversationStore as any,
+      textInteractionAgent: textDeps.textInteractionAgent as any,
       voiceMessageTranscriber: transcriber,
       fetchImplementation: fetchMock as typeof fetch,
     });
 
     await bot.handleWebhook(createAudioWebhookBody());
 
-    expect(client.messages.text).toHaveBeenCalledWith({
-      body: "I transcribed your voice message as:\n\ncheck my inbox",
-      to: "15551234567",
-      replyMessageId: "wamid.voice",
-    });
+    expect(textDeps.textInteractionAgent.generateReply).not.toHaveBeenCalled();
+    expect(client.messages.text).not.toHaveBeenCalled();
   });
 
   it("sends a clear failure message when transcription throws", async () => {
@@ -351,12 +438,15 @@ describe("WhatsAppBot voice messages", () => {
     };
     const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("voice-note"), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const textDeps = createTextAgentDependencies();
     const bot = new WhatsAppBot({
       client: client as any,
       roomManager: {
         createCallSession: vi.fn(),
         cleanupCallSession: vi.fn(),
       },
+      textConversationStore: textDeps.textConversationStore as any,
+      textInteractionAgent: textDeps.textInteractionAgent as any,
       voiceMessageTranscriber: transcriber,
       fetchImplementation: fetchMock as typeof fetch,
     });
@@ -375,12 +465,15 @@ describe("WhatsAppBot voice messages", () => {
     const transcriber = createTranscriber("hello world");
     const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("voice-note"), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const textDeps = createTextAgentDependencies();
     const bot = new WhatsAppBot({
       client: client as any,
       roomManager: {
         createCallSession: vi.fn(),
         cleanupCallSession: vi.fn(),
       },
+      textConversationStore: textDeps.textConversationStore as any,
+      textInteractionAgent: textDeps.textInteractionAgent as any,
       voiceMessageTranscriber: transcriber,
       fetchImplementation: fetchMock as typeof fetch,
     });
@@ -410,12 +503,15 @@ describe("WhatsAppBot voice messages", () => {
     const client = createMockClient();
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const textDeps = createTextAgentDependencies();
     const bot = new WhatsAppBot({
       client: client as any,
       roomManager: {
         createCallSession: vi.fn(),
         cleanupCallSession: vi.fn(),
       },
+      textConversationStore: textDeps.textConversationStore as any,
+      textInteractionAgent: textDeps.textInteractionAgent as any,
       voiceMessageTranscriber: createTranscriber("unused"),
       fetchImplementation: fetchMock as typeof fetch,
     });

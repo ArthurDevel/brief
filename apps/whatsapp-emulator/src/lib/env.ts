@@ -15,6 +15,7 @@ export interface EmulatorEnv {
   livekitApiKey: string;
   livekitApiSecret: string;
   livekitUrl: string;
+  metaAppSecret: string;
   port: number;
   supabaseServiceRoleKey: string;
   supabaseUrl: string;
@@ -41,6 +42,7 @@ export function getEnv(): EmulatorEnv {
     livekitApiKey: requireEnv("LIVEKIT_API_KEY"),
     livekitApiSecret: requireEnv("LIVEKIT_API_SECRET"),
     livekitUrl: requireEnv("LIVEKIT_URL"),
+    metaAppSecret: requireEnv("META_APP_SECRET"),
     port: getPort(),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
     supabaseUrl: requireEnv("SUPABASE_URL"),

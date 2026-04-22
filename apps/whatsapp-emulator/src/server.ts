@@ -9,6 +9,7 @@
  */
 
 import { config as loadDotEnv } from "dotenv";
+import { createHmac } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -337,18 +338,32 @@ function getIsTyping(phone: string): boolean {
  * @returns Promise that resolves when the webhook is accepted
  */
 async function forwardInboundTextWebhook(body: InboundTextWebhookBody): Promise<void> {
+  const rawBody = JSON.stringify(body);
+  const signature = createMetaWebhookSignature(rawBody, env.metaAppSecret);
   const response = await fetch(new URL("/api/whatsapp/webhook", env.whatsappServerUrl), {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      "X-Hub-Signature-256": signature,
     },
-    body: JSON.stringify(body)
+    body: rawBody
   });
 
   if (!response.ok) {
     const responseText = await response.text();
     throw new Error(`WhatsApp webhook forward failed (${response.status}): ${responseText}`);
   }
+}
+
+/**
+ * Creates the Meta webhook signature for one JSON request body.
+ * @param rawBody - Exact JSON payload string
+ * @param appSecret - Shared Meta app secret
+ * @returns Meta-compatible sha256 signature header value
+ */
+function createMetaWebhookSignature(rawBody: string, appSecret: string): string {
+  const digest = createHmac("sha256", appSecret).update(rawBody).digest("hex");
+  return `sha256=${digest}`;
 }
 
 /**

@@ -1,5 +1,8 @@
 import { MediaStreamTrackFactory, RTCPeerConnection, type MediaStreamTrack, type RTCIceServer } from "werift";
 import {
+  WhatsAppUserNotFoundError,
+} from "@dublin/whatsapp-core";
+import {
   DeepgramVoiceMessageTranscriber,
   type VoiceMessageTranscriber,
   type VoiceMessageTranscriptionResult,
@@ -28,6 +31,15 @@ import {
   sendWhatsAppOverviewMessage,
   sendWhatsAppVoiceSettingsMessage,
 } from "./whatsappAuthCommands.js";
+import {
+  createWhatsAppInteractionAgent,
+  type WhatsAppInteractionAgent,
+} from "./text/interactionAgent.js";
+import {
+  createWhatsAppTextConversationStore,
+  type WhatsAppTextConversationStore,
+} from "./text/conversationStore.js";
+import type { WhatsAppUserVisibleActionDto } from "./text/types.js";
 
 interface WhatsAppCallSession {
   sdp_type?: "offer" | "answer";
@@ -88,6 +100,7 @@ interface InboundTextMessage {
   body: string;
   from: string;
   replyMessageId?: string;
+  rawPayload?: unknown;
 }
 
 interface CallSessionManager {
@@ -106,6 +119,8 @@ interface WhatsAppBotDependencies {
   transport?: WhatsAppTransport;
   voiceMessageTranscriber?: VoiceMessageTranscriber;
   fetchImplementation?: typeof fetch;
+  textConversationStore?: WhatsAppTextConversationStore;
+  textInteractionAgent?: WhatsAppInteractionAgent;
 }
 
 interface VoiceBotEnv {
@@ -228,6 +243,8 @@ export class WhatsAppBot {
   private readonly connectingCallIds = new Set<string>();
   private readonly roomManager: CallSessionManager;
   private readonly transport: WhatsAppTransport;
+  private readonly textConversationStore: WhatsAppTextConversationStore;
+  private readonly textInteractionAgent: WhatsAppInteractionAgent;
   private readonly voiceMessageTranscriber: VoiceMessageTranscriber;
   private readonly fetchImplementation: typeof fetch;
 
@@ -240,6 +257,10 @@ export class WhatsAppBot {
         fetchImplementation: this.fetchImplementation
       });
     this.roomManager = dependencies.roomManager ?? new LiveKitRoomManager();
+    this.textConversationStore =
+      dependencies.textConversationStore ?? createWhatsAppTextConversationStore();
+    this.textInteractionAgent =
+      dependencies.textInteractionAgent ?? createWhatsAppInteractionAgent();
     this.voiceMessageTranscriber =
       dependencies.voiceMessageTranscriber ?? new DeepgramVoiceMessageTranscriber();
   }
@@ -315,7 +336,8 @@ export class WhatsAppBot {
     await this.processInboundTextMessage({
       body,
       from,
-      replyMessageId: message.id
+      replyMessageId: message.id,
+      rawPayload: message,
     });
   }
 
@@ -345,7 +367,11 @@ export class WhatsAppBot {
       const handled = await this.processInboundTextMessage({
         body: transcription.transcript,
         from,
-        replyMessageId: message.id
+        replyMessageId: message.id,
+        rawPayload: {
+          originalMessage: message,
+          transcription,
+        },
       });
 
       if (handled) {
@@ -428,16 +454,7 @@ export class WhatsAppBot {
       return true;
     }
 
-    if (body.toLowerCase() !== "hello world") {
-      return false;
-    }
-
-    console.log(`[whatsapp-server] replying to text message from ${message.from}`);
-    await this.transport.sendTextMessage({
-      body: "received",
-      to: message.from,
-      replyMessageId: message.replyMessageId
-    });
+    await this.handleInteractionAgentTextMessage(message);
     return true;
   }
 
@@ -506,6 +523,151 @@ export class WhatsAppBot {
       to,
       replyMessageId
     });
+  }
+
+  private async handleInteractionAgentTextMessage(message: InboundTextMessage): Promise<void> {
+    try {
+      const messageId = message.replyMessageId?.trim();
+      if (!messageId) {
+        throw new Error("Incoming WhatsApp text message is missing message.id");
+      }
+
+      console.info("[whatsapp-server] handling interaction-agent text message", {
+        from: message.from,
+        messageId,
+        textLength: message.body.length,
+      });
+
+      const preparedTurn = await this.textConversationStore.prepareInboundTurn({
+        fromPhone: message.from,
+        messageId,
+        rawPayload: message.rawPayload ?? {},
+        text: message.body,
+      });
+
+      if (preparedTurn.status === "duplicate" || !preparedTurn.turn) {
+        console.info("[whatsapp-server] skipping duplicate inbound text message", {
+          from: message.from,
+          messageId: message.replyMessageId ?? null,
+        });
+        return;
+      }
+
+      console.info("[whatsapp-server] running interaction-agent text turn", {
+        from: message.from,
+        messageId,
+        userId: preparedTurn.linkedUser.userId,
+      });
+
+      await this.textInteractionAgent.runTurn(
+        preparedTurn.turn,
+        async (action) => {
+          await this.sendUserVisibleAction(
+            action,
+            message.from,
+            message.replyMessageId,
+            preparedTurn.linkedUser
+          );
+        }
+      );
+
+      console.info("[whatsapp-server] finished interaction-agent text turn", {
+        from: message.from,
+        messageId,
+        userId: preparedTurn.linkedUser.userId,
+      });
+    } catch (error) {
+      if (error instanceof WhatsAppUserNotFoundError) {
+        await this.replyToUnknownWhatsAppUser(message);
+        return;
+      }
+
+      console.error("[whatsapp-server] text interaction agent failed", {
+        from: message.from,
+        messageId: message.replyMessageId ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await this.replyWithTextAgentFailure(message);
+    }
+  }
+
+  private async replyToUnknownWhatsAppUser(message: InboundTextMessage): Promise<void> {
+    await this.transport.sendTextMessage({
+      body: "I couldn't find an account for this WhatsApp number. Send authenticate overview to connect first.",
+      to: message.from,
+      replyMessageId: message.replyMessageId,
+    });
+  }
+
+  private async replyWithTextAgentFailure(message: InboundTextMessage): Promise<void> {
+    await this.transport.sendTextMessage({
+      body: "The WhatsApp text assistant is unavailable right now. Please try again later.",
+      to: message.from,
+      replyMessageId: message.replyMessageId,
+    });
+  }
+
+  /**
+   * Sends one user-visible interaction action and records it in storage.
+   * @param action - User-visible interaction action
+   * @param to - WhatsApp destination phone
+   * @param replyMessageId - Message ID to reply to
+   * @param linkedUser - Linked WhatsApp user
+   * @returns Promise that resolves when the action is sent and stored
+   */
+  private async sendUserVisibleAction(
+    action: WhatsAppUserVisibleActionDto,
+    to: string,
+    replyMessageId: string | undefined,
+    linkedUser: { userId: string; whatsappPhone: string }
+  ): Promise<void> {
+    const replyText = this.renderUserVisibleAction(action);
+    console.info("[whatsapp-server] sending user-visible action", {
+      actionType: action.type,
+      replyLength: replyText.length,
+      replyMessageId: replyMessageId ?? null,
+      to,
+      userId: linkedUser.userId,
+    });
+    await this.transport.sendTextMessage({
+      body: replyText,
+      to,
+      replyMessageId,
+    });
+    await this.textConversationStore.recordOutboundReply({
+      linkedUser,
+      rawPayload: {
+        action,
+        inReplyToMessageId: replyMessageId ?? null,
+        text: replyText,
+      },
+      replyText,
+    });
+    console.info("[whatsapp-server] sent user-visible action", {
+      actionType: action.type,
+      replyLength: replyText.length,
+      replyMessageId: replyMessageId ?? null,
+      to,
+      userId: linkedUser.userId,
+    });
+  }
+
+  /**
+   * Renders one user-visible interaction action into WhatsApp text.
+   * @param action - User-visible action produced by the interaction agent
+   * @returns WhatsApp message body
+   */
+  private renderUserVisibleAction(action: WhatsAppUserVisibleActionDto): string {
+    if (action.type === "message") {
+      return action.message;
+    }
+
+    return [
+      `Draft to: ${action.to}`,
+      `Subject: ${action.subject}`,
+      "",
+      action.body,
+    ].join("\n");
   }
 
   private async handleConnect(callId: string, call: WhatsAppCall): Promise<void> {
