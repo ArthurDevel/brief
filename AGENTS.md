@@ -2,7 +2,7 @@
 - .docs/error-messages.md -> this repo's system to handle errors
 
 # Guide on How to interact with the user
-- before implementing code, always first propose a plan to the user and ask for feedback. You are free to read whichever files you need without asking for permission.
+- before implementing code, first propose a plan and ask for feedback only for feature planning, ambiguous requests, or larger changes. If the user gives a simple, clear, direct request, just do it. You are free to read whichever files you need without asking for permission.
 - when giving options, FIRST give all the options, do not execute them
 - do not use emojis
 - if you want to do operations outside the scope of the user request, first ask the user
