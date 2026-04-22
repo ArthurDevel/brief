@@ -1,4 +1,5 @@
 import { config as loadDotEnv } from "dotenv";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
@@ -37,6 +38,7 @@ const DEFAULT_PORT = 3020;
 const WEBHOOK_REQUEST_BODY_LIMIT = "256kb";
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv({ path: path.resolve(currentDir, "../.env") });
+requireFfmpegBinary();
 
 const app = express();
 const whatsAppBot = new WhatsAppBot();
@@ -63,6 +65,28 @@ function getPort(): number {
   }
 
   return port;
+}
+
+/**
+ * Verifies that the `ffmpeg` binary is available before the server starts.
+ * @returns Void
+ */
+function requireFfmpegBinary(): void {
+  const ffmpegCheck = spawnSync("ffmpeg", ["-version"], {
+    stdio: "ignore"
+  });
+
+  if (ffmpegCheck.error) {
+    throw new Error(
+      `ffmpeg is required for whatsapp-server voice calling: ${
+        ffmpegCheck.error instanceof Error ? ffmpegCheck.error.message : String(ffmpegCheck.error)
+      }`
+    );
+  }
+
+  if (ffmpegCheck.status !== 0) {
+    throw new Error(`ffmpeg is required for whatsapp-server voice calling. Check failed with status ${ffmpegCheck.status}.`);
+  }
 }
 
 function classifyWebhookEvent(body: WhatsAppWebhookBody): IncomingEventKind {
