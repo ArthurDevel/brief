@@ -171,7 +171,19 @@ class MetaWhatsAppTransport implements WhatsAppTransport {
    * @returns Promise that resolves when accepted
    */
   async sendTextMessage(params: SendWhatsAppTextMessageParams): Promise<void> {
+    console.info("[whatsapp-server] transport send text message start", {
+      transportMode: this.mode,
+      to: params.to,
+      replyMessageId: params.replyMessageId ?? null,
+      bodyLength: params.body.length,
+    });
     await this.client.messages.text(params);
+    console.info("[whatsapp-server] transport send text message complete", {
+      transportMode: this.mode,
+      to: params.to,
+      replyMessageId: params.replyMessageId ?? null,
+      bodyLength: params.body.length,
+    });
   }
 
   /**
@@ -180,6 +192,12 @@ class MetaWhatsAppTransport implements WhatsAppTransport {
    * @returns Promise that resolves when accepted
    */
   async sendTemplateMessage(params: SendWhatsAppTemplateMessageParams): Promise<void> {
+    console.info("[whatsapp-server] transport send template message start", {
+      transportMode: this.mode,
+      to: params.to,
+      templateName: params.templateName,
+      urlVariableLength: params.urlVariable.length,
+    });
     const response = await this.fetchImplementation(this.getMessagesEndpoint(), {
       method: "POST",
       headers: {
@@ -215,6 +233,13 @@ class MetaWhatsAppTransport implements WhatsAppTransport {
       const responseText = await response.text();
       throw new Error(`WhatsApp template send failed: ${responseText}`);
     }
+
+    console.info("[whatsapp-server] transport send template message complete", {
+      transportMode: this.mode,
+      to: params.to,
+      templateName: params.templateName,
+      responseStatus: response.status,
+    });
   }
 
   /**
@@ -223,6 +248,11 @@ class MetaWhatsAppTransport implements WhatsAppTransport {
    * @returns Promise that resolves when accepted
    */
   async sendTypingIndicator(params: SendWhatsAppTypingIndicatorParams): Promise<void> {
+    console.info("[whatsapp-server] transport send typing indicator start", {
+      transportMode: this.mode,
+      to: params.to,
+      messageId: params.messageId,
+    });
     const response = await this.fetchImplementation(this.getMessagesEndpoint(), {
       method: "POST",
       headers: {
@@ -243,6 +273,13 @@ class MetaWhatsAppTransport implements WhatsAppTransport {
       const responseText = await response.text();
       throw new Error(`WhatsApp typing indicator failed: ${responseText}`);
     }
+
+    console.info("[whatsapp-server] transport send typing indicator complete", {
+      transportMode: this.mode,
+      to: params.to,
+      messageId: params.messageId,
+      responseStatus: response.status,
+    });
   }
 
   /**
@@ -251,7 +288,18 @@ class MetaWhatsAppTransport implements WhatsAppTransport {
    * @returns Media lookup result
    */
   async getMediaById(mediaId: string): Promise<GetWhatsAppMediaByIdResult> {
-    return await this.client.media.getMediaById(mediaId);
+    console.info("[whatsapp-server] transport get media start", {
+      transportMode: this.mode,
+      mediaId,
+    });
+    const result = await this.client.media.getMediaById(mediaId);
+    console.info("[whatsapp-server] transport get media complete", {
+      transportMode: this.mode,
+      mediaId,
+      mimeType: result.mime_type,
+      hasUrl: Boolean(result.url),
+    });
+    return result;
   }
 
   /**
@@ -326,7 +374,19 @@ class EmulatorWhatsAppTransport implements WhatsAppTransport {
    * @returns Promise that resolves when stored
    */
   async sendTextMessage(params: SendWhatsAppTextMessageParams): Promise<void> {
+    console.info("[whatsapp-server] transport send text message start", {
+      transportMode: this.mode,
+      to: params.to,
+      replyMessageId: params.replyMessageId ?? null,
+      bodyLength: params.body.length,
+    });
     await this.postJson("/api/emulator/outbound/text", params);
+    console.info("[whatsapp-server] transport send text message complete", {
+      transportMode: this.mode,
+      to: params.to,
+      replyMessageId: params.replyMessageId ?? null,
+      bodyLength: params.body.length,
+    });
   }
 
   /**
@@ -335,9 +395,20 @@ class EmulatorWhatsAppTransport implements WhatsAppTransport {
    * @returns Promise that resolves when stored
    */
   async sendTemplateMessage(params: SendWhatsAppTemplateMessageParams): Promise<void> {
+    console.info("[whatsapp-server] transport send template message start", {
+      transportMode: this.mode,
+      to: params.to,
+      templateName: params.templateName,
+      urlVariableLength: params.urlVariable.length,
+    });
     await this.postJson("/api/emulator/outbound/text", {
       body: params.fallbackText,
       to: params.to
+    });
+    console.info("[whatsapp-server] transport send template message complete", {
+      transportMode: this.mode,
+      to: params.to,
+      templateName: params.templateName,
     });
   }
 
@@ -347,7 +418,17 @@ class EmulatorWhatsAppTransport implements WhatsAppTransport {
    * @returns Promise that resolves when stored
    */
   async sendTypingIndicator(params: SendWhatsAppTypingIndicatorParams): Promise<void> {
+    console.info("[whatsapp-server] transport send typing indicator start", {
+      transportMode: this.mode,
+      to: params.to,
+      messageId: params.messageId,
+    });
     await this.postJson("/api/emulator/outbound/typing", params);
+    console.info("[whatsapp-server] transport send typing indicator complete", {
+      transportMode: this.mode,
+      to: params.to,
+      messageId: params.messageId,
+    });
   }
 
   /**

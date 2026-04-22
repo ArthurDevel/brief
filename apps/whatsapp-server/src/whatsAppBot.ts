@@ -322,22 +322,42 @@ export class WhatsAppBot {
   private async handleIncomingTextMessage(message: WhatsAppMessage): Promise<void> {
     const from = message.from?.trim();
     if (!from) {
+      console.warn("[whatsapp-server] skipping text message without sender", {
+        messageId: message.id ?? null,
+      });
       return;
     }
+
+    console.info("[whatsapp-server] start text message handling", {
+      from,
+      messageId: message.id ?? null,
+      textLength: message.text?.body?.trim().length ?? 0,
+    });
 
     await this.sendTypingIndicator(message).catch((error) => {
       console.warn("[whatsapp-server] failed to send typing indicator", {
         messageId: message.id ?? null,
+        from,
         error: error instanceof Error ? error.message : String(error)
       });
     });
 
     const body = message.text?.body?.trim() ?? "";
+    console.info("[whatsapp-server] start inbound text processing", {
+      from,
+      messageId: message.id ?? null,
+      textLength: body.length,
+    });
     await this.processInboundTextMessage({
       body,
       from,
       replyMessageId: message.id,
       rawPayload: message,
+    });
+    console.info("[whatsapp-server] finished text message handling", {
+      from,
+      messageId: message.id ?? null,
+      textLength: body.length,
     });
   }
 
@@ -397,8 +417,18 @@ export class WhatsAppBot {
   private async processInboundTextMessage(message: InboundTextMessage): Promise<boolean> {
     const body = message.body.trim();
     if (!body) {
+      console.info("[whatsapp-server] skipping empty inbound text message", {
+        from: message.from,
+        messageId: message.replyMessageId ?? null,
+      });
       return false;
     }
+
+    console.info("[whatsapp-server] classify inbound text message", {
+      from: message.from,
+      messageId: message.replyMessageId ?? null,
+      textLength: body.length,
+    });
 
     const normalizedPhone = normalizeWhatsAppCallerPhone(message.from);
     if (
@@ -454,6 +484,11 @@ export class WhatsAppBot {
       return true;
     }
 
+    console.info("[whatsapp-server] route inbound text message to interaction agent", {
+      from: message.from,
+      messageId: message.replyMessageId ?? null,
+      textLength: body.length,
+    });
     await this.handleInteractionAgentTextMessage(message);
     return true;
   }
@@ -504,12 +539,23 @@ export class WhatsAppBot {
   private async sendTypingIndicator(message: WhatsAppMessage): Promise<void> {
     const messageId = message.id?.trim();
     if (!messageId) {
+      console.info("[whatsapp-server] skipping typing indicator because message id is missing", {
+        from: message.from?.trim() ?? null,
+      });
       return;
     }
 
+    console.info("[whatsapp-server] sending typing indicator", {
+      from: message.from?.trim() ?? null,
+      messageId,
+    });
     await this.transport.sendTypingIndicator({
       messageId,
       to: message.from?.trim() ?? ""
+    });
+    console.info("[whatsapp-server] sent typing indicator", {
+      from: message.from?.trim() ?? null,
+      messageId,
     });
   }
 
@@ -538,11 +584,22 @@ export class WhatsAppBot {
         textLength: message.body.length,
       });
 
+      console.info("[whatsapp-server] preparing inbound text turn", {
+        from: message.from,
+        messageId,
+        textLength: message.body.length,
+      });
       const preparedTurn = await this.textConversationStore.prepareInboundTurn({
         fromPhone: message.from,
         messageId,
         rawPayload: message.rawPayload ?? {},
         text: message.body,
+      });
+      console.info("[whatsapp-server] prepared inbound text turn", {
+        from: message.from,
+        messageId,
+        status: preparedTurn.status,
+        hasTurn: Boolean(preparedTurn.turn),
       });
 
       if (preparedTurn.status === "duplicate" || !preparedTurn.turn) {
