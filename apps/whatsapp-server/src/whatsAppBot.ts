@@ -678,7 +678,7 @@ export class WhatsAppBot {
     replyMessageId: string | undefined,
     linkedUser: { userId: string; whatsappPhone: string }
   ): Promise<void> {
-    const replyText = this.renderUserVisibleAction(action);
+    const replyText = this.describeUserVisibleAction(action);
     console.info("[whatsapp-server] sending user-visible action", {
       actionType: action.type,
       replyLength: replyText.length,
@@ -686,11 +686,7 @@ export class WhatsAppBot {
       to,
       userId: linkedUser.userId,
     });
-    await this.transport.sendTextMessage({
-      body: replyText,
-      to,
-      replyMessageId,
-    });
+    await this.deliverUserVisibleAction(action, to, replyMessageId, linkedUser.whatsappPhone);
     await this.textConversationStore.recordOutboundReply({
       linkedUser,
       rawPayload: {
@@ -714,9 +710,17 @@ export class WhatsAppBot {
    * @param action - User-visible action produced by the interaction agent
    * @returns WhatsApp message body
    */
-  private renderUserVisibleAction(action: WhatsAppUserVisibleActionDto): string {
+  private describeUserVisibleAction(action: WhatsAppUserVisibleActionDto): string {
     if (action.type === "message") {
       return action.message;
+    }
+
+    if (action.type === "auth_template") {
+      return `Sent the WhatsApp ${this.getConnectorToolkitLabel(action.toolkit)} connection template.`;
+    }
+
+    if (action.type === "connector_overview") {
+      return "Sent the WhatsApp connector overview template.";
     }
 
     return [
@@ -725,6 +729,92 @@ export class WhatsAppBot {
       "",
       action.body,
     ].join("\n");
+  }
+
+  /**
+   * Delivers one interaction action through the active WhatsApp transport.
+   * @param action - Interaction action to deliver
+   * @param to - Destination phone from the inbound webhook
+   * @param replyMessageId - Message ID to reply to when supported
+   * @param normalizedPhone - Linked user phone in normalized E.164 format
+   * @returns Promise that resolves when the action is delivered
+   */
+  private async deliverUserVisibleAction(
+    action: WhatsAppUserVisibleActionDto,
+    to: string,
+    replyMessageId: string | undefined,
+    normalizedPhone: string
+  ): Promise<void> {
+    if (action.type === "message" || action.type === "draft") {
+      await this.transport.sendTextMessage({
+        body: this.describeUserVisibleAction(action),
+        to,
+        replyMessageId,
+      });
+      return;
+    }
+
+    const messageConfig = getWhatsAppAuthMessageConfig();
+
+    if (action.type === "auth_template") {
+      await this.sendAuthTemplateAction(action.toolkit, messageConfig, normalizedPhone);
+      return;
+    }
+
+    await sendWhatsAppOverviewMessage(this.transport, messageConfig, normalizedPhone);
+  }
+
+  /**
+   * Sends one WhatsApp connector auth template for the given toolkit.
+   * @param toolkit - Supported connector toolkit
+   * @param messageConfig - WhatsApp auth template config
+   * @param normalizedPhone - Linked user phone in E.164 format
+   * @returns Promise that resolves when the template send completes
+   */
+  private async sendAuthTemplateAction(
+    toolkit: "gmail" | "googlecalendar" | "notion" | "outlook",
+    messageConfig: ReturnType<typeof getWhatsAppAuthMessageConfig>,
+    normalizedPhone: string
+  ): Promise<void> {
+    if (toolkit === "gmail") {
+      await sendWhatsAppGmailConnectMessage(this.transport, messageConfig, normalizedPhone);
+      return;
+    }
+
+    if (toolkit === "googlecalendar") {
+      await sendWhatsAppGoogleCalendarConnectMessage(this.transport, messageConfig, normalizedPhone);
+      return;
+    }
+
+    if (toolkit === "notion") {
+      await sendWhatsAppNotionConnectMessage(this.transport, messageConfig, normalizedPhone);
+      return;
+    }
+
+    await sendWhatsAppOutlookConnectMessage(this.transport, messageConfig, normalizedPhone);
+  }
+
+  /**
+   * Returns a readable connector label for logs and stored summaries.
+   * @param toolkit - Supported connector toolkit
+   * @returns Human-readable toolkit label
+   */
+  private getConnectorToolkitLabel(
+    toolkit: "gmail" | "googlecalendar" | "notion" | "outlook"
+  ): string {
+    if (toolkit === "googlecalendar") {
+      return "Google Calendar";
+    }
+
+    if (toolkit === "gmail") {
+      return "Gmail";
+    }
+
+    if (toolkit === "notion") {
+      return "Notion";
+    }
+
+    return "Outlook";
   }
 
   private async handleConnect(callId: string, call: WhatsAppCall): Promise<void> {

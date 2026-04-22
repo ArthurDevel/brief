@@ -204,4 +204,54 @@ describe("WhatsAppInteractionAgent", () => {
       status: "completed",
     });
   });
+
+  it("can send a WhatsApp auth template directly before the follow-up message", async () => {
+    const openRouterClient = createMockOpenRouterClient([
+      {
+        content: "",
+        toolCalls: [
+          {
+            arguments: {
+              toolkit: "outlook",
+            },
+            id: "tool-1",
+            name: "send_whatsapp_auth_template",
+          },
+        ],
+      },
+      {
+        content: "",
+        toolCalls: [
+          {
+            arguments: {
+              message: "I just sent the Outlook connect link. Open it and try again once it is connected.",
+            },
+            id: "tool-2",
+            name: "send_message_to_user",
+          },
+        ],
+      },
+    ]);
+    const executionAgent = {
+      execute: vi.fn(),
+    };
+    const agent = new WhatsAppInteractionAgent(openRouterClient, executionAgent);
+
+    const result = await agent.runTurn(createPreparedTurn());
+
+    expect(executionAgent.execute).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      actions: [
+        {
+          toolkit: "outlook",
+          type: "auth_template",
+        },
+        {
+          message: "I just sent the Outlook connect link. Open it and try again once it is connected.",
+          type: "message",
+        },
+      ],
+      status: "completed",
+    });
+  });
 });

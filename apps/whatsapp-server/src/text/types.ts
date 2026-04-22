@@ -48,6 +48,12 @@ export interface RecordOutboundTextReplyDto {
   replyText: string;
 }
 
+export type SupportedConnectorToolkit =
+  | "gmail"
+  | "googlecalendar"
+  | "notion"
+  | "outlook";
+
 export interface WhatsAppSendMessageActionDto {
   message: string;
   type: "message";
@@ -60,7 +66,18 @@ export interface WhatsAppSendDraftActionDto {
   type: "draft";
 }
 
+export interface WhatsAppSendAuthTemplateActionDto {
+  toolkit: SupportedConnectorToolkit;
+  type: "auth_template";
+}
+
+export interface WhatsAppSendConnectorOverviewActionDto {
+  type: "connector_overview";
+}
+
 export type WhatsAppUserVisibleActionDto =
+  | WhatsAppSendAuthTemplateActionDto
+  | WhatsAppSendConnectorOverviewActionDto
   | WhatsAppSendDraftActionDto
   | WhatsAppSendMessageActionDto;
 

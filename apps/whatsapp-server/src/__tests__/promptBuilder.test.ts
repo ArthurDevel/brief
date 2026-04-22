@@ -12,6 +12,9 @@ describe("buildWhatsAppTextSystemPrompt", () => {
     expect(buildWhatsAppTextSystemPrompt()).toContain(
       "Use send_message_to_agent whenever a task needs external app access"
     );
+    expect(buildWhatsAppTextSystemPrompt()).toContain(
+      "Use send_whatsapp_auth_template when the user asks to connect Gmail"
+    );
   });
 });
 

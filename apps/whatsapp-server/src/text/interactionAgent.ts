@@ -24,6 +24,7 @@ import type {
   ExecuteAgentRequestDto,
   PreparedTextTurnDto,
   RunInteractionTurnResultDto,
+  SupportedConnectorToolkit,
   WhatsAppUserVisibleActionDto,
 } from "./types.js";
 
@@ -52,6 +53,12 @@ export interface SendDraftArgumentsDto {
   to: string;
 }
 
+export interface SendWhatsAppAuthTemplateArgumentsDto {
+  toolkit: SupportedConnectorToolkit;
+}
+
+export interface SendWhatsAppConnectorOverviewArgumentsDto {}
+
 export interface WaitArgumentsDto {
   reason: string;
 }
@@ -62,6 +69,12 @@ export interface WaitArgumentsDto {
 
 const WHATSAPP_TEXT_INTERACTION_MODEL = "google/gemini-3-flash-preview";
 const MAX_TOOL_ITERATIONS = 8;
+const SUPPORTED_CONNECTOR_TOOLKITS = [
+  "gmail",
+  "googlecalendar",
+  "notion",
+  "outlook",
+] as const;
 
 const INTERACTION_TOOL_SCHEMAS: OpenRouterToolSchemaDto[] = [
   {
@@ -127,6 +140,39 @@ const INTERACTION_TOOL_SCHEMAS: OpenRouterToolSchemaDto[] = [
           },
         },
         required: ["to", "subject", "body"],
+        type: "object",
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "send_whatsapp_auth_template",
+      description:
+        "Send a WhatsApp connector auth template for Gmail, Google Calendar, Notion, or Outlook.",
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          toolkit: {
+            description: "The app the user needs to connect.",
+            enum: SUPPORTED_CONNECTOR_TOOLKITS,
+            type: "string",
+          },
+        },
+        required: ["toolkit"],
+        type: "object",
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "send_whatsapp_connector_overview",
+      description: "Send the WhatsApp connector overview template for reconnect and setup flows.",
+      parameters: {
+        additionalProperties: false,
+        properties: {},
+        required: [],
         type: "object",
       },
     },
@@ -382,6 +428,53 @@ export class WhatsAppInteractionAgent {
       };
     }
 
+    if (toolCall.name === "send_whatsapp_auth_template") {
+      const argumentsDto = parseSendWhatsAppAuthTemplateArguments(toolCall.arguments);
+      const action = {
+        toolkit: argumentsDto.toolkit,
+        type: "auth_template",
+      } satisfies WhatsAppUserVisibleActionDto;
+      console.info("[whatsapp-server] interaction tool send_whatsapp_auth_template", {
+        currentMessageId: turn.currentMessage.id,
+        toolkit: argumentsDto.toolkit,
+      });
+      if (emitAction) {
+        await emitAction(action);
+      }
+
+      return {
+        actions: [action],
+        shouldContinue: true,
+        toolResult: JSON.stringify({
+          status: "auth_template_sent",
+          toolkit: argumentsDto.toolkit,
+        }),
+        waitRequested: false,
+      };
+    }
+
+    if (toolCall.name === "send_whatsapp_connector_overview") {
+      parseSendWhatsAppConnectorOverviewArguments(toolCall.arguments);
+      const action = {
+        type: "connector_overview",
+      } satisfies WhatsAppUserVisibleActionDto;
+      console.info("[whatsapp-server] interaction tool send_whatsapp_connector_overview", {
+        currentMessageId: turn.currentMessage.id,
+      });
+      if (emitAction) {
+        await emitAction(action);
+      }
+
+      return {
+        actions: [action],
+        shouldContinue: true,
+        toolResult: JSON.stringify({
+          status: "connector_overview_sent",
+        }),
+        waitRequested: false,
+      };
+    }
+
     if (toolCall.name === "wait") {
       const argumentsDto = parseWaitArguments(toolCall.arguments);
       console.info("[whatsapp-server] interaction tool wait", {
@@ -486,6 +579,37 @@ function parseWaitArguments(
 }
 
 /**
+ * Parses and validates one auth-template argument object.
+ * @param value - Raw tool arguments
+ * @returns Validated tool arguments
+ */
+function parseSendWhatsAppAuthTemplateArguments(
+  value: Record<string, unknown>
+): SendWhatsAppAuthTemplateArgumentsDto {
+  return {
+    toolkit: requireSupportedConnectorToolkit(value.toolkit, "send_whatsapp_auth_template.toolkit"),
+  };
+}
+
+/**
+ * Parses and validates one connector-overview argument object.
+ * @param value - Raw tool arguments
+ * @returns Empty DTO when valid
+ */
+function parseSendWhatsAppConnectorOverviewArguments(
+  value: Record<string, unknown>
+): SendWhatsAppConnectorOverviewArgumentsDto {
+  const extraKeys = Object.keys(value);
+  if (extraKeys.length > 0) {
+    throw new Error(
+      `send_whatsapp_connector_overview does not accept arguments. Received: ${extraKeys.join(", ")}`
+    );
+  }
+
+  return {};
+}
+
+/**
  * Validates one required string tool argument.
  * @param value - Raw unknown value
  * @param fieldName - Field name used in error messages
@@ -497,4 +621,22 @@ function requireString(value: unknown, fieldName: string): string {
   }
 
   return value.trim();
+}
+
+/**
+ * Validates one supported connector toolkit value.
+ * @param value - Raw unknown value
+ * @param fieldName - Field name used in error messages
+ * @returns Supported connector toolkit
+ */
+function requireSupportedConnectorToolkit(
+  value: unknown,
+  fieldName: string
+): SupportedConnectorToolkit {
+  const toolkit = requireString(value, fieldName).toLowerCase();
+  if (!SUPPORTED_CONNECTOR_TOOLKITS.includes(toolkit as SupportedConnectorToolkit)) {
+    throw new Error(`${fieldName} must be one of: ${SUPPORTED_CONNECTOR_TOOLKITS.join(", ")}`);
+  }
+
+  return toolkit as SupportedConnectorToolkit;
 }

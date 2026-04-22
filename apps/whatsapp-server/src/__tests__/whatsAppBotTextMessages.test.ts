@@ -330,6 +330,94 @@ describe("WhatsAppBot text messages", () => {
     expect(textConversationStore.recordOutboundReply).not.toHaveBeenCalled();
   });
 
+  it("sends a WhatsApp auth template when the interaction agent emits an auth action", async () => {
+    const client = createMockClient();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const textConversationStore = {
+      prepareInboundTurn: vi.fn().mockResolvedValue(createPreparedTurn("connect outlook")),
+      recordOutboundReply: vi.fn().mockResolvedValue(undefined),
+    };
+    const textInteractionAgent = {
+      runTurn: vi.fn().mockImplementation(async (_turn, emitAction) => {
+        await emitAction({
+          toolkit: "outlook",
+          type: "auth_template",
+        });
+
+        return {
+          actions: [
+            {
+              toolkit: "outlook",
+              type: "auth_template",
+            },
+          ],
+          status: "completed",
+        };
+      }),
+    };
+    const bot = new WhatsAppBot({
+      client: client as any,
+      roomManager: {
+        createCallSession: vi.fn(),
+        cleanupCallSession: vi.fn(),
+      },
+      textConversationStore: textConversationStore as any,
+      textInteractionAgent: textInteractionAgent as any,
+      voiceMessageTranscriber: {
+        transcribeVoiceMessage: vi.fn(),
+      } as any,
+      fetchImplementation: fetchMock as typeof fetch,
+    });
+
+    await bot.handleWebhook({
+      entry: [
+        {
+          changes: [
+            {
+              field: "messages",
+              value: {
+                messages: [
+                  {
+                    id: "wamid.auth-template",
+                    from: "15551234567",
+                    type: "text",
+                    text: {
+                      body: "connect outlook",
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(client.messages.text).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v23.0/123456789/messages",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+    expect(textConversationStore.recordOutboundReply).toHaveBeenCalledWith({
+      linkedUser: {
+        userId: "user-1",
+        whatsappPhone: "+15551234567",
+      },
+      rawPayload: {
+        action: {
+          toolkit: "outlook",
+          type: "auth_template",
+        },
+        inReplyToMessageId: "wamid.auth-template",
+        text: "Sent the WhatsApp Outlook connection template.",
+      },
+      replyText: "Sent the WhatsApp Outlook connection template.",
+    });
+  });
+
   it("does not send a WhatsApp message when the interaction agent chooses wait", async () => {
     const client = createMockClient();
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
