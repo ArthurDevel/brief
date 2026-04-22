@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Twilio Browser Bridge</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4efe5;
+        --panel: #fffaf2;
+        --ink: #202020;
+        --muted: #6d665e;
+        --accent: #0f766e;
+        --accent-strong: #115e59;
+        --danger: #b91c1c;
+        --border: #d8cfc1;
+      }
+
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Helvetica Neue", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(15, 118, 110, 0.14), transparent 30%),
+          linear-gradient(180deg, #f7f2e8, #eee4d2);
+        color: var(--ink);
+        min-height: 100vh;
+      }
+
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 32px 20px 64px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        box-shadow: 0 18px 50px rgba(32, 32, 32, 0.08);
+        padding: 24px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-family: "IBM Plex Serif", Georgia, serif;
+        font-size: clamp(2rem, 4vw, 3rem);
+      }
+
+      p {
+        line-height: 1.5;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        gap: 16px;
+        margin-top: 24px;
+      }
+
+      @media (min-width: 720px) {
+        .grid {
+          grid-template-columns: 1.1fr 0.9fr;
+        }
+      }
+
+      .status-card {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.6);
+      }
+
+      .status-label {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .status-value {
+        margin-top: 8px;
+        font-size: 1.3rem;
+        font-weight: 600;
+      }
+
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 20px;
+      }
+
+      button {
+        appearance: none;
+        border: none;
+        border-radius: 999px;
+        padding: 12px 18px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+      }
+
+      button:hover:not(:disabled) {
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .primary {
+        background: var(--accent);
+        color: white;
+      }
+
+      .primary:hover:not(:disabled) {
+        background: var(--accent-strong);
+      }
+
+      .secondary {
+        background: #dbece9;
+        color: var(--accent-strong);
+      }
+
+      .danger {
+        background: #fee2e2;
+        color: var(--danger);
+      }
+
+      .log {
+        margin-top: 24px;
+        min-height: 140px;
+        max-height: 240px;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: #1d1d1d;
+        color: #f8f6f0;
+        padding: 14px;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.9rem;
+      }
+
+      .hint-list {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="panel">
+        <p class="muted">Standalone testscript</p>
+        <h1>Twilio Browser Bridge</h1>
+        <p class="muted">
+          Open this page on your laptop, click <strong>Connect browser audio</strong>,
+          then call your Twilio number from your phone. When the call appears here,
+          click <strong>Pick up call</strong> and talk.
+        </p>
+
+        <div class="grid">
+          <section class="status-card">
+            <div class="status-label">Browser</div>
+            <div class="status-value" id="browser-status">Connecting...</div>
+            <div class="button-row">
+              <button class="primary" id="connect-audio">Connect browser audio</button>
+              <button class="secondary" id="pickup-call" disabled>Pick up call</button>
+              <button class="danger" id="hangup-call" disabled>Hang up</button>
+            </div>
+          </section>
+
+          <section class="status-card">
+            <div class="status-label">Call</div>
+            <div class="status-value" id="call-status">Waiting for call</div>
+            <p class="muted" id="call-meta">No active Twilio call.</p>
+            <ul class="hint-list">
+              <li>One browser and one phone call at a time.</li>
+              <li>Keep this tab open for the full conversation.</li>
+              <li>Use headphones if your laptop speakers feed back into the mic.</li>
+            </ul>
+          </section>
+        </div>
+
+        <div class="log" id="event-log"></div>
+      </div>
+    </main>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
