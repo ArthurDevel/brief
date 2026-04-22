@@ -72,4 +72,46 @@ describe("buildWhatsAppTextUserPrompt", () => {
     expect(prompt).toContain("<user_memory>\n- Prefers short answers\n</user_memory>");
     expect(prompt).not.toContain("msg-3");
   });
+
+  it("keeps only the last 20 conversation messages including the current turn", () => {
+    const conversationHistory = Array.from({ length: 25 }, (_value, index) => {
+      const messageNumber = String(index + 1).padStart(2, "0");
+
+      return {
+        id: `msg-${index + 1}`,
+        contactPhoneNumber: "+15551234567",
+        createdAt: `2026-04-22T10:${String(index).padStart(2, "0")}:00.000Z`,
+        direction: index % 2 === 0 ? "inbound" as const : "outbound" as const,
+        metaMessageId: `wamid.${index + 1}`,
+        status: index % 2 === 0 ? "received" as const : "sent" as const,
+        text: `history message ${messageNumber}`,
+        userId: "user-1",
+      };
+    });
+
+    const prompt = buildWhatsAppTextUserPrompt({
+      conversationHistory,
+      currentMessage: {
+        id: "msg-26",
+        contactPhoneNumber: "+15551234567",
+        createdAt: "2026-04-22T10:30:00.000Z",
+        direction: "inbound",
+        metaMessageId: "wamid.26",
+        status: "received",
+        text: "current user message",
+        userId: "user-1",
+      },
+      linkedUser: {
+        userId: "user-1",
+        whatsappPhone: "+15551234567",
+      },
+      memoryEntries: [],
+    });
+
+    expect(prompt).not.toContain("history message 01");
+    expect(prompt).not.toContain("history message 06");
+    expect(prompt).toContain("history message 07");
+    expect(prompt).toContain("history message 25");
+    expect(prompt).toContain("<new_user_message>\ncurrent user message\n</new_user_message>");
+  });
 });

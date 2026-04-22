@@ -15,6 +15,8 @@ import type { PreparedTextTurnDto } from "./types.js";
 // ============================================================================
 
 const EMPTY_SECTION_VALUE = "None";
+const MAX_CONVERSATION_MESSAGES_IN_PROMPT = 20;
+const MAX_HISTORY_MESSAGES_BEFORE_CURRENT = MAX_CONVERSATION_MESSAGES_IN_PROMPT - 1;
 
 const WHATSAPP_INTERACTION_SYSTEM_PROMPT = [
   "You are OpenPoke on WhatsApp text.",
@@ -105,10 +107,13 @@ export function buildWhatsAppExecutionFailureSummarizerSystemPrompt(
  * @returns One user message content string
  */
 export function buildWhatsAppTextUserPrompt(turn: PreparedTextTurnDto): string {
+  const recentConversationHistory = turn.conversationHistory.slice(
+    -MAX_HISTORY_MESSAGES_BEFORE_CURRENT
+  );
   const sections = [
     buildChannelContextSection(turn),
     buildMemorySection(turn),
-    buildConversationHistorySection(turn.conversationHistory),
+    buildConversationHistorySection(recentConversationHistory),
     `<new_user_message>\n${escapePromptText(turn.currentMessage.text)}\n</new_user_message>`,
   ];
 
