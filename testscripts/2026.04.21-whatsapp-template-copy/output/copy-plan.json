@@ -1,0 +1,51 @@
+{
+  "applyChanges": true,
+  "destinationWabaId": "1661271134979207",
+  "generatedAt": "2026-04-22T02:37:38.008Z",
+  "includedStatuses": [
+    "APPROVED"
+  ],
+  "itemCount": 1,
+  "items": [
+    {
+      "action": "create",
+      "category": "AUTHENTICATION",
+      "language": "en",
+      "name": "otp_code",
+      "payload": {
+        "category": "AUTHENTICATION",
+        "components": [
+          {
+            "type": "BODY",
+            "add_security_recommendation": true
+          },
+          {
+            "type": "FOOTER",
+            "code_expiration_minutes": 5
+          },
+          {
+            "type": "BUTTONS",
+            "buttons": [
+              {
+                "type": "OTP",
+                "otp_type": "COPY_CODE",
+                "text": "Copy code"
+              }
+            ]
+          }
+        ],
+        "language": "en",
+        "name": "otp_code",
+        "parameter_format": "POSITIONAL",
+        "message_send_ttl_seconds": 300
+      },
+      "reason": "Template does not exist on the destination WABA.",
+      "sourceTemplateId": "4386379111639255",
+      "status": "APPROVED"
+    }
+  ],
+  "onlyNames": [
+    "otp_code"
+  ],
+  "sourceWabaId": "2859838071037183"
+}
