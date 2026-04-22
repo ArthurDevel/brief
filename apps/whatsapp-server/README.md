@@ -21,9 +21,9 @@ pnpm dev
 
 Deploy this app from the monorepo root, not from `apps/whatsapp-server`.
 
+Use the dedicated Dockerfile for this app:
+
 - Base Directory: `/`
-- Install Command: `corepack enable && pnpm install --frozen-lockfile`
-- Build Command: `pnpm --filter @dublin/whatsapp-server build`
-- Start Command: `pnpm --filter @dublin/whatsapp-server start`
+- Dockerfile Location: `apps/whatsapp-server/Dockerfile`
 
 This app depends on the root `pnpm-workspace.yaml` and `pnpm-lock.yaml`, so app-level deployment from `apps/whatsapp-server` will fall back to `npm` and break the expected workspace setup.
