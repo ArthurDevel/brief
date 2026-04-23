@@ -32,4 +32,4 @@ COPY --from=builder /app/apps/whatsapp-server/node_modules /app/apps/whatsapp-se
 COPY --from=builder /app/apps/whatsapp-server/dist /app/apps/whatsapp-server/dist
 COPY --from=builder /app/packages/whatsapp-core /app/packages/whatsapp-core
 
-CMD ["node_modules/.bin/tsx", "dist/server.js"]
+CMD ["node_modules/.bin/tsx", "dist/bootstrap.js"]
