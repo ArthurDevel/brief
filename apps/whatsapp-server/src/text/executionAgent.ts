@@ -7,6 +7,7 @@
  * - Execute Composio and WhatsApp auth tools for one interaction turn
  */
 
+import { startActiveObservation } from "@langfuse/tracing";
 import { Composio } from "@composio/core";
 import type { WhatsAppLinkedUserDto } from "@dublin/whatsapp-core";
 import { getWhatsAppTextAgentEnv } from "./env.js";
@@ -127,123 +128,154 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
    * @returns Final execution result for the interaction agent
    */
   async execute(input: ExecuteAgentRequestDto): Promise<ExecuteAgentResultDto> {
-    const startedAt = Date.now();
-    const executionTrace: ExecutionTraceEntryDto[] = [];
-    console.info("[whatsapp-server] execution agent started", {
-      agentName: input.agentName,
-      instructionLength: input.instructions.length,
-      userId: input.linkedUser.userId,
-      whatsappPhone: input.linkedUser.whatsappPhone,
-    });
-
-    try {
-      const session = await this.createExecutionSession(input.linkedUser);
-      const messages: OpenRouterChatMessageDto[] = [
-        {
-          role: "system",
-          content: buildWhatsAppExecutionSystemPrompt(
-            input.agentName,
-            session.connectedToolkitSlugs
-          ),
-        },
-        {
-          role: "user",
-          content: input.instructions,
-        },
-      ];
-
-      for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-        console.info("[whatsapp-server] execution iteration requesting LLM step", {
+    return await startActiveObservation(
+      `execution-agent:${input.agentName}`,
+      async (agentObservation) => {
+        const startedAt = Date.now();
+        const executionTrace: ExecutionTraceEntryDto[] = [];
+        console.info("[whatsapp-server] execution agent started", {
           agentName: input.agentName,
-          iteration: iteration + 1,
-          messageCount: messages.length,
-          toolCount: session.toolSchemas.length,
+          instructionLength: input.instructions.length,
+          userId: input.linkedUser.userId,
+          whatsappPhone: input.linkedUser.whatsappPhone,
         });
 
-        const assistantMessage = await this.openRouterClient.createChatCompletion({
-          messages,
-          tools: session.toolSchemas,
+        agentObservation.update({
+          input: {
+            agentName: input.agentName,
+            instructions: input.instructions,
+          },
         });
 
-        console.info("[whatsapp-server] execution iteration received LLM step", {
-          agentName: input.agentName,
-          assistantTextLength: assistantMessage.content.length,
-          iteration: iteration + 1,
-          toolCallCount: assistantMessage.toolCalls.length,
-          toolNames: assistantMessage.toolCalls.map((toolCall) => toolCall.name),
-        });
+        try {
+          const session = await this.createExecutionSession(input.linkedUser);
+          const messages: OpenRouterChatMessageDto[] = [
+            {
+              role: "system",
+              content: buildWhatsAppExecutionSystemPrompt(
+                input.agentName,
+                session.connectedToolkitSlugs
+              ),
+            },
+            {
+              role: "user",
+              content: input.instructions,
+            },
+          ];
 
-        messages.push({
-          content: assistantMessage.content,
-          role: "assistant",
-          ...(assistantMessage.toolCalls.length > 0
-            ? { toolCalls: assistantMessage.toolCalls }
-            : {}),
-        });
+          for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
+            console.info("[whatsapp-server] execution iteration requesting LLM step", {
+              agentName: input.agentName,
+              iteration: iteration + 1,
+              messageCount: messages.length,
+              toolCount: session.toolSchemas.length,
+            });
 
-        if (assistantMessage.toolCalls.length === 0) {
-          if (!assistantMessage.content.trim()) {
-            throw new Error("Execution agent returned neither a tool call nor a final response");
+            const assistantMessage = await this.openRouterClient.createChatCompletion({
+              messages,
+              tools: session.toolSchemas,
+            });
+
+            console.info("[whatsapp-server] execution iteration received LLM step", {
+              agentName: input.agentName,
+              assistantTextLength: assistantMessage.content.length,
+              iteration: iteration + 1,
+              toolCallCount: assistantMessage.toolCalls.length,
+              toolNames: assistantMessage.toolCalls.map((toolCall) => toolCall.name),
+            });
+
+            messages.push({
+              content: assistantMessage.content,
+              role: "assistant",
+              ...(assistantMessage.toolCalls.length > 0
+                ? { toolCalls: assistantMessage.toolCalls }
+                : {}),
+            });
+
+            if (assistantMessage.toolCalls.length === 0) {
+              if (!assistantMessage.content.trim()) {
+                throw new Error("Execution agent returned neither a tool call nor a final response");
+              }
+
+              console.info("[whatsapp-server] execution agent completed", {
+                agentName: input.agentName,
+                durationMs: Date.now() - startedAt,
+                responseLength: assistantMessage.content.trim().length,
+                success: true,
+              });
+
+              agentObservation.update({
+                output: {
+                  response: assistantMessage.content.trim(),
+                  success: true,
+                },
+              });
+
+              return {
+                agentName: input.agentName,
+                response: assistantMessage.content.trim(),
+                success: true,
+              };
+            }
+
+            for (const toolCall of assistantMessage.toolCalls) {
+              const toolResult = await executeToolCall(session, toolCall);
+              executionTrace.push({
+                assistantText: assistantMessage.content,
+                iteration: iteration + 1,
+                toolArguments: toolCall.arguments,
+                toolName: toolCall.name,
+                toolResult,
+              });
+              console.info("[whatsapp-server] execution tool completed", {
+                agentName: input.agentName,
+                status: toolResult.status,
+                toolName: toolCall.name,
+              });
+              messages.push({
+                content: JSON.stringify(toolResult),
+                role: "tool",
+                toolCallId: toolCall.id ?? toolCall.name,
+              });
+            }
           }
 
-          console.info("[whatsapp-server] execution agent completed", {
+          throw new Error("Execution agent reached the tool-iteration limit without a final response");
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error("[whatsapp-server] execution agent failed", {
+            agentName: input.agentName,
+            error: errorMessage,
+            traceEntryCount: executionTrace.length,
+          });
+
+          const summary = await this.summarizeFailedExecution(input, executionTrace, errorMessage);
+          console.info("[whatsapp-server] execution agent returned failure summary", {
             agentName: input.agentName,
             durationMs: Date.now() - startedAt,
-            responseLength: assistantMessage.content.trim().length,
-            success: true,
+            responseLength: summary.length,
+          });
+
+          agentObservation.update({
+            level: "ERROR",
+            output: {
+              response: summary,
+              success: false,
+            },
+            statusMessage: errorMessage,
           });
 
           return {
             agentName: input.agentName,
-            response: assistantMessage.content.trim(),
-            success: true,
+            response: summary,
+            success: false,
           };
         }
-
-        for (const toolCall of assistantMessage.toolCalls) {
-          const toolResult = await executeToolCall(session, toolCall);
-          executionTrace.push({
-            assistantText: assistantMessage.content,
-            iteration: iteration + 1,
-            toolArguments: toolCall.arguments,
-            toolName: toolCall.name,
-            toolResult,
-          });
-          console.info("[whatsapp-server] execution tool completed", {
-            agentName: input.agentName,
-            status: toolResult.status,
-            toolName: toolCall.name,
-          });
-          messages.push({
-            content: JSON.stringify(toolResult),
-            role: "tool",
-            toolCallId: toolCall.id ?? toolCall.name,
-          });
-        }
+      },
+      {
+        asType: "agent",
       }
-
-      throw new Error("Execution agent reached the tool-iteration limit without a final response");
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error("[whatsapp-server] execution agent failed", {
-        agentName: input.agentName,
-        error: errorMessage,
-        traceEntryCount: executionTrace.length,
-      });
-
-      const summary = await this.summarizeFailedExecution(input, executionTrace, errorMessage);
-      console.info("[whatsapp-server] execution agent returned failure summary", {
-        agentName: input.agentName,
-        durationMs: Date.now() - startedAt,
-        responseLength: summary.length,
-      });
-
-      return {
-        agentName: input.agentName,
-        response: summary,
-        success: false,
-      };
-    }
+    );
   }
 
   // ============================================================================
@@ -258,74 +290,92 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
   private async createExecutionSession(
     linkedUser: WhatsAppLinkedUserDto
   ): Promise<ComposioExecutionSession> {
-    const startedAt = Date.now();
-    console.info("[whatsapp-server] creating execution session", {
-      userId: linkedUser.userId,
-      whatsappPhone: linkedUser.whatsappPhone,
-    });
+    return await startActiveObservation(
+      "create-execution-session",
+      async (sessionObservation) => {
+        const startedAt = Date.now();
+        console.info("[whatsapp-server] creating execution session", {
+          userId: linkedUser.userId,
+          whatsappPhone: linkedUser.whatsappPhone,
+        });
 
-    const composio = new Composio({
-      apiKey: this.composioApiKey,
-    });
-    const connectedAccounts = await composio.connectedAccounts.list({
-      userIds: [linkedUser.userId],
-      limit: 100,
-    });
-    const connectedAccountsByToolkit = buildConnectedAccountsByToolkit(
-      Array.isArray(connectedAccounts.items)
-        ? connectedAccounts.items as ComposioConnectedAccountRow[]
-        : []
-    );
-    const connectedToolkitSlugs = Object.keys(connectedAccountsByToolkit);
-    console.info("[whatsapp-server] loaded connected accounts for execution session", {
-      connectedToolkitSlugs,
-      userId: linkedUser.userId,
-    });
-
-    const session = await composio.create(linkedUser.userId, {
-      manageConnections: false,
-      connectedAccounts: connectedAccountsByToolkit,
-      experimental: {
-        customTools: createWhatsAppTextCustomTools(
-          {
-            accessToken: this.whatsappAccessToken,
-            apiVersion: this.whatsappApiVersion,
-            phoneNumberId: this.whatsappPhoneNumberId,
+        sessionObservation.update({
+          input: {
+            userId: linkedUser.userId,
           },
-          linkedUser.whatsappPhone
-        ),
-      },
-      ...(connectedToolkitSlugs.length > 0 ? { toolkits: connectedToolkitSlugs } : {}),
-    });
-    const sessionTools = await session.tools() as SessionToolDefinition[];
-    if (sessionTools.length === 0) {
-      throw new Error("Composio did not return any tools for this WhatsApp user");
-    }
+        });
 
-    console.info("[whatsapp-server] created execution session", {
-      connectedToolkitSlugs,
-      durationMs: Date.now() - startedAt,
-      toolCount: sessionTools.length,
-      userId: linkedUser.userId,
-    });
+        const composio = new Composio({
+          apiKey: this.composioApiKey,
+        });
+        const connectedAccounts = await composio.connectedAccounts.list({
+          userIds: [linkedUser.userId],
+          limit: 100,
+        });
+        const connectedAccountsByToolkit = buildConnectedAccountsByToolkit(
+          Array.isArray(connectedAccounts.items)
+            ? connectedAccounts.items as ComposioConnectedAccountRow[]
+            : []
+        );
+        const connectedToolkitSlugs = Object.keys(connectedAccountsByToolkit);
+        console.info("[whatsapp-server] loaded connected accounts for execution session", {
+          connectedToolkitSlugs,
+          userId: linkedUser.userId,
+        });
 
-    return {
-      connectedToolkitSlugs,
-      executeTool: async (
-        toolName: string,
-        toolArguments: Record<string, unknown>
-      ): Promise<unknown> => {
-        if (toolName.startsWith("COMPOSIO_")) {
-          return composio.tools.executeMetaTool(toolName, {
-            arguments: toolArguments,
-            sessionId: session.sessionId,
-          });
+        const session = await composio.create(linkedUser.userId, {
+          manageConnections: false,
+          connectedAccounts: connectedAccountsByToolkit,
+          experimental: {
+            customTools: createWhatsAppTextCustomTools(
+              {
+                accessToken: this.whatsappAccessToken,
+                apiVersion: this.whatsappApiVersion,
+                phoneNumberId: this.whatsappPhoneNumberId,
+              },
+              linkedUser.whatsappPhone
+            ),
+          },
+          ...(connectedToolkitSlugs.length > 0 ? { toolkits: connectedToolkitSlugs } : {}),
+        });
+        const sessionTools = await session.tools() as SessionToolDefinition[];
+        if (sessionTools.length === 0) {
+          throw new Error("Composio did not return any tools for this WhatsApp user");
         }
 
-        return session.execute(toolName, toolArguments);
-      },
-      toolSchemas: mapSessionToolsToOpenRouterSchemas(sessionTools),
-    };
+        console.info("[whatsapp-server] created execution session", {
+          connectedToolkitSlugs,
+          durationMs: Date.now() - startedAt,
+          toolCount: sessionTools.length,
+          userId: linkedUser.userId,
+        });
+
+        sessionObservation.update({
+          output: {
+            connectedToolkitSlugs,
+            toolCount: sessionTools.length,
+          },
+        });
+
+        return {
+          connectedToolkitSlugs,
+          executeTool: async (
+            toolName: string,
+            toolArguments: Record<string, unknown>
+          ): Promise<unknown> => {
+            if (toolName.startsWith("COMPOSIO_")) {
+              return composio.tools.executeMetaTool(toolName, {
+                arguments: toolArguments,
+                sessionId: session.sessionId,
+              });
+            }
+
+            return session.execute(toolName, toolArguments);
+          },
+          toolSchemas: mapSessionToolsToOpenRouterSchemas(sessionTools),
+        };
+      }
+    );
   }
 
   /**
@@ -419,30 +469,60 @@ async function executeToolCall(
   session: ComposioExecutionSession,
   toolCall: OpenRouterToolCallDto
 ): Promise<Record<string, unknown>> {
-  try {
-    console.info("[whatsapp-server] executing Composio tool", {
-      argumentKeys: Object.keys(toolCall.arguments),
-      toolName: toolCall.name,
-    });
-    const result = await session.executeTool(toolCall.name, toolCall.arguments);
-    return {
-      arguments: toolCall.arguments,
-      result: formatToolResult(toolCall.name, result),
-      status: "success",
-      tool: toolCall.name,
-    };
-  } catch (error) {
-    console.error("[whatsapp-server] Composio tool failed", {
-      error: error instanceof Error ? error.message : String(error),
-      toolName: toolCall.name,
-    });
-    return {
-      arguments: toolCall.arguments,
-      error: error instanceof Error ? error.message : String(error),
-      status: "error",
-      tool: toolCall.name,
-    };
-  }
+  return await startActiveObservation(
+    `execution-tool:${toolCall.name}`,
+    async (toolObservation) => {
+      toolObservation.update({
+        input: {
+          arguments: toolCall.arguments,
+          toolName: toolCall.name,
+        },
+      });
+
+      try {
+        console.info("[whatsapp-server] executing Composio tool", {
+          argumentKeys: Object.keys(toolCall.arguments),
+          toolName: toolCall.name,
+        });
+        const result = await session.executeTool(toolCall.name, toolCall.arguments);
+        const formattedResult = {
+          arguments: toolCall.arguments,
+          result: formatToolResult(toolCall.name, result),
+          status: "success",
+          tool: toolCall.name,
+        };
+
+        toolObservation.update({
+          output: formattedResult,
+        });
+
+        return formattedResult;
+      } catch (error) {
+        const failedResult = {
+          arguments: toolCall.arguments,
+          error: error instanceof Error ? error.message : String(error),
+          status: "error",
+          tool: toolCall.name,
+        };
+
+        console.error("[whatsapp-server] Composio tool failed", {
+          error: failedResult.error,
+          toolName: toolCall.name,
+        });
+
+        toolObservation.update({
+          level: "ERROR",
+          output: failedResult,
+          statusMessage: failedResult.error,
+        });
+
+        return failedResult;
+      }
+    },
+    {
+      asType: "tool",
+    }
+  );
 }
 
 /**

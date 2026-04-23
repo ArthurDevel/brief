@@ -7,6 +7,8 @@
  * - Keep OpenRouter request/response parsing out of the runtimes
  */
 
+import { startActiveObservation } from "@langfuse/tracing";
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -63,6 +65,9 @@ interface OpenRouterChatCompletionResponse {
   choices?: Array<{
     message?: OpenRouterResponseMessage;
   }>;
+  id?: string;
+  model?: string;
+  usage?: OpenRouterUsage;
 }
 
 export interface OpenRouterTextClient {
@@ -90,6 +95,13 @@ interface OpenRouterRequestMessage {
   role: "assistant" | "system" | "tool" | "user";
   tool_call_id?: string;
   tool_calls?: OpenRouterRequestToolCall[];
+}
+
+interface OpenRouterUsage {
+  completion_tokens?: number;
+  prompt_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
 }
 
 // ============================================================================
@@ -123,28 +135,109 @@ export class FetchOpenRouterTextClient implements OpenRouterTextClient {
   async createChatCompletion(
     input: CreateOpenRouterChatCompletionDto
   ): Promise<OpenRouterAssistantMessageDto> {
-    const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
+    return await startActiveObservation(
+      "openrouter-chat-completion",
+      async (generation) => {
+        generation.update({
+          input: {
+            messages: input.messages,
+            tools: input.tools?.map((tool) => tool.function.name) ?? [],
+          },
+          metadata: {
+            provider: "openrouter",
+          },
+          model: this.model,
+        });
+
+        try {
+          const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${this.apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              messages: input.messages.map((message) => mapRequestMessage(message)),
+              model: this.model,
+              ...(input.tools ? { tools: input.tools } : {}),
+            }),
+            cache: "no-store",
+          });
+
+          if (!response.ok) {
+            const payload = await response.text();
+            generation.update({
+              level: "ERROR",
+              output: {
+                error: payload,
+              },
+              statusMessage: "OpenRouter chat completion failed",
+            });
+            throw new Error(`OpenRouter chat completion failed: ${payload}`);
+          }
+
+          const payload = await response.json() as OpenRouterChatCompletionResponse;
+          const assistantMessage = extractAssistantMessage(payload);
+
+          generation.update({
+            model: typeof payload.model === "string" ? payload.model : this.model,
+            output: {
+              content: assistantMessage.content,
+              responseId: payload.id ?? null,
+              toolCalls: assistantMessage.toolCalls,
+            },
+            ...(payload.usage
+              ? {
+                  usageDetails: mapUsageDetails(payload.usage),
+                }
+              : {}),
+          });
+
+          return assistantMessage;
+        } catch (error) {
+          generation.update({
+            level: "ERROR",
+            statusMessage: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
       },
-      body: JSON.stringify({
-        messages: input.messages.map((message) => mapRequestMessage(message)),
-        model: this.model,
-        ...(input.tools ? { tools: input.tools } : {}),
-      }),
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      const payload = await response.text();
-      throw new Error(`OpenRouter chat completion failed: ${payload}`);
-    }
-
-    const payload = await response.json() as OpenRouterChatCompletionResponse;
-    return extractAssistantMessage(payload);
+      {
+        asType: "generation",
+      }
+    );
   }
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Maps OpenRouter usage fields into Langfuse usage details.
+ * @param usage - Usage payload returned by OpenRouter
+ * @returns Langfuse-compatible usage details
+ */
+function mapUsageDetails(usage: OpenRouterUsage): Record<string, number> {
+  const usageDetails: Record<string, number> = {};
+
+  if (typeof usage.prompt_tokens === "number") {
+    usageDetails.promptTokens = usage.prompt_tokens;
+  }
+
+  if (typeof usage.completion_tokens === "number") {
+    usageDetails.completionTokens = usage.completion_tokens;
+  }
+
+  if (typeof usage.total_tokens === "number") {
+    usageDetails.totalTokens = usage.total_tokens;
+  }
+
+  if (typeof usage.reasoning_tokens === "number") {
+    usageDetails.reasoningTokens = usage.reasoning_tokens;
+  }
+
+  return usageDetails;
 }
 
 // ============================================================================

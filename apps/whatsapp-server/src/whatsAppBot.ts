@@ -1,4 +1,5 @@
 import { MediaStreamTrackFactory, RTCPeerConnection, type MediaStreamTrack, type RTCIceServer } from "werift";
+import { propagateAttributes, startActiveObservation } from "@langfuse/tracing";
 import {
   WhatsAppUserNotFoundError,
 } from "@dublin/whatsapp-core";
@@ -39,6 +40,10 @@ import {
   createWhatsAppTextConversationStore,
   type WhatsAppTextConversationStore,
 } from "./text/conversationStore.js";
+import {
+  buildWhatsAppTextSessionId,
+  WHATSAPP_TEXT_TRACE_NAME,
+} from "./tracing.js";
 import type { WhatsAppUserVisibleActionDto } from "./text/types.js";
 
 interface WhatsAppCallSession {
@@ -615,16 +620,59 @@ export class WhatsAppBot {
         messageId,
         userId: preparedTurn.linkedUser.userId,
       });
+      const turn = preparedTurn.turn;
 
-      await this.textInteractionAgent.runTurn(
-        preparedTurn.turn,
-        async (action) => {
-          await this.sendUserVisibleAction(
-            action,
-            message.from,
-            message.replyMessageId,
-            preparedTurn.linkedUser
-          );
+      await startActiveObservation(
+        WHATSAPP_TEXT_TRACE_NAME,
+        async (turnObservation) => {
+          try {
+            turnObservation.update({
+              input: {
+                messageId,
+                text: turn.currentMessage.text,
+              },
+            });
+
+            await propagateAttributes(
+              {
+                metadata: {
+                  channel: "whatsapp_text",
+                  feature: "text_agent",
+                  messageId,
+                },
+                sessionId: buildWhatsAppTextSessionId(preparedTurn.linkedUser),
+                tags: ["whatsapp", "text-agent"],
+                traceName: WHATSAPP_TEXT_TRACE_NAME,
+                userId: preparedTurn.linkedUser.userId,
+              },
+              async () => {
+                const result = await this.textInteractionAgent.runTurn(
+                  turn,
+                  async (action) => {
+                    await this.sendUserVisibleAction(
+                      action,
+                      message.from,
+                      message.replyMessageId,
+                      preparedTurn.linkedUser
+                    );
+                  }
+                );
+
+                turnObservation.update({
+                  output: {
+                    actionTypes: result.actions.map((action) => action.type),
+                    status: result.status,
+                  },
+                });
+              }
+            );
+          } catch (error) {
+            turnObservation.update({
+              level: "ERROR",
+              statusMessage: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
+          }
         }
       );
 
@@ -678,31 +726,55 @@ export class WhatsAppBot {
     replyMessageId: string | undefined,
     linkedUser: { userId: string; whatsappPhone: string }
   ): Promise<void> {
-    const replyText = this.describeUserVisibleAction(action);
-    console.info("[whatsapp-server] sending user-visible action", {
-      actionType: action.type,
-      replyLength: replyText.length,
-      replyMessageId: replyMessageId ?? null,
-      to,
-      userId: linkedUser.userId,
-    });
-    await this.deliverUserVisibleAction(action, to, replyMessageId, linkedUser.whatsappPhone);
-    await this.textConversationStore.recordOutboundReply({
-      linkedUser,
-      rawPayload: {
-        action,
-        inReplyToMessageId: replyMessageId ?? null,
-        text: replyText,
+    await startActiveObservation(
+      `whatsapp-user-visible-action:${action.type}`,
+      async (toolObservation) => {
+        const replyText = this.describeUserVisibleAction(action);
+        console.info("[whatsapp-server] sending user-visible action", {
+          actionType: action.type,
+          replyLength: replyText.length,
+          replyMessageId: replyMessageId ?? null,
+          to,
+          userId: linkedUser.userId,
+        });
+
+        toolObservation.update({
+          input: {
+            actionType: action.type,
+            replyMessageId: replyMessageId ?? null,
+          },
+        });
+
+        await this.deliverUserVisibleAction(action, to, replyMessageId, linkedUser.whatsappPhone);
+        await this.textConversationStore.recordOutboundReply({
+          linkedUser,
+          rawPayload: {
+            action,
+            inReplyToMessageId: replyMessageId ?? null,
+            text: replyText,
+          },
+          replyText,
+        });
+
+        toolObservation.update({
+          output: {
+            actionType: action.type,
+            replyLength: replyText.length,
+          },
+        });
+
+        console.info("[whatsapp-server] sent user-visible action", {
+          actionType: action.type,
+          replyLength: replyText.length,
+          replyMessageId: replyMessageId ?? null,
+          to,
+          userId: linkedUser.userId,
+        });
       },
-      replyText,
-    });
-    console.info("[whatsapp-server] sent user-visible action", {
-      actionType: action.type,
-      replyLength: replyText.length,
-      replyMessageId: replyMessageId ?? null,
-      to,
-      userId: linkedUser.userId,
-    });
+      {
+        asType: "tool",
+      }
+    );
   }
 
   /**

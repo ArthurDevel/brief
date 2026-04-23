@@ -7,6 +7,7 @@
  * - Hand off external work to the execution agent when needed
  */
 
+import { startActiveObservation } from "@langfuse/tracing";
 import { createWhatsAppTextExecutionAgent, type WhatsAppTextExecutionAgent } from "./executionAgent.js";
 import { getWhatsAppTextAgentEnv } from "./env.js";
 import {
@@ -228,102 +229,137 @@ export class WhatsAppInteractionAgent {
     turn: PreparedTextTurnDto,
     emitAction?: (action: WhatsAppUserVisibleActionDto) => Promise<void>
   ): Promise<RunInteractionTurnResultDto> {
-    console.info("[whatsapp-server] interaction turn started", {
-      currentMessageId: turn.currentMessage.id,
-      currentMessageLength: turn.currentMessage.text.length,
-      historyCount: turn.conversationHistory.length,
-      memoryCount: turn.memoryEntries.length,
-      userId: turn.linkedUser.userId,
-    });
+    return await startActiveObservation(
+      "whatsapp-interaction-agent",
+      async (agentObservation) => {
+        try {
+          console.info("[whatsapp-server] interaction turn started", {
+            currentMessageId: turn.currentMessage.id,
+            currentMessageLength: turn.currentMessage.text.length,
+            historyCount: turn.conversationHistory.length,
+            memoryCount: turn.memoryEntries.length,
+            userId: turn.linkedUser.userId,
+          });
 
-    const messages: OpenRouterChatMessageDto[] = [
-      {
-        role: "system",
-        content: buildWhatsAppTextSystemPrompt(),
-      },
-      {
-        role: "user",
-        content: buildWhatsAppTextUserPrompt(turn),
-      },
-    ];
-    const actions: WhatsAppUserVisibleActionDto[] = [];
-    let waitRequested = false;
+          agentObservation.update({
+            input: {
+              currentMessageId: turn.currentMessage.id,
+              historyCount: turn.conversationHistory.length,
+              memoryCount: turn.memoryEntries.length,
+              text: turn.currentMessage.text,
+            },
+          });
 
-    for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-      console.info("[whatsapp-server] interaction iteration requesting LLM step", {
-        currentMessageId: turn.currentMessage.id,
-        iteration: iteration + 1,
-        messageCount: messages.length,
-      });
+          const messages: OpenRouterChatMessageDto[] = [
+            {
+              role: "system",
+              content: buildWhatsAppTextSystemPrompt(),
+            },
+            {
+              role: "user",
+              content: buildWhatsAppTextUserPrompt(turn),
+            },
+          ];
+          const actions: WhatsAppUserVisibleActionDto[] = [];
+          let waitRequested = false;
 
-      const assistantMessage = await this.openRouterClient.createChatCompletion({
-        messages,
-        tools: INTERACTION_TOOL_SCHEMAS,
-      });
+          for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
+            console.info("[whatsapp-server] interaction iteration requesting LLM step", {
+              currentMessageId: turn.currentMessage.id,
+              iteration: iteration + 1,
+              messageCount: messages.length,
+            });
 
-      console.info("[whatsapp-server] interaction iteration received LLM step", {
-        currentMessageId: turn.currentMessage.id,
-        iteration: iteration + 1,
-        assistantTextLength: assistantMessage.content.length,
-        toolCallCount: assistantMessage.toolCalls.length,
-        toolNames: assistantMessage.toolCalls.map((toolCall) => toolCall.name),
-      });
+            const assistantMessage = await this.openRouterClient.createChatCompletion({
+              messages,
+              tools: INTERACTION_TOOL_SCHEMAS,
+            });
 
-      messages.push({
-        content: assistantMessage.content,
-        role: "assistant",
-        ...(assistantMessage.toolCalls.length > 0
-          ? { toolCalls: assistantMessage.toolCalls }
-          : {}),
-      });
+            console.info("[whatsapp-server] interaction iteration received LLM step", {
+              currentMessageId: turn.currentMessage.id,
+              iteration: iteration + 1,
+              assistantTextLength: assistantMessage.content.length,
+              toolCallCount: assistantMessage.toolCalls.length,
+              toolNames: assistantMessage.toolCalls.map((toolCall) => toolCall.name),
+            });
 
-      if (assistantMessage.toolCalls.length === 0) {
-        throw new Error("Interaction agent returned plain text without a supported tool call");
-      }
+            messages.push({
+              content: assistantMessage.content,
+              role: "assistant",
+              ...(assistantMessage.toolCalls.length > 0
+                ? { toolCalls: assistantMessage.toolCalls }
+                : {}),
+            });
 
-      const toolSummaries = await Promise.all(
-        assistantMessage.toolCalls.map((toolCall) => this.executeToolCall(turn, toolCall, emitAction))
-      );
+            if (assistantMessage.toolCalls.length === 0) {
+              throw new Error("Interaction agent returned plain text without a supported tool call");
+            }
 
-      for (let index = 0; index < assistantMessage.toolCalls.length; index += 1) {
-        const toolCall = assistantMessage.toolCalls[index];
-        const summary = toolSummaries[index];
-        if (!summary) {
-          throw new Error(`Missing tool summary for tool call ${toolCall.name}`);
+            const toolSummaries = await Promise.all(
+              assistantMessage.toolCalls.map((toolCall) => this.executeToolCall(turn, toolCall, emitAction))
+            );
+
+            for (let index = 0; index < assistantMessage.toolCalls.length; index += 1) {
+              const toolCall = assistantMessage.toolCalls[index];
+              const summary = toolSummaries[index];
+              if (!summary) {
+                throw new Error(`Missing tool summary for tool call ${toolCall.name}`);
+              }
+
+              actions.push(...summary.actions);
+              waitRequested = waitRequested || summary.waitRequested;
+              console.info("[whatsapp-server] interaction tool completed", {
+                currentMessageId: turn.currentMessage.id,
+                emittedActionCount: summary.actions.length,
+                iteration: iteration + 1,
+                shouldContinue: summary.shouldContinue,
+                toolName: toolCall.name,
+                waitRequested: summary.waitRequested,
+              });
+              messages.push({
+                content: summary.toolResult,
+                role: "tool",
+                toolCallId: toolCall.id ?? toolCall.name,
+              });
+            }
+
+            if (!toolSummaries.some((summary) => summary.shouldContinue)) {
+              const status: RunInteractionTurnResultDto["status"] =
+                waitRequested && actions.length === 0 ? "wait" : "completed";
+
+              console.info("[whatsapp-server] interaction turn completed", {
+                currentMessageId: turn.currentMessage.id,
+                emittedActionCount: actions.length,
+                finalStatus: status,
+              });
+
+              agentObservation.update({
+                output: {
+                  actionTypes: actions.map((action) => action.type),
+                  status,
+                },
+              });
+
+              return {
+                actions,
+                status,
+              };
+            }
+          }
+
+          throw new Error("Interaction agent reached the tool-iteration limit without finishing");
+        } catch (error) {
+          agentObservation.update({
+            level: "ERROR",
+            statusMessage: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
         }
-
-        actions.push(...summary.actions);
-        waitRequested = waitRequested || summary.waitRequested;
-        console.info("[whatsapp-server] interaction tool completed", {
-          currentMessageId: turn.currentMessage.id,
-          emittedActionCount: summary.actions.length,
-          iteration: iteration + 1,
-          shouldContinue: summary.shouldContinue,
-          toolName: toolCall.name,
-          waitRequested: summary.waitRequested,
-        });
-        messages.push({
-          content: summary.toolResult,
-          role: "tool",
-          toolCallId: toolCall.id ?? toolCall.name,
-        });
+      },
+      {
+        asType: "agent",
       }
-
-      if (!toolSummaries.some((summary) => summary.shouldContinue)) {
-        console.info("[whatsapp-server] interaction turn completed", {
-          currentMessageId: turn.currentMessage.id,
-          emittedActionCount: actions.length,
-          finalStatus: waitRequested && actions.length === 0 ? "wait" : "completed",
-        });
-
-        return {
-          actions,
-          status: waitRequested && actions.length === 0 ? "wait" : "completed",
-        };
-      }
-    }
-
-    throw new Error("Interaction agent reached the tool-iteration limit without finishing");
+    );
   }
 
   // ============================================================================
@@ -341,158 +377,230 @@ export class WhatsAppInteractionAgent {
     toolCall: OpenRouterToolCallDto,
     emitAction?: (action: WhatsAppUserVisibleActionDto) => Promise<void>
   ): Promise<ToolExecutionSummary & { toolResult: string }> {
-    if (toolCall.name === "send_message_to_agent") {
-      const argumentsDto = parseSendMessageToAgentArguments(toolCall.arguments);
-      console.info("[whatsapp-server] interaction tool send_message_to_agent", {
-        agentName: argumentsDto.agent_name,
-        currentMessageId: turn.currentMessage.id,
-        instructionLength: argumentsDto.instructions.length,
-      });
-      const result = await this.executionAgent.execute({
-        agentName: argumentsDto.agent_name,
-        instructions: argumentsDto.instructions,
-        linkedUser: turn.linkedUser,
-      } satisfies ExecuteAgentRequestDto);
+    return await startActiveObservation(
+      `interaction-tool:${toolCall.name}`,
+      async (toolObservation) => {
+        toolObservation.update({
+          input: {
+            arguments: toolCall.arguments,
+            currentMessageId: turn.currentMessage.id,
+            toolName: toolCall.name,
+          },
+        });
 
-      console.info("[whatsapp-server] execution agent returned to interaction agent", {
-        agentName: result.agentName,
-        currentMessageId: turn.currentMessage.id,
-        responseLength: result.response.length,
-        success: result.success,
-      });
+        if (toolCall.name === "send_message_to_agent") {
+          const argumentsDto = parseSendMessageToAgentArguments(toolCall.arguments);
+          console.info("[whatsapp-server] interaction tool send_message_to_agent", {
+            agentName: argumentsDto.agent_name,
+            currentMessageId: turn.currentMessage.id,
+            instructionLength: argumentsDto.instructions.length,
+          });
+          const result = await this.executionAgent.execute({
+            agentName: argumentsDto.agent_name,
+            instructions: argumentsDto.instructions,
+            linkedUser: turn.linkedUser,
+          } satisfies ExecuteAgentRequestDto);
 
-      return {
-        actions: [],
-        shouldContinue: true,
-        toolResult: JSON.stringify({
-          agent_name: result.agentName,
-          response: result.response,
-          success: result.success,
-        }),
-        waitRequested: false,
-      };
-    }
+          console.info("[whatsapp-server] execution agent returned to interaction agent", {
+            agentName: result.agentName,
+            currentMessageId: turn.currentMessage.id,
+            responseLength: result.response.length,
+            success: result.success,
+          });
 
-    if (toolCall.name === "send_message_to_user") {
-      const argumentsDto = parseSendMessageToUserArguments(toolCall.arguments);
-      const action = {
-        message: argumentsDto.message,
-        type: "message",
-      } satisfies WhatsAppUserVisibleActionDto;
-      console.info("[whatsapp-server] interaction tool send_message_to_user", {
-        currentMessageId: turn.currentMessage.id,
-        messageLength: argumentsDto.message.length,
-      });
-      if (emitAction) {
-        await emitAction(action);
+          const toolResult = JSON.stringify({
+            agent_name: result.agentName,
+            response: result.response,
+            success: result.success,
+          });
+
+          toolObservation.update({
+            output: {
+              agentName: result.agentName,
+              success: result.success,
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [],
+            shouldContinue: true,
+            toolResult,
+            waitRequested: false,
+          };
+        }
+
+        if (toolCall.name === "send_message_to_user") {
+          const argumentsDto = parseSendMessageToUserArguments(toolCall.arguments);
+          const action = {
+            message: argumentsDto.message,
+            type: "message",
+          } satisfies WhatsAppUserVisibleActionDto;
+          console.info("[whatsapp-server] interaction tool send_message_to_user", {
+            currentMessageId: turn.currentMessage.id,
+            messageLength: argumentsDto.message.length,
+          });
+          if (emitAction) {
+            await emitAction(action);
+          }
+
+          const toolResult = JSON.stringify({
+            message: argumentsDto.message,
+            status: "recorded",
+          });
+
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [action],
+            shouldContinue: false,
+            toolResult,
+            waitRequested: false,
+          };
+        }
+
+        if (toolCall.name === "send_draft") {
+          const argumentsDto = parseSendDraftArguments(toolCall.arguments);
+          const action = {
+            body: argumentsDto.body,
+            subject: argumentsDto.subject,
+            to: argumentsDto.to,
+            type: "draft",
+          } satisfies WhatsAppUserVisibleActionDto;
+          console.info("[whatsapp-server] interaction tool send_draft", {
+            currentMessageId: turn.currentMessage.id,
+            bodyLength: argumentsDto.body.length,
+            subjectLength: argumentsDto.subject.length,
+            to: argumentsDto.to,
+          });
+          if (emitAction) {
+            await emitAction(action);
+          }
+
+          const toolResult = JSON.stringify({
+            status: "draft_recorded",
+            subject: argumentsDto.subject,
+            to: argumentsDto.to,
+          });
+
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [action],
+            shouldContinue: false,
+            toolResult,
+            waitRequested: false,
+          };
+        }
+
+        if (toolCall.name === "send_whatsapp_auth_template") {
+          const argumentsDto = parseSendWhatsAppAuthTemplateArguments(toolCall.arguments);
+          const action = {
+            toolkit: argumentsDto.toolkit,
+            type: "auth_template",
+          } satisfies WhatsAppUserVisibleActionDto;
+          console.info("[whatsapp-server] interaction tool send_whatsapp_auth_template", {
+            currentMessageId: turn.currentMessage.id,
+            toolkit: argumentsDto.toolkit,
+          });
+          if (emitAction) {
+            await emitAction(action);
+          }
+
+          const toolResult = JSON.stringify({
+            status: "auth_template_sent",
+            toolkit: argumentsDto.toolkit,
+          });
+
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [action],
+            shouldContinue: true,
+            toolResult,
+            waitRequested: false,
+          };
+        }
+
+        if (toolCall.name === "send_whatsapp_connector_overview") {
+          parseSendWhatsAppConnectorOverviewArguments(toolCall.arguments);
+          const action = {
+            type: "connector_overview",
+          } satisfies WhatsAppUserVisibleActionDto;
+          console.info("[whatsapp-server] interaction tool send_whatsapp_connector_overview", {
+            currentMessageId: turn.currentMessage.id,
+          });
+          if (emitAction) {
+            await emitAction(action);
+          }
+
+          const toolResult = JSON.stringify({
+            status: "connector_overview_sent",
+          });
+
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [action],
+            shouldContinue: true,
+            toolResult,
+            waitRequested: false,
+          };
+        }
+
+        if (toolCall.name === "wait") {
+          const argumentsDto = parseWaitArguments(toolCall.arguments);
+          console.info("[whatsapp-server] interaction tool wait", {
+            currentMessageId: turn.currentMessage.id,
+            reason: argumentsDto.reason,
+          });
+
+          const toolResult = JSON.stringify({
+            reason: argumentsDto.reason,
+            status: "waiting",
+          });
+
+          toolObservation.update({
+            output: {
+              toolResult,
+              waitRequested: true,
+            },
+          });
+
+          return {
+            actions: [],
+            shouldContinue: false,
+            toolResult,
+            waitRequested: true,
+          };
+        }
+
+        throw new Error(`Unsupported interaction tool: ${toolCall.name}`);
+      },
+      {
+        asType: "tool",
       }
-
-      return {
-        actions: [action],
-        shouldContinue: false,
-        toolResult: JSON.stringify({
-          message: argumentsDto.message,
-          status: "recorded",
-        }),
-        waitRequested: false,
-      };
-    }
-
-    if (toolCall.name === "send_draft") {
-      const argumentsDto = parseSendDraftArguments(toolCall.arguments);
-      const action = {
-        body: argumentsDto.body,
-        subject: argumentsDto.subject,
-        to: argumentsDto.to,
-        type: "draft",
-      } satisfies WhatsAppUserVisibleActionDto;
-      console.info("[whatsapp-server] interaction tool send_draft", {
-        currentMessageId: turn.currentMessage.id,
-        bodyLength: argumentsDto.body.length,
-        subjectLength: argumentsDto.subject.length,
-        to: argumentsDto.to,
-      });
-      if (emitAction) {
-        await emitAction(action);
-      }
-
-      return {
-        actions: [action],
-        shouldContinue: false,
-        toolResult: JSON.stringify({
-          status: "draft_recorded",
-          to: argumentsDto.to,
-          subject: argumentsDto.subject,
-        }),
-        waitRequested: false,
-      };
-    }
-
-    if (toolCall.name === "send_whatsapp_auth_template") {
-      const argumentsDto = parseSendWhatsAppAuthTemplateArguments(toolCall.arguments);
-      const action = {
-        toolkit: argumentsDto.toolkit,
-        type: "auth_template",
-      } satisfies WhatsAppUserVisibleActionDto;
-      console.info("[whatsapp-server] interaction tool send_whatsapp_auth_template", {
-        currentMessageId: turn.currentMessage.id,
-        toolkit: argumentsDto.toolkit,
-      });
-      if (emitAction) {
-        await emitAction(action);
-      }
-
-      return {
-        actions: [action],
-        shouldContinue: true,
-        toolResult: JSON.stringify({
-          status: "auth_template_sent",
-          toolkit: argumentsDto.toolkit,
-        }),
-        waitRequested: false,
-      };
-    }
-
-    if (toolCall.name === "send_whatsapp_connector_overview") {
-      parseSendWhatsAppConnectorOverviewArguments(toolCall.arguments);
-      const action = {
-        type: "connector_overview",
-      } satisfies WhatsAppUserVisibleActionDto;
-      console.info("[whatsapp-server] interaction tool send_whatsapp_connector_overview", {
-        currentMessageId: turn.currentMessage.id,
-      });
-      if (emitAction) {
-        await emitAction(action);
-      }
-
-      return {
-        actions: [action],
-        shouldContinue: true,
-        toolResult: JSON.stringify({
-          status: "connector_overview_sent",
-        }),
-        waitRequested: false,
-      };
-    }
-
-    if (toolCall.name === "wait") {
-      const argumentsDto = parseWaitArguments(toolCall.arguments);
-      console.info("[whatsapp-server] interaction tool wait", {
-        currentMessageId: turn.currentMessage.id,
-        reason: argumentsDto.reason,
-      });
-      return {
-        actions: [],
-        shouldContinue: false,
-        toolResult: JSON.stringify({
-          reason: argumentsDto.reason,
-          status: "waiting",
-        }),
-        waitRequested: true,
-      };
-    }
-
-    throw new Error(`Unsupported interaction tool: ${toolCall.name}`);
+    );
   }
 }
 

@@ -1,7 +1,4 @@
-import { config as loadDotEnv } from "dotenv";
 import { spawnSync } from "node:child_process";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
 import { WhatsAppBot, type WhatsAppWebhookBody } from "./whatsAppBot.js";
 import {
@@ -36,8 +33,6 @@ interface WhatsAppEntry {
 
 const DEFAULT_PORT = 3020;
 const WEBHOOK_REQUEST_BODY_LIMIT = "256kb";
-const currentDir = path.dirname(fileURLToPath(import.meta.url));
-loadDotEnv({ path: path.resolve(currentDir, "../.env") });
 requireFfmpegBinary();
 
 const app = express();

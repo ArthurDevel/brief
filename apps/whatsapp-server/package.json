@@ -4,17 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch src/bootstrap.ts",
     "build": "tsc -p tsconfig.build.json",
-    "start": "tsx dist/server.js"
+    "start": "node dist/bootstrap.js"
   },
   "dependencies": {
-    "@dublin/whatsapp-core": "workspace:*",
     "@composio/core": "^0.6.10",
+    "@dublin/whatsapp-core": "workspace:*",
+    "@langfuse/otel": "^5.2.0",
+    "@langfuse/tracing": "^5.2.0",
     "@livekit/rtc-node": "0.13.25",
-    "livekit-server-sdk": "2.15.1",
+    "@opentelemetry/sdk-node": "^0.215.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "livekit-server-sdk": "2.15.1",
     "meta-cloud-api": "^2.2.0",
     "werift": "^0.22.9",
     "zod": "^3.24.2"
