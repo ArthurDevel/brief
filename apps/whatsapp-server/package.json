@@ -14,6 +14,7 @@
     "@langfuse/otel": "^5.2.0",
     "@langfuse/tracing": "^5.2.0",
     "@livekit/rtc-node": "0.13.25",
+    "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/sdk-node": "^0.215.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

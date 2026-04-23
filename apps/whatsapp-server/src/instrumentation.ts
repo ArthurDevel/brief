@@ -8,6 +8,8 @@
  */
 
 import { LangfuseSpanProcessor } from "@langfuse/otel";
+import { setLangfuseTracerProvider } from "@langfuse/tracing";
+import { trace } from "@opentelemetry/api";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { maskTracingData } from "./tracing.js";
 
@@ -17,6 +19,7 @@ import { maskTracingData } from "./tracing.js";
 
 const sdk = createNodeSdk();
 sdk.start();
+setLangfuseTracerProvider(trace.getTracerProvider());
 registerShutdownHandlers(sdk);
 
 console.info("[whatsapp-server] Langfuse instrumentation started");
