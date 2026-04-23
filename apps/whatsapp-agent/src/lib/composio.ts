@@ -103,6 +103,9 @@ export async function createComposioSession(
   });
   const session = await composio.create(callerContext.supabaseUserId, {
     manageConnections: false,
+    workbench: {
+      enable: false,
+    },
     connectedAccounts: callerContext.connectedAccountsByToolkit,
     experimental: {
       customTools,
