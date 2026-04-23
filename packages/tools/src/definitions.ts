@@ -34,7 +34,6 @@ export interface ToolDefinition {
 // CAPABILITIES MARKDOWN
 // ============================================================================
 
-// NOTE: keep in sync with apps/voice-pipeline/src/tools/definitions.py
 /** Markdown summary of all capabilities this assistant has. */
 export const CAPABILITIES_MARKDOWN = `Here is what I can help you with:
 

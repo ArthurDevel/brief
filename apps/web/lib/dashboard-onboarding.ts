@@ -1,8 +1,8 @@
 import type { EmailStatus } from "@/lib/email-status-cache";
-import type { CallSchedule, UserSettings } from "@/lib/types";
+import type { UserSettings } from "@/lib/types";
 
 export interface DashboardOnboardingStep {
-  id: "phone" | "email" | "pin" | "schedule";
+  id: "email";
   title: string;
   description: string;
   href: string;
@@ -19,27 +19,6 @@ export interface DashboardOnboardingState {
   primaryLabel: string;
 }
 
-const SCHEDULE_DAY_KEYS: Array<keyof CallSchedule> = [
-  "monday",
-  "tuesday",
-  "wednesday",
-  "thursday",
-  "friday",
-  "saturday",
-  "sunday",
-];
-
-function hasConfiguredSchedule(schedule: CallSchedule | null): boolean {
-  if (!schedule) {
-    return false;
-  }
-
-  return SCHEDULE_DAY_KEYS.some((day) => {
-    const value = schedule[day];
-    return typeof value === "string" && value.trim().length > 0;
-  });
-}
-
 function resolveEmailStep(
   settings: UserSettings,
   emailStatus?: EmailStatus | null
@@ -52,7 +31,7 @@ function resolveEmailStep(
     case "connected":
       return {
         complete: true,
-        description: "Connected and ready for inbox access during calls",
+        description: "Connected and ready for inbox access during sessions",
         href: "/dashboard/settings?tab=email",
         primaryLabel: "Open settings",
       };
@@ -87,43 +66,14 @@ export function getDashboardOnboardingState(
   emailStatus?: EmailStatus | null
 ): DashboardOnboardingState {
   const emailStep = resolveEmailStep(settings, emailStatus);
-  const hasSchedule = hasConfiguredSchedule(settings.callSchedule);
 
   const steps: DashboardOnboardingStep[] = [
-    {
-      id: "phone",
-      title: "Add your phone number",
-      description: settings.phone
-        ? "Added and ready for caller verification"
-        : "Required for calling and caller verification",
-      href: "/dashboard/settings?tab=general",
-      complete: settings.phone !== null,
-    },
     {
       id: "email",
       title: "Connect your inbox",
       description: emailStep.description,
       href: emailStep.href,
       complete: emailStep.complete,
-    },
-    {
-      id: "pin",
-      title: "Set your security PIN",
-      description: settings.hasPin
-        ? "Set and ready for secure call sign-in"
-        : "Required to verify your identity when you call",
-      href: "/dashboard/settings?tab=general",
-      complete: settings.hasPin,
-    },
-    {
-      id: "schedule",
-      title: "Pick a daily call time",
-      description: hasSchedule
-        ? "Optional schedule is configured"
-        : "Optional if you want BrewDock to ring you automatically",
-      href: "/dashboard/settings?tab=schedule",
-      complete: hasSchedule,
-      optional: true,
     },
   ];
 
@@ -136,12 +86,7 @@ export function getDashboardOnboardingState(
 
   if (firstIncompleteRequired) {
     primaryHref = firstIncompleteRequired.href;
-    primaryLabel =
-      firstIncompleteRequired.id === "phone"
-        ? "Add phone number"
-        : firstIncompleteRequired.id === "email"
-          ? emailStep.primaryLabel
-          : "Set security PIN";
+    primaryLabel = emailStep.primaryLabel;
   }
 
   return {

@@ -3,7 +3,7 @@
  *
  * Responsibilities:
  * - Compose base instructions plus optional context sections
- * - Mirror the voice-pipeline section layout (memory, session context, email context)
+ * - Keep a stable section layout for memory, session context, and email context
  * - Provide a single place to grow as new context types are introduced
  */
 
@@ -31,7 +31,7 @@ export interface BuildSystemPromptInput {
 
 /**
  * Joins the base instructions with the available context sections.
- * Sections are separated by a blank line, matching the voice-pipeline format.
+ * Sections are separated by a blank line for readability.
  * @param input - Base instructions and optional context sections
  * @returns The full system prompt string
  */
@@ -69,8 +69,7 @@ function buildMemorySection(entries: MemoryEntry[]): string | null {
 
   const memoryLines = entries.map((entry) => `- ${entry.content}`).join("\n");
 
-  // Wrapper text mirrors the voice-pipeline phrasing, with the email-specific
-  // batch-tool reference replaced by a toolkit-agnostic equivalent.
+  // Keep the wrapper explicit so the model knows when it should apply saved rules.
   const wrapper =
     "The following are memories about this user. Do not act on them " +
     "before greeting the user and getting confirmation to proceed. " +

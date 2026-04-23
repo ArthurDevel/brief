@@ -13,14 +13,13 @@
 
 import { Suspense } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Brain, Calendar, CreditCard, Lightbulb, Mail, Settings, Volume2 } from "lucide-react";
+import { Brain, CreditCard, Lightbulb, Mail, Settings, Volume2 } from "lucide-react";
 import GeneralTab from "./GeneralTab";
 import EmailTab from "./EmailTab";
 import VoiceTab from "./VoiceTab";
 import MemoriesTab from "./MemoriesTab";
 import BillingTab from "./BillingTab";
 import FeatureRequestsTab from "./FeatureRequestsTab";
-import ScheduleTab from "./ScheduleTab";
 
 // ============================================================================
 // CONSTANTS
@@ -31,7 +30,6 @@ const TABS = [
   { id: "email", label: "Email", icon: Mail },
   { id: "voice", label: "Voice", icon: Volume2 },
   { id: "memories", label: "Memories", icon: Brain },
-  { id: "schedule", label: "Schedule", icon: Calendar },
   { id: "billing", label: "Billing", icon: CreditCard },
   { id: "feature-requests", label: "Feature Requests", icon: Lightbulb },
 ] as const;
@@ -102,7 +100,6 @@ function SettingsContent() {
         {activeTab === "memories" && <MemoriesTab />}
         {activeTab === "billing" && <BillingTab />}
         {activeTab === "feature-requests" && <FeatureRequestsTab />}
-        {activeTab === "schedule" && <ScheduleTab />}
       </div>
     </div>
   );

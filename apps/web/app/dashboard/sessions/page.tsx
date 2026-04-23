@@ -1,5 +1,5 @@
 /**
- * History page -- list of past call sessions.
+ * History page -- list of past sessions.
  *
  * Shows a table of sessions with date/time, duration, and action count.
  * Each row links to the session detail page.
@@ -79,7 +79,7 @@ export default function HistoryPage() {
       <div className="flex-1 flex flex-col h-full">
         <div className="page-header">
           <h1>History</h1>
-          <p>Past call sessions and interactions.</p>
+          <p>Past sessions and interactions.</p>
         </div>
         <div className="page-content">
           <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
@@ -92,7 +92,7 @@ export default function HistoryPage() {
     <div className="flex-1 flex flex-col h-full">
       <div className="page-header">
         <h1>History</h1>
-        <p>Past call sessions and interactions.</p>
+        <p>Past sessions and interactions.</p>
       </div>
 
       <div className="page-content">
@@ -103,7 +103,7 @@ export default function HistoryPage() {
         )}
 
         {sessions.length === 0 ? (
-          <p className="text-[13px] text-[var(--text-secondary)]">No call sessions yet.</p>
+          <p className="text-[13px] text-[var(--text-secondary)]">No sessions yet.</p>
         ) : (
           <div className="settings-panel">
             <table className="w-full text-left text-[13px]">

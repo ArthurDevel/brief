@@ -3,7 +3,7 @@
  *
  * Responsibilities:
  * - Call GMAIL_FETCH_EMAILS via the caller's Composio session
- * - Mirror voice-pipeline behavior: unread count on first call, since-count after
+ * - Use unread count on first call, then new-since-last-call count afterward
  * - Return one short string suitable for inclusion in the system prompt
  */
 
@@ -29,7 +29,6 @@ interface GmailFetchResult {
 
 /**
  * Builds the greeting line about unread or new-since-last-call emails.
- * Mirrors the phrasing used by the voice pipeline.
  * @param session - Active Composio user session for the caller
  * @param lastCallEndedAt - End time of the last completed call, or null on first call
  * @returns One-line greeting string the LLM should mention to the user
