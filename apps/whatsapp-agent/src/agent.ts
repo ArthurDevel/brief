@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./instrumentation.js";
 
 import { fileURLToPath } from "node:url";
 import {
@@ -329,7 +329,11 @@ const worker = defineAgent({
 
 export default worker;
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+/**
+ * Starts the LiveKit worker CLI for this agent.
+ * @returns Void
+ */
+export function runWorkerApp(): void {
   cli.runApp(
     new WorkerOptions({
       agent: fileURLToPath(import.meta.url),
@@ -339,4 +343,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       apiSecret: env.livekitApiSecret
     })
   );
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  runWorkerApp();
 }

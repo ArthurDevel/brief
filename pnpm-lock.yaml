@@ -163,6 +163,12 @@ importers:
       '@composio/core':
         specifier: ^0.6.10
         version: 0.6.10(ws@8.19.0)(zod@3.25.76)
+      '@langfuse/otel':
+        specifier: ^5.2.0
+        version: 5.2.0(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.7.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.215.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.7.0(@opentelemetry/api@1.9.1))
+      '@langfuse/tracing':
+        specifier: ^5.2.0
+        version: 5.2.0(@opentelemetry/api@1.9.1)
       '@livekit/agents':
         specifier: 1.2.7
         version: 1.2.7(@livekit/rtc-node@0.13.25)(typescript@5.9.3)(zod@3.25.76)
@@ -172,6 +178,12 @@ importers:
       '@livekit/rtc-node':
         specifier: 0.13.25
         version: 0.13.25
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
+      '@opentelemetry/sdk-node':
+        specifier: ^0.215.0
+        version: 0.215.0(@opentelemetry/api@1.9.1)
       '@supabase/supabase-js':
         specifier: ^2.49.1
         version: 2.99.1

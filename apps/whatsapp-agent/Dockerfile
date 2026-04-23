@@ -28,4 +28,4 @@ RUN apt-get update \
 
 COPY --from=builder /prod/whatsapp-agent ./
 
-CMD ["node", "dist/agent.js", "start"]
+CMD ["node", "dist/bootstrap.js", "start"]

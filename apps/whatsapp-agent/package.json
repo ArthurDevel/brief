@@ -4,15 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/agent.ts dev",
+    "dev": "tsx watch src/bootstrap.ts dev",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/agent.js start"
+    "start": "node dist/bootstrap.js start"
   },
   "dependencies": {
     "@composio/core": "^0.6.10",
+    "@langfuse/otel": "^5.2.0",
+    "@langfuse/tracing": "^5.2.0",
     "@livekit/agents": "1.2.7",
     "@livekit/agents-plugin-deepgram": "1.2.7",
     "@livekit/rtc-node": "0.13.25",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/sdk-node": "^0.215.0",
     "@supabase/supabase-js": "^2.49.1",
     "dotenv": "^16.4.7",
     "zod": "^3.24.2"

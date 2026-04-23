@@ -7,6 +7,7 @@
  * - Hand off external work to the execution agent when needed
  */
 
+import { startActiveObservation } from "@langfuse/tracing";
 import {
   FetchOpenRouterTextClient,
   type OpenRouterChatMessageDto,
@@ -196,67 +197,93 @@ export class VoiceOpenPokeInteractionAgentRuntime {
     turn: PreparedVoiceTurnDto,
     emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
   ): Promise<RunVoiceInteractionTurnResultDto> {
-    const messages: OpenRouterChatMessageDto[] = [
-      {
-        role: "system",
-        content: buildVoiceOpenPokeInteractionSystemPrompt(),
-      },
-      {
-        role: "user",
-        content: buildVoiceOpenPokeInteractionUserPrompt(turn),
-      },
-    ];
-    const actions: VoiceUserVisibleActionDto[] = [];
-    let waitRequested = false;
+    return await startActiveObservation(
+      "whatsapp-voice-interaction-agent",
+      async (agentObservation) => {
+        agentObservation.update({
+          input: {
+            currentMessageText: turn.currentMessage.text,
+            historyCount: turn.conversationHistory.length,
+            memoryCount: turn.memoryEntries.length,
+            userId: turn.callerContext.supabaseUserId,
+          },
+        });
 
-    for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-      const assistantMessage = await this.openRouterClient.createChatCompletion({
-        messages,
-        tools: INTERACTION_TOOL_SCHEMAS,
-      });
+        const messages: OpenRouterChatMessageDto[] = [
+          {
+            role: "system",
+            content: buildVoiceOpenPokeInteractionSystemPrompt(),
+          },
+          {
+            role: "user",
+            content: buildVoiceOpenPokeInteractionUserPrompt(turn),
+          },
+        ];
+        const actions: VoiceUserVisibleActionDto[] = [];
+        let waitRequested = false;
 
-      messages.push({
-        content: assistantMessage.content,
-        role: "assistant",
-        ...(assistantMessage.toolCalls.length > 0
-          ? { toolCalls: assistantMessage.toolCalls }
-          : {}),
-      });
+        for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
+          const assistantMessage = await this.openRouterClient.createChatCompletion({
+            messages,
+            tools: INTERACTION_TOOL_SCHEMAS,
+          });
 
-      if (assistantMessage.toolCalls.length === 0) {
-        throw new Error("Interaction agent returned plain text without a supported tool call.");
-      }
+          messages.push({
+            content: assistantMessage.content,
+            role: "assistant",
+            ...(assistantMessage.toolCalls.length > 0
+              ? { toolCalls: assistantMessage.toolCalls }
+              : {}),
+          });
 
-      const toolSummaries: Array<ToolExecutionSummary & { toolResult: string }> = [];
-      for (const toolCall of assistantMessage.toolCalls) {
-        toolSummaries.push(await this.executeToolCall(turn, toolCall, emitAction));
-      }
+          if (assistantMessage.toolCalls.length === 0) {
+            throw new Error("Interaction agent returned plain text without a supported tool call.");
+          }
 
-      for (let index = 0; index < assistantMessage.toolCalls.length; index += 1) {
-        const toolCall = assistantMessage.toolCalls[index];
-        const summary = toolSummaries[index];
-        if (!summary) {
-          throw new Error(`Missing tool summary for tool call ${toolCall.name}.`);
+          const toolSummaries: Array<ToolExecutionSummary & { toolResult: string }> = [];
+          for (const toolCall of assistantMessage.toolCalls) {
+            toolSummaries.push(await this.executeToolCall(turn, toolCall, emitAction));
+          }
+
+          for (let index = 0; index < assistantMessage.toolCalls.length; index += 1) {
+            const toolCall = assistantMessage.toolCalls[index];
+            const summary = toolSummaries[index];
+            if (!summary) {
+              throw new Error(`Missing tool summary for tool call ${toolCall.name}.`);
+            }
+
+            actions.push(...summary.actions);
+            waitRequested = waitRequested || summary.waitRequested;
+            messages.push({
+              content: summary.toolResult,
+              role: "tool",
+              toolCallId: toolCall.id ?? toolCall.name,
+            });
+          }
+
+          if (!toolSummaries.some((summary) => summary.shouldContinue)) {
+            const result = {
+              actions,
+              status: waitRequested && actions.length === 0 ? "wait" : "completed",
+            } satisfies RunVoiceInteractionTurnResultDto;
+
+            agentObservation.update({
+              output: {
+                actionTypes: result.actions.map((action) => action.type),
+                status: result.status,
+              },
+            });
+
+            return result;
+          }
         }
 
-        actions.push(...summary.actions);
-        waitRequested = waitRequested || summary.waitRequested;
-        messages.push({
-          content: summary.toolResult,
-          role: "tool",
-          toolCallId: toolCall.id ?? toolCall.name,
-        });
+        throw new Error("Interaction agent reached the tool-iteration limit without finishing.");
+      },
+      {
+        asType: "agent",
       }
-
-      if (!toolSummaries.some((summary) => summary.shouldContinue)) {
-        return {
-          actions,
-          status: waitRequested && actions.length === 0 ? "wait" : "completed",
-        };
-      }
-    }
-
-    throw new Error("Interaction agent reached the tool-iteration limit without finishing.");
+    );
   }
 
   // ============================================================================
@@ -275,110 +302,163 @@ export class VoiceOpenPokeInteractionAgentRuntime {
     toolCall: OpenRouterToolCallDto,
     emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
   ): Promise<ToolExecutionSummary & { toolResult: string }> {
-    if (toolCall.name === "send_message_to_agent") {
-      const argumentsDto = parseSendMessageToAgentArguments(toolCall.arguments);
-      const result = await this.executionAgent.execute({
-        agentName: argumentsDto.agent_name,
-        callerContext: turn.callerContext,
-        instructions: argumentsDto.instructions,
-      } satisfies ExecuteVoiceAgentRequestDto);
+    return await startActiveObservation(
+      `interaction-tool:${toolCall.name}`,
+      async (toolObservation) => {
+        toolObservation.update({
+          input: {
+            arguments: toolCall.arguments,
+            callerPhone: turn.callerContext.callerPhone,
+            toolName: toolCall.name,
+            userId: turn.callerContext.supabaseUserId,
+          },
+        });
 
-      const toolResult = JSON.stringify({
-        agent_name: result.agentName,
-        response: result.response,
-        success: result.success,
-      });
+        if (toolCall.name === "send_message_to_agent") {
+          const argumentsDto = parseSendMessageToAgentArguments(toolCall.arguments);
+          const result = await this.executionAgent.execute({
+            agentName: argumentsDto.agent_name,
+            callerContext: turn.callerContext,
+            instructions: argumentsDto.instructions,
+          } satisfies ExecuteVoiceAgentRequestDto);
 
-      return {
-        actions: [],
-        shouldContinue: true,
-        toolResult,
-        waitRequested: false,
-      };
-    }
+          const toolResult = JSON.stringify({
+            agent_name: result.agentName,
+            response: result.response,
+            success: result.success,
+          });
 
-    if (toolCall.name === "send_message_to_user") {
-      const argumentsDto = parseSendMessageToUserArguments(toolCall.arguments);
-      const action = {
-        message: argumentsDto.message,
-        type: "message",
-      } satisfies VoiceUserVisibleActionDto;
-      if (emitAction) {
-        await emitAction(action);
+          toolObservation.update({
+            output: {
+              agentName: result.agentName,
+              success: result.success,
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [],
+            shouldContinue: true,
+            toolResult,
+            waitRequested: false,
+          };
+        }
+
+        if (toolCall.name === "send_message_to_user") {
+          const argumentsDto = parseSendMessageToUserArguments(toolCall.arguments);
+          const action = {
+            message: argumentsDto.message,
+            type: "message",
+          } satisfies VoiceUserVisibleActionDto;
+          if (emitAction) {
+            await emitAction(action);
+          }
+
+          const toolResult = JSON.stringify({
+            message: argumentsDto.message,
+            status: "recorded",
+          });
+
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [action],
+            shouldContinue: false,
+            toolResult,
+            waitRequested: false,
+          };
+        }
+
+        if (toolCall.name === "send_whatsapp_auth_template") {
+          const argumentsDto = parseSendWhatsAppAuthTemplateArguments(toolCall.arguments);
+          const action = {
+            toolkit: argumentsDto.toolkit,
+            type: "auth_template",
+          } satisfies VoiceUserVisibleActionDto;
+          if (emitAction) {
+            await emitAction(action);
+          }
+
+          const toolResult = JSON.stringify({
+            status: "auth_template_sent",
+            toolkit: argumentsDto.toolkit,
+          });
+
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [action],
+            shouldContinue: true,
+            toolResult,
+            waitRequested: false,
+          };
+        }
+
+        if (toolCall.name === "send_whatsapp_connector_overview") {
+          parseSendWhatsAppConnectorOverviewArguments(toolCall.arguments);
+          const action = {
+            type: "connector_overview",
+          } satisfies VoiceUserVisibleActionDto;
+          if (emitAction) {
+            await emitAction(action);
+          }
+
+          const toolResult = JSON.stringify({
+            status: "connector_overview_sent",
+          });
+
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [action],
+            shouldContinue: true,
+            toolResult,
+            waitRequested: false,
+          };
+        }
+
+        if (toolCall.name === "wait") {
+          const argumentsDto = parseWaitArguments(toolCall.arguments);
+          const toolResult = JSON.stringify({
+            reason: argumentsDto.reason,
+            status: "waiting",
+          });
+
+          toolObservation.update({
+            output: {
+              toolResult,
+            },
+          });
+
+          return {
+            actions: [],
+            shouldContinue: false,
+            toolResult,
+            waitRequested: true,
+          };
+        }
+
+        throw new Error(`Unsupported interaction tool: ${toolCall.name}`);
+      },
+      {
+        asType: "tool",
       }
-
-      const toolResult = JSON.stringify({
-        message: argumentsDto.message,
-        status: "recorded",
-      });
-
-      return {
-        actions: [action],
-        shouldContinue: false,
-        toolResult,
-        waitRequested: false,
-      };
-    }
-
-    if (toolCall.name === "send_whatsapp_auth_template") {
-      const argumentsDto = parseSendWhatsAppAuthTemplateArguments(toolCall.arguments);
-      const action = {
-        toolkit: argumentsDto.toolkit,
-        type: "auth_template",
-      } satisfies VoiceUserVisibleActionDto;
-      if (emitAction) {
-        await emitAction(action);
-      }
-
-      const toolResult = JSON.stringify({
-        status: "auth_template_sent",
-        toolkit: argumentsDto.toolkit,
-      });
-
-      return {
-        actions: [action],
-        shouldContinue: true,
-        toolResult,
-        waitRequested: false,
-      };
-    }
-
-    if (toolCall.name === "send_whatsapp_connector_overview") {
-      parseSendWhatsAppConnectorOverviewArguments(toolCall.arguments);
-      const action = {
-        type: "connector_overview",
-      } satisfies VoiceUserVisibleActionDto;
-      if (emitAction) {
-        await emitAction(action);
-      }
-
-      const toolResult = JSON.stringify({
-        status: "connector_overview_sent",
-      });
-
-      return {
-        actions: [action],
-        shouldContinue: true,
-        toolResult,
-        waitRequested: false,
-      };
-    }
-
-    if (toolCall.name === "wait") {
-      const argumentsDto = parseWaitArguments(toolCall.arguments);
-
-      return {
-        actions: [],
-        shouldContinue: false,
-        toolResult: JSON.stringify({
-          reason: argumentsDto.reason,
-          status: "waiting",
-        }),
-        waitRequested: true,
-      };
-    }
-
-    throw new Error(`Unsupported interaction tool: ${toolCall.name}`);
+    );
   }
 }
 
