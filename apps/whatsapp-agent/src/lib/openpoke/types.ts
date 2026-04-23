@@ -27,6 +27,12 @@ export interface PreparedVoiceTurnDto {
   memoryEntries: MemoryEntry[];
 }
 
+export interface PreparedVoiceConversationStartDto {
+  callerContext: WhatsAppCallerContext;
+  conversationHistory: VoiceConversationMessageDto[];
+  memoryEntries: MemoryEntry[];
+}
+
 export type SupportedConnectorToolkit =
   | "gmail"
   | "googlecalendar"
