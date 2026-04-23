@@ -14,10 +14,12 @@ Minimal TypeScript LiveKit agent for the WhatsApp calling MVP.
 
 ```bash
 cd apps/whatsapp-agent
-cp .env.example .env.local
+cp .env.example .env
 pnpm install
 pnpm dev
 ```
+
+Set `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` to enable Langfuse tracing.
 
 ## Coolify deployment
 

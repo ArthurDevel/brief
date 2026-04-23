@@ -8,6 +8,7 @@
  * - Speak only the user-visible actions returned by the interaction runtime
  */
 
+import { propagateAttributes, startActiveObservation } from "@langfuse/tracing";
 import { llm, voice } from "@livekit/agents";
 import type { WhatsAppCallerContext } from "../whatsappRuntime.js";
 import type { MemoryEntry } from "../memory.js";
@@ -22,6 +23,10 @@ import type {
   VoiceUserVisibleActionDto,
 } from "./types.js";
 import type { VoiceOpenPokeInteractionAgentRuntime } from "./interactionAgent.js";
+import {
+  buildWhatsAppVoiceSessionId,
+  WHATSAPP_VOICE_TRACE_NAME,
+} from "../../tracing.js";
 
 // ============================================================================
 // CONSTANTS
@@ -108,9 +113,41 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
 
     this.pendingTurn = this.pendingTurn.then(async () => {
       try {
-        await this.interactionAgent.runTurn(
-          turn,
-          async (action) => await this.emitAction(action)
+        await startActiveObservation(
+          WHATSAPP_VOICE_TRACE_NAME,
+          async (turnObservation) => {
+            turnObservation.update({
+              input: {
+                text: turn.currentMessage.text,
+              },
+            });
+
+            await propagateAttributes(
+              {
+                metadata: {
+                  channel: "whatsapp_voice",
+                  feature: "voice_agent",
+                },
+                sessionId: buildWhatsAppVoiceSessionId(this.callerContext),
+                tags: ["whatsapp", "voice-agent"],
+                traceName: WHATSAPP_VOICE_TRACE_NAME,
+                userId: this.callerContext.supabaseUserId,
+              },
+              async () => {
+                const result = await this.interactionAgent.runTurn(
+                  turn,
+                  async (action) => await this.emitAction(action)
+                );
+
+                turnObservation.update({
+                  output: {
+                    actionTypes: result.actions.map((action) => action.type),
+                    status: result.status,
+                  },
+                });
+              }
+            );
+          }
         );
       } catch (error) {
         console.error("[whatsapp-agent] voice interaction turn failed", {
@@ -138,30 +175,63 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
    * @returns Nothing
    */
   private async emitAction(action: VoiceUserVisibleActionDto): Promise<void> {
-    if (action.type === "message") {
-      await this.session.say(action.message).waitForPlayout();
-      this.recordOutboundMessage(action.message);
-      return;
-    }
+    await startActiveObservation(
+      `whatsapp-user-visible-action:${action.type}`,
+      async (toolObservation) => {
+        toolObservation.update({
+          input: {
+            actionType: action.type,
+            callerPhone: this.callerContext.callerPhone,
+            userId: this.callerContext.supabaseUserId,
+          },
+        });
 
-    if (action.type === "auth_template") {
-      await sendWhatsAppConnectorAuthTemplate(
-        this.env,
-        this.callerContext.callerPhone,
-        action.toolkit
-      );
-      return;
-    }
+        if (action.type === "message") {
+          await this.session.say(action.message).waitForPlayout();
+          this.recordOutboundMessage(action.message);
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+              messageLength: action.message.length,
+            },
+          });
+          return;
+        }
 
-    if (action.type === "connector_overview") {
-      await sendWhatsAppConnectorOverviewTemplate(
-        this.env,
-        this.callerContext.callerPhone
-      );
-      return;
-    }
+        if (action.type === "auth_template") {
+          await sendWhatsAppConnectorAuthTemplate(
+            this.env,
+            this.callerContext.callerPhone,
+            action.toolkit
+          );
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+              toolkit: action.toolkit,
+            },
+          });
+          return;
+        }
 
-    throw new Error(`Unsupported voice action type: ${(action as { type: string }).type}`);
+        if (action.type === "connector_overview") {
+          await sendWhatsAppConnectorOverviewTemplate(
+            this.env,
+            this.callerContext.callerPhone
+          );
+          toolObservation.update({
+            output: {
+              actionType: action.type,
+            },
+          });
+          return;
+        }
+
+        throw new Error(`Unsupported voice action type: ${(action as { type: string }).type}`);
+      },
+      {
+        asType: "tool",
+      }
+    );
   }
 
   /**

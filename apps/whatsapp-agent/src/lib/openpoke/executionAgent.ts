@@ -7,6 +7,7 @@
  * - Execute Composio and WhatsApp auth tools for delegated work
  */
 
+import { startActiveObservation } from "@langfuse/tracing";
 import { Composio } from "@composio/core";
 import type { AgentEnv } from "../env.js";
 import type { WhatsAppCallerContext } from "../whatsappRuntime.js";
@@ -110,79 +111,112 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
    * @returns Final execution result for the interaction agent
    */
   async execute(input: ExecuteVoiceAgentRequestDto): Promise<ExecuteVoiceAgentResultDto> {
-    const executionTrace: ExecutionTraceEntryDto[] = [];
+    return await startActiveObservation(
+      `execution-agent:${input.agentName}`,
+      async (agentObservation) => {
+        const executionTrace: ExecutionTraceEntryDto[] = [];
 
-    try {
-      const session = await this.createExecutionSession(input.callerContext);
-      const messages: OpenRouterChatMessageDto[] = [
-        {
-          role: "system",
-          content: buildVoiceOpenPokeExecutionSystemPrompt(
-            input.agentName,
-            session.connectedToolkitSlugs
-          ),
-        },
-        {
-          role: "user",
-          content: input.instructions,
-        },
-      ];
-
-      for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-        const assistantMessage = await this.openRouterClient.createChatCompletion({
-          messages,
-          tools: session.toolSchemas,
+        agentObservation.update({
+          input: {
+            agentName: input.agentName,
+            callerPhone: input.callerContext.callerPhone,
+            instructions: input.instructions,
+            userId: input.callerContext.supabaseUserId,
+          },
         });
 
-        messages.push({
-          content: assistantMessage.content,
-          role: "assistant",
-          ...(assistantMessage.toolCalls.length > 0
-            ? { toolCalls: assistantMessage.toolCalls }
-            : {}),
-        });
+        try {
+          const session = await this.createExecutionSession(input.callerContext);
+          const messages: OpenRouterChatMessageDto[] = [
+            {
+              role: "system",
+              content: buildVoiceOpenPokeExecutionSystemPrompt(
+                input.agentName,
+                session.connectedToolkitSlugs
+              ),
+            },
+            {
+              role: "user",
+              content: input.instructions,
+            },
+          ];
 
-        if (assistantMessage.toolCalls.length === 0) {
-          if (!assistantMessage.content.trim()) {
-            throw new Error("Execution agent returned neither a tool call nor a final response.");
+          for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
+            const assistantMessage = await this.openRouterClient.createChatCompletion({
+              messages,
+              tools: session.toolSchemas,
+            });
+
+            messages.push({
+              content: assistantMessage.content,
+              role: "assistant",
+              ...(assistantMessage.toolCalls.length > 0
+                ? { toolCalls: assistantMessage.toolCalls }
+                : {}),
+            });
+
+            if (assistantMessage.toolCalls.length === 0) {
+              if (!assistantMessage.content.trim()) {
+                throw new Error("Execution agent returned neither a tool call nor a final response.");
+              }
+
+              agentObservation.update({
+                output: {
+                  response: assistantMessage.content.trim(),
+                  success: true,
+                },
+              });
+
+              return {
+                agentName: input.agentName,
+                response: assistantMessage.content.trim(),
+                success: true,
+              };
+            }
+
+            for (const toolCall of assistantMessage.toolCalls) {
+              const toolResult = await executeToolCall(session, toolCall);
+              executionTrace.push({
+                assistantText: assistantMessage.content,
+                iteration: iteration + 1,
+                toolArguments: toolCall.arguments,
+                toolName: toolCall.name,
+                toolResult,
+              });
+
+              messages.push({
+                content: JSON.stringify(toolResult),
+                role: "tool",
+                toolCallId: toolCall.id ?? toolCall.name,
+              });
+            }
           }
+
+          throw new Error("Execution agent reached the tool-iteration limit without a final response.");
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const summary = await this.summarizeFailedExecution(input, executionTrace, errorMessage);
+
+          agentObservation.update({
+            level: "ERROR",
+            output: {
+              response: summary,
+              success: false,
+            },
+            statusMessage: errorMessage,
+          });
 
           return {
             agentName: input.agentName,
-            response: assistantMessage.content.trim(),
-            success: true,
+            response: summary,
+            success: false,
           };
         }
-
-        for (const toolCall of assistantMessage.toolCalls) {
-          const toolResult = await executeToolCall(session, toolCall);
-          executionTrace.push({
-            assistantText: assistantMessage.content,
-            iteration: iteration + 1,
-            toolArguments: toolCall.arguments,
-            toolName: toolCall.name,
-            toolResult,
-          });
-
-          messages.push({
-            content: JSON.stringify(toolResult),
-            role: "tool",
-            toolCallId: toolCall.id ?? toolCall.name,
-          });
-        }
+      },
+      {
+        asType: "agent",
       }
-
-      throw new Error("Execution agent reached the tool-iteration limit without a final response.");
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const summary = await this.summarizeFailedExecution(input, executionTrace, errorMessage);
-
-      return {
-        agentName: input.agentName,
-        response: summary,
-        success: false,
-      };
-    }
+    );
   }
 
   // ============================================================================
@@ -197,43 +231,63 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
   private async createExecutionSession(
     callerContext: WhatsAppCallerContext
   ): Promise<ComposioExecutionSession> {
-    const composio = new Composio({
-      apiKey: this.composioApiKey,
-    });
-    const connectedToolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
-    const session = await composio.create(callerContext.supabaseUserId, {
-      manageConnections: false,
-      workbench: {
-        enable: false,
-      },
-      connectedAccounts: callerContext.connectedAccountsByToolkit,
-      experimental: {
-        customTools: createWhatsAppCustomTools(this.env, callerContext),
-      },
-      ...(connectedToolkitSlugs.length > 0 ? { toolkits: connectedToolkitSlugs } : {}),
-    });
-    const sessionTools = await session.tools() as SessionToolDefinition[];
-    if (sessionTools.length === 0) {
-      throw new Error("Composio did not return any tools for this caller.");
-    }
+    return await startActiveObservation(
+      "create-execution-session",
+      async (sessionObservation) => {
+        sessionObservation.update({
+          input: {
+            callerPhone: callerContext.callerPhone,
+            connectedToolkitSlugs: Object.keys(callerContext.connectedAccountsByToolkit),
+            userId: callerContext.supabaseUserId,
+          },
+        });
 
-    return {
-      connectedToolkitSlugs,
-      executeTool: async (
-        toolName: string,
-        toolArguments: Record<string, unknown>
-      ): Promise<unknown> => {
-        if (toolName.startsWith("COMPOSIO_")) {
-          return composio.tools.executeMetaTool(toolName, {
-            arguments: toolArguments,
-            sessionId: session.sessionId,
-          });
+        const composio = new Composio({
+          apiKey: this.composioApiKey,
+        });
+        const connectedToolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
+        const session = await composio.create(callerContext.supabaseUserId, {
+          manageConnections: false,
+          workbench: {
+            enable: false,
+          },
+          connectedAccounts: callerContext.connectedAccountsByToolkit,
+          experimental: {
+            customTools: createWhatsAppCustomTools(this.env, callerContext),
+          },
+          ...(connectedToolkitSlugs.length > 0 ? { toolkits: connectedToolkitSlugs } : {}),
+        });
+        const sessionTools = await session.tools() as SessionToolDefinition[];
+        if (sessionTools.length === 0) {
+          throw new Error("Composio did not return any tools for this caller.");
         }
 
-        return session.execute(toolName, toolArguments);
-      },
-      toolSchemas: mapSessionToolsToOpenRouterSchemas(sessionTools),
-    };
+        sessionObservation.update({
+          output: {
+            connectedToolkitSlugs,
+            toolCount: sessionTools.length,
+          },
+        });
+
+        return {
+          connectedToolkitSlugs,
+          executeTool: async (
+            toolName: string,
+            toolArguments: Record<string, unknown>
+          ): Promise<unknown> => {
+            if (toolName.startsWith("COMPOSIO_")) {
+              return composio.tools.executeMetaTool(toolName, {
+                arguments: toolArguments,
+                sessionId: session.sessionId,
+              });
+            }
+
+            return session.execute(toolName, toolArguments);
+          },
+          toolSchemas: mapSessionToolsToOpenRouterSchemas(sessionTools),
+        };
+      }
+    );
   }
 
   /**
@@ -314,22 +368,51 @@ async function executeToolCall(
   session: ComposioExecutionSession,
   toolCall: OpenRouterToolCallDto
 ): Promise<Record<string, unknown>> {
-  try {
-    const result = await session.executeTool(toolCall.name, toolCall.arguments);
-    return {
-      arguments: toolCall.arguments,
-      result: formatToolResult(toolCall.name, result),
-      status: "success",
-      tool: toolCall.name,
-    };
-  } catch (error) {
-    return {
-      arguments: toolCall.arguments,
-      error: error instanceof Error ? error.message : String(error),
-      status: "error",
-      tool: toolCall.name,
-    };
-  }
+  return await startActiveObservation(
+    `execution-tool:${toolCall.name}`,
+    async (toolObservation) => {
+      toolObservation.update({
+        input: {
+          arguments: toolCall.arguments,
+          toolName: toolCall.name,
+        },
+      });
+
+      try {
+        const result = await session.executeTool(toolCall.name, toolCall.arguments);
+        const formattedResult = {
+          arguments: toolCall.arguments,
+          result: formatToolResult(toolCall.name, result),
+          status: "success",
+          tool: toolCall.name,
+        };
+
+        toolObservation.update({
+          output: formattedResult,
+        });
+
+        return formattedResult;
+      } catch (error) {
+        const failedResult = {
+          arguments: toolCall.arguments,
+          error: error instanceof Error ? error.message : String(error),
+          status: "error",
+          tool: toolCall.name,
+        };
+
+        toolObservation.update({
+          level: "ERROR",
+          output: failedResult,
+          statusMessage: failedResult.error,
+        });
+
+        return failedResult;
+      }
+    },
+    {
+      asType: "tool",
+    }
+  );
 }
 
 /**
