@@ -325,6 +325,9 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
 
         const session = await composio.create(linkedUser.userId, {
           manageConnections: false,
+          workbench: {
+            enable: false,
+          },
           connectedAccounts: connectedAccountsByToolkit,
           experimental: {
             customTools: createWhatsAppTextCustomTools(
