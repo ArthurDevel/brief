@@ -3,13 +3,21 @@
  *
  * Responsibilities:
  * - Run a tool-enabled execution loop with OpenRouter
+ * - Reload persisted execution history for one user + agent thread
  * - Create a user-scoped Composio session for the linked WhatsApp user
  * - Execute Composio and WhatsApp auth tools for one interaction turn
  */
 
 import { startActiveObservation } from "@langfuse/tracing";
 import { Composio } from "@composio/core";
-import type { WhatsAppLinkedUserDto } from "@dublin/whatsapp-core";
+import {
+  createWhatsAppCoreStore,
+  type ExecutionAgentMessageDto,
+  type ExecutionAgentThreadDto,
+  type StoreExecutionAgentMessageDto,
+  type WhatsAppCoreStore,
+  type WhatsAppLinkedUserDto,
+} from "@dublin/whatsapp-core";
 import { getWhatsAppTextAgentEnv } from "./env.js";
 import {
   FetchOpenRouterTextClient,
@@ -83,6 +91,7 @@ export interface WhatsAppTextExecutionAgent {
 
 const WHATSAPP_TEXT_EXECUTION_MODEL = "google/gemini-3-flash-preview";
 const WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_MODEL = "google/gemini-3-flash-preview";
+const MAX_PERSISTED_EXECUTION_MESSAGES = 20;
 const MAX_TOOL_ITERATIONS = 8;
 
 // ============================================================================
@@ -93,6 +102,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
   private readonly composioApiKey: string;
   private readonly openRouterClient: OpenRouterTextClient;
   private readonly summarizerClient: OpenRouterTextClient;
+  private readonly whatsappCoreStore: WhatsAppCoreStore;
   private readonly whatsappAccessToken: string;
   private readonly whatsappApiVersion: string;
   private readonly whatsappPhoneNumberId: string;
@@ -101,6 +111,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
    * Creates the execution runtime for WhatsApp text tasks.
    * @param openRouterClient - OpenRouter client used for execution planning
    * @param summarizerClient - OpenRouter client used for failed-execution summaries
+   * @param whatsappCoreStore - Shared store used for persisted execution threads
    * @param composioApiKey - Composio API key for user-scoped sessions
    * @param whatsappAccessToken - Meta Graph access token for auth tools
    * @param whatsappApiVersion - Meta Graph API version
@@ -109,6 +120,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
   constructor(
     openRouterClient: OpenRouterTextClient,
     summarizerClient: OpenRouterTextClient,
+    whatsappCoreStore: WhatsAppCoreStore,
     composioApiKey: string,
     whatsappAccessToken: string,
     whatsappApiVersion: string,
@@ -116,6 +128,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
   ) {
     this.openRouterClient = openRouterClient;
     this.summarizerClient = summarizerClient;
+    this.whatsappCoreStore = whatsappCoreStore;
     this.composioApiKey = composioApiKey;
     this.whatsappAccessToken = whatsappAccessToken;
     this.whatsappApiVersion = whatsappApiVersion;
@@ -133,6 +146,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
       async (agentObservation) => {
         const startedAt = Date.now();
         const executionTrace: ExecutionTraceEntryDto[] = [];
+        let thread: ExecutionAgentThreadDto | null = null;
         console.info("[whatsapp-server] execution agent started", {
           agentName: input.agentName,
           instructionLength: input.instructions.length,
@@ -148,6 +162,15 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
         });
 
         try {
+          thread = await this.whatsappCoreStore.findOrCreateExecutionAgentThread({
+            agentName: input.agentName,
+            userId: input.linkedUser.userId,
+          });
+          const persistedMessages = await this.whatsappCoreStore.listExecutionAgentMessages({
+            limit: MAX_PERSISTED_EXECUTION_MESSAGES,
+            threadId: thread.id,
+            userId: input.linkedUser.userId,
+          });
           const session = await this.createExecutionSession(input.linkedUser);
           const messages: OpenRouterChatMessageDto[] = [
             {
@@ -157,11 +180,15 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
                 session.connectedToolkitSlugs
               ),
             },
+            ...persistedMessages.map(mapPersistedExecutionMessageToOpenRouterMessage),
             {
               role: "user",
               content: input.instructions,
             },
           ];
+          await this.appendThreadMessages(thread.id, input.linkedUser.userId, [
+            buildUserExecutionAgentMessage(input.instructions),
+          ]);
 
           for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
             console.info("[whatsapp-server] execution iteration requesting LLM step", {
@@ -191,6 +218,9 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
                 ? { toolCalls: assistantMessage.toolCalls }
                 : {}),
             });
+            await this.appendThreadMessages(thread.id, input.linkedUser.userId, [
+              buildAssistantExecutionAgentMessage(assistantMessage),
+            ]);
 
             if (assistantMessage.toolCalls.length === 0) {
               if (!assistantMessage.content.trim()) {
@@ -232,11 +262,16 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
                 status: toolResult.status,
                 toolName: toolCall.name,
               });
+              const toolCallId = toolCall.id ?? toolCall.name;
+              const toolMessageContent = JSON.stringify(toolResult);
               messages.push({
-                content: JSON.stringify(toolResult),
+                content: toolMessageContent,
                 role: "tool",
-                toolCallId: toolCall.id ?? toolCall.name,
+                toolCallId,
               });
+              await this.appendThreadMessages(thread.id, input.linkedUser.userId, [
+                buildToolExecutionAgentMessage(toolCall, toolCallId, toolMessageContent, toolResult),
+              ]);
             }
           }
 
@@ -250,6 +285,11 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
           });
 
           const summary = await this.summarizeFailedExecution(input, executionTrace, errorMessage);
+          if (thread) {
+            await this.appendThreadMessages(thread.id, input.linkedUser.userId, [
+              buildUserFacingExecutionFailureMessage(summary),
+            ]);
+          }
           console.info("[whatsapp-server] execution agent returned failure summary", {
             agentName: input.agentName,
             durationMs: Date.now() - startedAt,
@@ -276,6 +316,29 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
         asType: "agent",
       }
     );
+  }
+
+  /**
+   * Persists one or more execution-agent messages and updates the thread timestamp.
+   * @param threadId - Persisted execution-agent thread ID
+   * @param userId - Supabase user ID that owns the thread
+   * @param messages - Execution-agent messages to append
+   * @returns Promise that resolves when the messages are stored
+   */
+  private async appendThreadMessages(
+    threadId: string,
+    userId: string,
+    messages: StoreExecutionAgentMessageDto[]
+  ): Promise<void> {
+    await this.whatsappCoreStore.storeExecutionAgentMessages({
+      messages,
+      threadId,
+      userId,
+    });
+    await this.whatsappCoreStore.touchExecutionAgentThread({
+      threadId,
+      userId,
+    });
   }
 
   // ============================================================================
@@ -451,6 +514,10 @@ export function createWhatsAppTextExecutionAgent(): WhatsAppTextExecutionAgentRu
       apiKey: env.openRouterApiKey,
       model: WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_MODEL,
     }),
+    createWhatsAppCoreStore({
+      supabaseServiceRoleKey: env.supabaseServiceRoleKey,
+      supabaseUrl: env.supabaseUrl,
+    }),
     env.composioApiKey,
     env.whatsappAccessToken,
     env.whatsappApiVersion,
@@ -526,6 +593,127 @@ async function executeToolCall(
       asType: "tool",
     }
   );
+}
+
+/**
+ * Maps one persisted execution-agent row back into an OpenRouter chat message.
+ * @param message - Persisted execution-agent message DTO
+ * @returns OpenRouter chat message DTO
+ */
+function mapPersistedExecutionMessageToOpenRouterMessage(
+  message: ExecutionAgentMessageDto
+): OpenRouterChatMessageDto {
+  if (message.role === "assistant") {
+    return {
+      content: message.content,
+      role: "assistant",
+      ...(message.toolCalls && message.toolCalls.length > 0
+        ? { toolCalls: message.toolCalls }
+        : {}),
+    };
+  }
+
+  if (message.role === "tool") {
+    if (!message.toolCallId) {
+      throw new Error("Persisted execution tool message is missing toolCallId");
+    }
+
+    return {
+      content: message.content,
+      role: "tool",
+      toolCallId: message.toolCallId,
+    };
+  }
+
+  return {
+    content: message.content,
+    role: "user",
+  };
+}
+
+/**
+ * Builds one persisted user row for an execution-agent instruction.
+ * @param content - Execution instruction content
+ * @returns Persisted execution-agent message DTO
+ */
+function buildUserExecutionAgentMessage(content: string): StoreExecutionAgentMessageDto {
+  return {
+    content,
+    role: "user",
+    toolArguments: null,
+    toolCallId: null,
+    toolCalls: null,
+    toolName: null,
+    toolResult: null,
+  };
+}
+
+/**
+ * Builds one persisted assistant row for an OpenRouter execution step.
+ * @param assistantMessage - Assistant step returned by OpenRouter
+ * @returns Persisted execution-agent message DTO
+ */
+function buildAssistantExecutionAgentMessage(
+  assistantMessage: {
+    content: string;
+    toolCalls: OpenRouterToolCallDto[];
+  }
+): StoreExecutionAgentMessageDto {
+  return {
+    content: assistantMessage.content,
+    role: "assistant",
+    toolArguments: null,
+    toolCallId: null,
+    toolCalls: assistantMessage.toolCalls.map((toolCall) => ({
+      arguments: toolCall.arguments,
+      id: toolCall.id,
+      name: toolCall.name,
+    })),
+    toolName: null,
+    toolResult: null,
+  };
+}
+
+/**
+ * Builds one persisted tool row for a completed execution tool call.
+ * @param toolCall - Tool call requested by the assistant
+ * @param toolCallId - Stable tool call ID used in the chat history
+ * @param content - Serialized tool result content
+ * @param toolResult - Structured tool result payload
+ * @returns Persisted execution-agent message DTO
+ */
+function buildToolExecutionAgentMessage(
+  toolCall: OpenRouterToolCallDto,
+  toolCallId: string,
+  content: string,
+  toolResult: Record<string, unknown>
+): StoreExecutionAgentMessageDto {
+  return {
+    content,
+    role: "tool",
+    toolArguments: toolCall.arguments,
+    toolCallId,
+    toolCalls: null,
+    toolName: toolCall.name,
+    toolResult,
+  };
+}
+
+/**
+ * Builds one persisted assistant row for a failure summary returned to the interaction agent.
+ * @param content - Failure summary content
+ * @returns Persisted execution-agent message DTO
+ */
+function buildUserFacingExecutionFailureMessage(content: string): StoreExecutionAgentMessageDto {
+  return {
+    content,
+    role: "assistant",
+    toolArguments: null,
+    toolCallId: null,
+    toolCalls: null,
+    toolName: null,
+    toolResult: null,
+  };
 }
 
 /**

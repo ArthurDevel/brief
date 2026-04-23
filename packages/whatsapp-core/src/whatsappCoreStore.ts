@@ -5,6 +5,7 @@
  * - Resolve a WhatsApp-linked user from `user_settings`
  * - Read user memory and WhatsApp thread history
  * - Persist inbound and outbound WhatsApp text rows to `whatsapp_messages`
+ * - Persist execution-agent threads and messages for WhatsApp text agents
  */
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -14,13 +15,20 @@ import {
 } from "./errors.js";
 import { normalizeWhatsAppPhone } from "./normalizeWhatsAppPhone.js";
 import type {
+  ExecutionAgentMessageDto,
+  ExecutionAgentThreadDto,
+  FindOrCreateExecutionAgentThreadDto,
   ListWhatsAppConversationMessagesDto,
+  ListExecutionAgentMessagesDto,
   StoreInboundWhatsAppTextMessageDto,
   StoreInboundWhatsAppTextMessageResultDto,
   StoreOutboundWhatsAppTextMessageDto,
+  StoreExecutionAgentMessagesDto,
+  TouchExecutionAgentThreadDto,
   WhatsAppConversationMessageDto,
   WhatsAppLinkedUserDto,
   WhatsAppMemoryEntryDto,
+  ExecutionAgentToolCallDto,
 } from "./types.js";
 
 // ============================================================================
@@ -46,6 +54,28 @@ interface WhatsAppMessageRow {
 interface UserMemoryRow {
   content: string;
   id: string;
+}
+
+interface ExecutionAgentThreadRow {
+  agent_name: string;
+  created_at: string;
+  id: string;
+  updated_at: string;
+  user_id: string;
+}
+
+interface ExecutionAgentMessageRow {
+  content: string;
+  created_at: string;
+  id: string;
+  role: "assistant" | "tool" | "user";
+  thread_id: string;
+  tool_arguments: Record<string, unknown> | null;
+  tool_call_id: string | null;
+  tool_calls: ExecutionAgentToolCallDto[] | null;
+  tool_name: string | null;
+  tool_result: Record<string, unknown> | null;
+  user_id: string;
 }
 
 interface CreateWhatsAppCoreStoreConfig {
@@ -226,6 +256,136 @@ export class WhatsAppCoreStore {
     return this.mapConversationRow(data as WhatsAppMessageRow);
   }
 
+  /**
+   * Finds or creates one persisted execution-agent thread for a user and agent name.
+   * @param input - Thread lookup DTO
+   * @returns Persisted execution-agent thread
+   */
+  async findOrCreateExecutionAgentThread(
+    input: FindOrCreateExecutionAgentThreadDto
+  ): Promise<ExecutionAgentThreadDto> {
+    const { data, error } = await this.supabase
+      .from("execution_agent_threads")
+      .insert({
+        agent_name: input.agentName,
+        user_id: input.userId,
+      })
+      .select("id, user_id, agent_name, created_at, updated_at")
+      .single();
+
+    if (!error) {
+      return this.mapExecutionAgentThreadRow(data as ExecutionAgentThreadRow);
+    }
+
+    if (error.code !== UNIQUE_VIOLATION_CODE) {
+      throw new Error(`Failed to create execution-agent thread: ${error.message}`);
+    }
+
+    const { data: existingThread, error: existingThreadError } = await this.supabase
+      .from("execution_agent_threads")
+      .select("id, user_id, agent_name, created_at, updated_at")
+      .eq("user_id", input.userId)
+      .eq("agent_name", input.agentName)
+      .single();
+
+    if (existingThreadError) {
+      throw new Error(`Failed to load execution-agent thread: ${existingThreadError.message}`);
+    }
+
+    return this.mapExecutionAgentThreadRow(existingThread as ExecutionAgentThreadRow);
+  }
+
+  /**
+   * Loads recent execution-agent messages for one persisted thread.
+   * @param input - Thread message lookup DTO
+   * @returns Execution-agent messages ordered oldest-first
+   */
+  async listExecutionAgentMessages(
+    input: ListExecutionAgentMessagesDto
+  ): Promise<ExecutionAgentMessageDto[]> {
+    const { data, error } = await this.supabase
+      .from("execution_agent_messages")
+      .select(
+        "id, thread_id, user_id, role, content, tool_call_id, tool_name, tool_arguments, tool_calls, tool_result, created_at"
+      )
+      .eq("user_id", input.userId)
+      .eq("thread_id", input.threadId)
+      .order("created_at", { ascending: false })
+      .limit(input.limit);
+
+    if (error) {
+      throw new Error(`Failed to load execution-agent messages: ${error.message}`);
+    }
+
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    return data
+      .map((row) => this.mapExecutionAgentMessageRow(row as ExecutionAgentMessageRow))
+      .reverse();
+  }
+
+  /**
+   * Persists one or more execution-agent messages for a thread.
+   * @param input - Message insert DTO
+   * @returns Stored execution-agent messages
+   */
+  async storeExecutionAgentMessages(
+    input: StoreExecutionAgentMessagesDto
+  ): Promise<ExecutionAgentMessageDto[]> {
+    if (input.messages.length === 0) {
+      return [];
+    }
+
+    const rowsToInsert = input.messages.map((message) => ({
+      content: message.content,
+      role: message.role,
+      thread_id: input.threadId,
+      tool_arguments: message.toolArguments,
+      tool_call_id: message.toolCallId,
+      tool_calls: message.toolCalls,
+      tool_name: message.toolName,
+      tool_result: message.toolResult,
+      user_id: input.userId,
+    }));
+    const { data, error } = await this.supabase
+      .from("execution_agent_messages")
+      .insert(rowsToInsert)
+      .select(
+        "id, thread_id, user_id, role, content, tool_call_id, tool_name, tool_arguments, tool_calls, tool_result, created_at"
+      );
+
+    if (error) {
+      throw new Error(`Failed to store execution-agent messages: ${error.message}`);
+    }
+
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    return data.map((row) => this.mapExecutionAgentMessageRow(row as ExecutionAgentMessageRow));
+  }
+
+  /**
+   * Updates the persisted timestamp for one execution-agent thread.
+   * @param input - Thread touch DTO
+   * @returns Promise that resolves when the timestamp is updated
+   */
+  async touchExecutionAgentThread(input: TouchExecutionAgentThreadDto): Promise<void> {
+    const { error } = await this.supabase
+      .from("execution_agent_threads")
+      .update({
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", input.threadId)
+      .eq("user_id", input.userId);
+
+    if (error) {
+      throw new Error(`Failed to touch execution-agent thread: ${error.message}`);
+    }
+  }
+
   // ============================================================================
   // HELPER FUNCTIONS
   // ============================================================================
@@ -271,6 +431,42 @@ export class WhatsAppCoreStore {
     return {
       id: String(row.id),
       content: String(row.content),
+    };
+  }
+
+  /**
+   * Maps one execution-agent thread row into the exported DTO.
+   * @param row - Raw `execution_agent_threads` row
+   * @returns Execution-agent thread DTO
+   */
+  private mapExecutionAgentThreadRow(row: ExecutionAgentThreadRow): ExecutionAgentThreadDto {
+    return {
+      agentName: String(row.agent_name),
+      createdAt: String(row.created_at),
+      id: String(row.id),
+      updatedAt: String(row.updated_at),
+      userId: String(row.user_id),
+    };
+  }
+
+  /**
+   * Maps one execution-agent message row into the exported DTO.
+   * @param row - Raw `execution_agent_messages` row
+   * @returns Execution-agent message DTO
+   */
+  private mapExecutionAgentMessageRow(row: ExecutionAgentMessageRow): ExecutionAgentMessageDto {
+    return {
+      content: String(row.content),
+      createdAt: String(row.created_at),
+      id: String(row.id),
+      role: row.role,
+      threadId: String(row.thread_id),
+      toolArguments: row.tool_arguments,
+      toolCallId: row.tool_call_id ? String(row.tool_call_id) : null,
+      toolCalls: Array.isArray(row.tool_calls) ? row.tool_calls : null,
+      toolName: row.tool_name ? String(row.tool_name) : null,
+      toolResult: row.tool_result,
+      userId: String(row.user_id),
     };
   }
 }

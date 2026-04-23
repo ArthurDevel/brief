@@ -15,6 +15,12 @@ describe("buildWhatsAppTextSystemPrompt", () => {
     expect(buildWhatsAppTextSystemPrompt()).toContain(
       "Use send_whatsapp_auth_template when the user asks to connect Gmail"
     );
+    expect(buildWhatsAppTextSystemPrompt()).toContain(
+      "agent_name must be a short camelCase identifier with no spaces"
+    );
+    expect(buildWhatsAppTextSystemPrompt()).toContain(
+      "reuse that exact case-sensitive string"
+    );
   });
 });
 

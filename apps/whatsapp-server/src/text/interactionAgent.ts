@@ -83,12 +83,13 @@ const INTERACTION_TOOL_SCHEMAS: OpenRouterToolSchemaDto[] = [
     function: {
       name: "send_message_to_agent",
       description:
-        "Run a task through the execution agent. Use this for external app work, lookups, drafting, or any task that needs tools.",
+        "Run a task through the execution agent. Use this for external app work, lookups, drafting, or any task that needs tools. Reuse the same exact camelCase agent_name for the same ongoing task or capability.",
       parameters: {
         additionalProperties: false,
         properties: {
           agent_name: {
-            description: "Human-readable agent name for this task.",
+            description:
+              "Short camelCase identifier for this task. No spaces. Reuse the exact same case-sensitive value for the same ongoing task or capability.",
             type: "string",
           },
           instructions: {

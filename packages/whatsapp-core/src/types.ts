@@ -5,6 +5,7 @@
  * - Define caller lookup data shared across WhatsApp runtimes
  * - Define conversation row shapes loaded from Supabase
  * - Define write DTOs for inbound and outbound WhatsApp messages
+ * - Define persisted execution-agent thread and message DTOs
  */
 
 // ============================================================================
@@ -57,5 +58,67 @@ export interface StoreOutboundWhatsAppTextMessageDto {
   rawPayload: unknown;
   text: string;
   toPhone: string;
+  userId: string;
+}
+
+export interface ExecutionAgentThreadDto {
+  agentName: string;
+  createdAt: string;
+  id: string;
+  updatedAt: string;
+  userId: string;
+}
+
+export type ExecutionAgentMessageRole = "assistant" | "tool" | "user";
+
+export interface ExecutionAgentToolCallDto {
+  arguments: Record<string, unknown>;
+  id: string | null;
+  name: string;
+}
+
+export interface ExecutionAgentMessageDto {
+  content: string;
+  createdAt: string;
+  id: string;
+  role: ExecutionAgentMessageRole;
+  threadId: string;
+  toolArguments: Record<string, unknown> | null;
+  toolCallId: string | null;
+  toolCalls: ExecutionAgentToolCallDto[] | null;
+  toolName: string | null;
+  toolResult: Record<string, unknown> | null;
+  userId: string;
+}
+
+export interface FindOrCreateExecutionAgentThreadDto {
+  agentName: string;
+  userId: string;
+}
+
+export interface ListExecutionAgentMessagesDto {
+  limit: number;
+  threadId: string;
+  userId: string;
+}
+
+export interface StoreExecutionAgentMessageDto {
+  content: string;
+  role: ExecutionAgentMessageRole;
+  toolArguments: Record<string, unknown> | null;
+  toolCallId: string | null;
+  toolCalls: ExecutionAgentToolCallDto[] | null;
+  toolName: string | null;
+  toolResult: Record<string, unknown> | null;
+}
+
+export interface StoreExecutionAgentMessagesDto {
+  messages: StoreExecutionAgentMessageDto[];
+  threadId: string;
+  userId: string;
+}
+
+export interface TouchExecutionAgentThreadDto {
+  threadId: string;
   userId: string;
 }
