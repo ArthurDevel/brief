@@ -11,7 +11,6 @@ import { startActiveObservation } from "@langfuse/tracing";
 import { Composio } from "@composio/core";
 import type { AgentEnv } from "../env.js";
 import type { WhatsAppCallerContext } from "../whatsappRuntime.js";
-import { createWhatsAppCustomTools } from "../whatsappCustomTools.js";
 import {
   FetchOpenRouterTextClient,
   type OpenRouterChatMessageDto,
@@ -84,25 +83,21 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
   private readonly composioApiKey: string;
   private readonly openRouterClient: OpenRouterTextClient;
   private readonly summarizerClient: OpenRouterTextClient;
-  private readonly env: AgentEnv;
 
   /**
    * Creates the execution runtime for WhatsApp voice tasks.
    * @param openRouterClient - OpenRouter client used for execution planning
    * @param summarizerClient - OpenRouter client used for failed-execution summaries
    * @param composioApiKey - Composio API key for caller-scoped sessions
-   * @param env - Agent environment used for WhatsApp auth tools
    */
   constructor(
     openRouterClient: OpenRouterTextClient,
     summarizerClient: OpenRouterTextClient,
-    composioApiKey: string,
-    env: AgentEnv
+    composioApiKey: string
   ) {
     this.openRouterClient = openRouterClient;
     this.summarizerClient = summarizerClient;
     this.composioApiKey = composioApiKey;
-    this.env = env;
   }
 
   /**
@@ -252,9 +247,6 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
             enable: false,
           },
           connectedAccounts: callerContext.connectedAccountsByToolkit,
-          experimental: {
-            customTools: createWhatsAppCustomTools(this.env, callerContext),
-          },
           ...(connectedToolkitSlugs.length > 0 ? { toolkits: connectedToolkitSlugs } : {}),
         });
         const sessionTools = await session.tools() as SessionToolDefinition[];
@@ -349,8 +341,7 @@ export function createVoiceOpenPokeExecutionAgent(
       apiKey: env.openRouterApiKey,
       model: WHATSAPP_VOICE_EXECUTION_FAILURE_SUMMARIZER_MODEL,
     }),
-    env.composioApiKey,
-    env
+    env.composioApiKey
   );
 }
 
