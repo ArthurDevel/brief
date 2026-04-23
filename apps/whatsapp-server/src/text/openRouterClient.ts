@@ -216,25 +216,25 @@ export class FetchOpenRouterTextClient implements OpenRouterTextClient {
 /**
  * Maps OpenRouter usage fields into Langfuse usage details.
  * @param usage - Usage payload returned by OpenRouter
- * @returns Langfuse-compatible usage details
+ * @returns Langfuse-compatible usage details using documented input/output keys
  */
 function mapUsageDetails(usage: OpenRouterUsage): Record<string, number> {
   const usageDetails: Record<string, number> = {};
 
   if (typeof usage.prompt_tokens === "number") {
-    usageDetails.promptTokens = usage.prompt_tokens;
+    usageDetails.input = usage.prompt_tokens;
   }
 
   if (typeof usage.completion_tokens === "number") {
-    usageDetails.completionTokens = usage.completion_tokens;
+    usageDetails.output = usage.completion_tokens;
   }
 
   if (typeof usage.total_tokens === "number") {
-    usageDetails.totalTokens = usage.total_tokens;
+    usageDetails.total = usage.total_tokens;
   }
 
   if (typeof usage.reasoning_tokens === "number") {
-    usageDetails.reasoningTokens = usage.reasoning_tokens;
+    usageDetails.output_reasoning_tokens = usage.reasoning_tokens;
   }
 
   return usageDetails;
