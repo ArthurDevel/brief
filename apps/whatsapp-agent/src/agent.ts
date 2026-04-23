@@ -133,14 +133,12 @@ interface BuiltAssistant {
  * Builds the LiveKit voice agent with caller-scoped tools and a composed prompt.
  * @param callerContext - Resolved caller context (toolkits, voice config)
  * @param executionAgent - Voice execution agent used for delegated work
- * @param greeting - Initial greeting to speak
  * @param memoryEntries - Loaded user memory entries
  * @returns Voice agent + voice config to use for the session
  */
 async function buildAssistant(
   callerContext: WhatsAppCallerContext,
   executionAgent: VoiceOpenPokeExecutionAgent,
-  greeting: string,
   memoryEntries: MemoryEntry[]
 ): Promise<BuiltAssistant> {
   const interactionAgent = createVoiceOpenPokeInteractionAgent(env, executionAgent);
@@ -149,7 +147,6 @@ async function buildAssistant(
     agent: new VoiceOpenPokeLiveKitAgent(
       env,
       callerContext,
-      greeting,
       interactionAgent,
       memoryEntries
     ),
@@ -227,7 +224,6 @@ async function entry(ctx: JobContext): Promise<void> {
     const builtAssistant = await buildAssistant(
       callerContext,
       executionAgent,
-      greeting,
       memoryEntries
     );
     console.info("[whatsapp-agent] interaction agent built", {

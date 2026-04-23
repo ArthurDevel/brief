@@ -7,7 +7,11 @@
  * - Render voice conversation history into the same tagged structure as text
  */
 
-import type { PreparedVoiceTurnDto, VoiceConversationMessageDto } from "./types.js";
+import type {
+  PreparedVoiceConversationStartDto,
+  PreparedVoiceTurnDto,
+  VoiceConversationMessageDto,
+} from "./types.js";
 
 // ============================================================================
 // CONSTANTS
@@ -57,10 +61,20 @@ const WHATSAPP_VOICE_EXECUTION_FAILURE_SUMMARIZER_SYSTEM_PROMPT = [
 
 /**
  * Returns the interaction-agent system prompt for WhatsApp voice.
+ * @param assistantInstructions - Caller-facing assistant instructions from config
  * @returns Interaction-agent system prompt
  */
-export function buildVoiceOpenPokeInteractionSystemPrompt(): string {
-  return WHATSAPP_VOICE_INTERACTION_SYSTEM_PROMPT;
+export function buildVoiceOpenPokeInteractionSystemPrompt(
+  assistantInstructions = ""
+): string {
+  if (!assistantInstructions.trim()) {
+    return WHATSAPP_VOICE_INTERACTION_SYSTEM_PROMPT;
+  }
+
+  return [
+    assistantInstructions.trim(),
+    WHATSAPP_VOICE_INTERACTION_SYSTEM_PROMPT,
+  ].join("\n\n");
 }
 
 /**
@@ -119,6 +133,32 @@ export function buildVoiceOpenPokeInteractionUserPrompt(
   return sections.join("\n\n");
 }
 
+/**
+ * Builds the tagged user message for the conversation start.
+ * @param turn - Prepared conversation-start context
+ * @returns One user message content string
+ */
+export function buildVoiceOpenPokeConversationStartUserPrompt(
+  turn: PreparedVoiceConversationStartDto
+): string {
+  const recentConversationHistory = turn.conversationHistory.slice(
+    -MAX_HISTORY_MESSAGES_BEFORE_CURRENT
+  );
+  const sections = [
+    buildChannelContextSection(turn),
+    buildMemorySection(turn),
+    buildConversationHistorySection(recentConversationHistory),
+    [
+      "<conversation_start>",
+      "The WhatsApp voice call just started.",
+      "Greet the user briefly and ask how you can help.",
+      "</conversation_start>",
+    ].join("\n"),
+  ];
+
+  return sections.join("\n\n");
+}
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
@@ -128,7 +168,9 @@ export function buildVoiceOpenPokeInteractionUserPrompt(
  * @param turn - Prepared voice turn
  * @returns Tagged channel-context section
  */
-function buildChannelContextSection(turn: PreparedVoiceTurnDto): string {
+function buildChannelContextSection(
+  turn: PreparedVoiceTurnDto | PreparedVoiceConversationStartDto
+): string {
   return [
     "<channel_context>",
     "- Channel: WhatsApp voice",
@@ -143,7 +185,9 @@ function buildChannelContextSection(turn: PreparedVoiceTurnDto): string {
  * @param turn - Prepared voice turn
  * @returns Tagged memory section
  */
-function buildMemorySection(turn: PreparedVoiceTurnDto): string {
+function buildMemorySection(
+  turn: PreparedVoiceTurnDto | PreparedVoiceConversationStartDto
+): string {
   if (turn.memoryEntries.length === 0) {
     return `<user_memory>\n${EMPTY_SECTION_VALUE}\n</user_memory>`;
   }

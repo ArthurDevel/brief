@@ -16,11 +16,13 @@ import {
   type OpenRouterToolSchemaDto,
 } from "./openRouterClient.js";
 import {
+  buildVoiceOpenPokeConversationStartUserPrompt,
   buildVoiceOpenPokeInteractionSystemPrompt,
   buildVoiceOpenPokeInteractionUserPrompt,
 } from "./promptBuilder.js";
 import type {
   ExecuteVoiceAgentRequestDto,
+  PreparedVoiceConversationStartDto,
   PreparedVoiceTurnDto,
   RunVoiceInteractionTurnResultDto,
   SupportedConnectorToolkit,
@@ -171,6 +173,7 @@ const INTERACTION_TOOL_SCHEMAS: OpenRouterToolSchemaDto[] = [
 // ============================================================================
 
 export class VoiceOpenPokeInteractionAgentRuntime {
+  private readonly assistantInstructions: string;
   private readonly executionAgent: VoiceOpenPokeExecutionAgent;
   private readonly openRouterClient: OpenRouterTextClient;
 
@@ -178,13 +181,16 @@ export class VoiceOpenPokeInteractionAgentRuntime {
    * Creates the WhatsApp voice interaction runtime.
    * @param openRouterClient - OpenRouter client used for interaction planning
    * @param executionAgent - Execution agent used for external tasks
+   * @param assistantInstructions - Caller-facing assistant instructions from config
    */
   constructor(
     openRouterClient: OpenRouterTextClient,
-    executionAgent: VoiceOpenPokeExecutionAgent
+    executionAgent: VoiceOpenPokeExecutionAgent,
+    assistantInstructions = ""
   ) {
     this.openRouterClient = openRouterClient;
     this.executionAgent = executionAgent;
+    this.assistantInstructions = assistantInstructions;
   }
 
   /**
@@ -197,26 +203,80 @@ export class VoiceOpenPokeInteractionAgentRuntime {
     turn: PreparedVoiceTurnDto,
     emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
   ): Promise<RunVoiceInteractionTurnResultDto> {
+    return await this.runPrompt(
+      {
+        currentMessageText: turn.currentMessage.text,
+        historyCount: turn.conversationHistory.length,
+        memoryCount: turn.memoryEntries.length,
+        userId: turn.callerContext.supabaseUserId,
+      },
+      turn,
+      buildVoiceOpenPokeInteractionUserPrompt(turn),
+      emitAction
+    );
+  }
+
+  /**
+   * Runs the initial conversation-start turn before the user says anything.
+   * @param turn - Prepared conversation-start context
+   * @param emitAction - Optional callback for immediate user-visible actions
+   * @returns User-visible actions produced by the interaction loop
+   */
+  async runConversationStart(
+    turn: PreparedVoiceConversationStartDto,
+    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
+  ): Promise<RunVoiceInteractionTurnResultDto> {
+    return await this.runPrompt(
+      {
+        currentMessageText: null,
+        historyCount: turn.conversationHistory.length,
+        memoryCount: turn.memoryEntries.length,
+        userId: turn.callerContext.supabaseUserId,
+      },
+      turn,
+      buildVoiceOpenPokeConversationStartUserPrompt(turn),
+      emitAction
+    );
+  }
+
+  // ============================================================================
+  // HELPER FUNCTIONS
+  // ============================================================================
+
+  /**
+   * Runs one interaction loop from a prepared prompt.
+   * @param observationInput - Observation fields for tracing
+   * @param turn - Prepared turn context
+   * @param userPrompt - Prompt sent as the user message
+   * @param emitAction - Optional callback for immediate user-visible actions
+   * @returns User-visible actions produced by the interaction loop
+   */
+  private async runPrompt(
+    observationInput: {
+      currentMessageText: string | null;
+      historyCount: number;
+      memoryCount: number;
+      userId: string;
+    },
+    turn: PreparedVoiceTurnDto | PreparedVoiceConversationStartDto,
+    userPrompt: string,
+    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
+  ): Promise<RunVoiceInteractionTurnResultDto> {
     return await startActiveObservation(
       "whatsapp-voice-interaction-agent",
       async (agentObservation) => {
         agentObservation.update({
-          input: {
-            currentMessageText: turn.currentMessage.text,
-            historyCount: turn.conversationHistory.length,
-            memoryCount: turn.memoryEntries.length,
-            userId: turn.callerContext.supabaseUserId,
-          },
+          input: observationInput,
         });
 
         const messages: OpenRouterChatMessageDto[] = [
           {
             role: "system",
-            content: buildVoiceOpenPokeInteractionSystemPrompt(),
+            content: buildVoiceOpenPokeInteractionSystemPrompt(this.assistantInstructions),
           },
           {
             role: "user",
-            content: buildVoiceOpenPokeInteractionUserPrompt(turn),
+            content: userPrompt,
           },
         ];
         const actions: VoiceUserVisibleActionDto[] = [];
@@ -298,7 +358,7 @@ export class VoiceOpenPokeInteractionAgentRuntime {
    * @returns Tool result plus loop metadata
    */
   private async executeToolCall(
-    turn: PreparedVoiceTurnDto,
+    turn: PreparedVoiceTurnDto | PreparedVoiceConversationStartDto,
     toolCall: OpenRouterToolCallDto,
     emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
   ): Promise<ToolExecutionSummary & { toolResult: string }> {
@@ -481,7 +541,8 @@ export function createVoiceOpenPokeInteractionAgent(
       apiKey: env.openRouterApiKey,
       model: WHATSAPP_VOICE_INTERACTION_MODEL,
     }),
-    executionAgent
+    executionAgent,
+    env.livekitAgentInstructions
   );
 }
 

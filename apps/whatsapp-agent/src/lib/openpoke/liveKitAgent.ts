@@ -41,7 +41,6 @@ const GENERIC_VOICE_ERROR_MESSAGE = "Something went wrong. Please try again.";
 export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
   private readonly callerContext: WhatsAppCallerContext;
   private readonly env: AgentEnv;
-  private readonly greeting: string;
   private readonly interactionAgent: VoiceOpenPokeInteractionAgentRuntime;
   private readonly memoryEntries: MemoryEntry[];
   private readonly conversationHistory: VoiceConversationMessageDto[] = [];
@@ -51,14 +50,12 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
    * Creates the LiveKit-facing voice agent.
    * @param env - Agent environment config
    * @param callerContext - Caller-scoped runtime context
-   * @param greeting - Initial greeting to speak when the call starts
    * @param interactionAgent - Explicit voice OpenPoke interaction runtime
    * @param memoryEntries - Loaded user memory entries
    */
   constructor(
     env: AgentEnv,
     callerContext: WhatsAppCallerContext,
-    greeting: string,
     interactionAgent: VoiceOpenPokeInteractionAgentRuntime,
     memoryEntries: MemoryEntry[]
   ) {
@@ -68,7 +65,6 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
 
     this.env = env;
     this.callerContext = callerContext;
-    this.greeting = greeting;
     this.interactionAgent = interactionAgent;
     this.memoryEntries = memoryEntries;
   }
@@ -78,8 +74,24 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
    * @returns Nothing
    */
   override async onEnter(): Promise<void> {
-    await this.session.say(this.greeting).waitForPlayout();
-    this.recordOutboundMessage(this.greeting);
+    try {
+      await this.interactionAgent.runConversationStart(
+        {
+          callerContext: this.callerContext,
+          conversationHistory: [...this.conversationHistory],
+          memoryEntries: this.memoryEntries,
+        },
+        async (action) => await this.emitAction(action)
+      );
+    } catch (error) {
+      console.error("[whatsapp-agent] initial conversation start failed", {
+        callerPhone: this.callerContext.callerPhone,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      await this.session.say(GENERIC_VOICE_ERROR_MESSAGE).waitForPlayout();
+      this.recordOutboundMessage(GENERIC_VOICE_ERROR_MESSAGE);
+    }
   }
 
   /**
