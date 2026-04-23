@@ -81,7 +81,7 @@ export interface WhatsAppTextExecutionAgent {
 // CONSTANTS
 // ============================================================================
 
-const WHATSAPP_TEXT_EXECUTION_MODEL = "anthropic/claude-sonnet-4";
+const WHATSAPP_TEXT_EXECUTION_MODEL = "google/gemini-3-flash-preview";
 const WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_MODEL = "google/gemini-3-flash-preview";
 const MAX_TOOL_ITERATIONS = 8;
 
