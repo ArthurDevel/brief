@@ -200,11 +200,10 @@ export async function POST(
     }
   }
 
-  // If mailbox identity changed, delete user_contacts and trigger full sync
+  // If mailbox identity changed, delete cached contacts.
   if (identityChanged) {
     try {
       await serviceClient.from("user_contacts").delete().eq("user_id", userId);
-      await triggerContactSync(userId, "full");
     } catch (err) {
       console.error("[email-accounts/notify] Failed to invalidate contacts:", err);
     }
@@ -266,29 +265,4 @@ function verifyCorrelationToken(token: string, secret: string): string | null {
   }
 
   return userId;
-}
-
-/**
- * Triggers a contact sync via the voice pipeline.
- * @param userId - The user's ID
- * @param mode - "full" or "incremental"
- */
-async function triggerContactSync(userId: string, mode: string): Promise<void> {
-  try {
-    console.log(`[email-accounts/notify] Triggering ${mode} contact sync for user ${userId}`);
-    const syncResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_VOICE_PIPELINE_URL}/sync-contacts`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.INTERNAL_API_KEY}`,
-        },
-        body: JSON.stringify({ user_id: userId, mode }),
-      }
-    );
-    console.log(`[email-accounts/notify] Contact sync response: ${syncResponse.status}`);
-  } catch (err) {
-    console.error("[email-accounts/notify] Failed to trigger contact sync:", err);
-  }
 }

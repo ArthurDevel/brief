@@ -4,7 +4,7 @@ RMS-based audio normalizer with peak limiting.
 Normalizes int16 PCM audio to a target RMS level while preventing clipping
 via tanh soft limiting. Processes audio as a single batch (not streaming).
 
-Copied from apps/voice-pipeline/src/audio/normalizer.py.
+Shared batch normalizer used by the voice review utilities.
 
 - RMSNormalizer: batch normalizer with attack/release envelope and soft clipping
 - AudioNormalizerProcessor: Pipecat FrameProcessor that intercepts TTS audio frames

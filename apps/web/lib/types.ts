@@ -26,22 +26,6 @@ export interface UserPhone {
   countryCode: string;
 }
 
-/**
- * A company-owned phone number used for outbound calls and caller ID.
- * @param id - Unique identifier
- * @param phoneNumber - Phone number in E.164 format
- * @param label - Human-readable label (e.g. "United States")
- * @param countryCode - ISO 3166-1 alpha-2 country code
- * @param environment - "dev" or "prod"
- */
-export interface CompanyPhone {
-  id: string;
-  phoneNumber: string;
-  label: string;
-  countryCode: string;
-  environment: string;
-}
-
 // ============================================================================
 // USER SETTINGS
 // ============================================================================

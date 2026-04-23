@@ -1,9 +1,0 @@
-{
-  "voice_config": {
-    "voice": "aura-2-andromeda-en",
-    "speed": 1.2
-  },
-  "tool_approval_config": {},
-  "phone": null,
-  "call_schedule": null
-}

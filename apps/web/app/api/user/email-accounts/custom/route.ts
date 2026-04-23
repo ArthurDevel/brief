@@ -78,10 +78,6 @@ export async function PUT(
     const identityChanged = oldImapUser !== null && oldImapUser !== input.imapUser;
     if (identityChanged) {
       await invalidateContactsAndSync(serviceClient, user.id);
-    } else if (!existingAccount) {
-      await triggerContactSync(user.id, "full");
-    } else {
-      await triggerContactSync(user.id, "incremental");
     }
 
     return NextResponse.json(summary);
@@ -101,7 +97,7 @@ export async function PUT(
 // ============================================================================
 
 /**
- * Deletes all user_contacts for a user and triggers a full contact sync.
+ * Deletes all user_contacts for a user.
  * @param serviceClient - Supabase service-role client
  * @param userId - The user's ID
  */
@@ -111,34 +107,8 @@ async function invalidateContactsAndSync(
 ): Promise<void> {
   try {
     await serviceClient.from("user_contacts").delete().eq("user_id", userId);
-    await triggerContactSync(userId, "full");
   } catch (err) {
     console.error("[email-accounts/custom] Failed to invalidate contacts:", err);
-  }
-}
-
-/**
- * Triggers a contact sync via the voice pipeline.
- * @param userId - The user's ID
- * @param mode - "full" or "incremental"
- */
-async function triggerContactSync(userId: string, mode: string): Promise<void> {
-  try {
-    console.log(`[email-accounts/custom] Triggering ${mode} contact sync for user ${userId}`);
-    const syncResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_VOICE_PIPELINE_URL}/sync-contacts`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.INTERNAL_API_KEY}`,
-        },
-        body: JSON.stringify({ user_id: userId, mode }),
-      }
-    );
-    console.log(`[email-accounts/custom] Contact sync response: ${syncResponse.status}`);
-  } catch (err) {
-    console.error("[email-accounts/custom] Failed to trigger contact sync:", err);
   }
 }
 

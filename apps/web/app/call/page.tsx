@@ -1,5 +1,5 @@
-import StandaloneCallClient from "./StandaloneCallClient";
+import { redirect } from "next/navigation";
 
 export default function CallPage() {
-  return <StandaloneCallClient />;
+  redirect("/dashboard");
 }

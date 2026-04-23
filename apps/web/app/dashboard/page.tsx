@@ -16,7 +16,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { Calendar, Check, ChevronRight, Clock, Lock, Mail, Phone, Timer, Zap } from "lucide-react";
+import { Check, ChevronRight, Clock, Mail, Timer, Zap } from "lucide-react";
 import type { SessionSummary, UserSettings } from "@/lib/types";
 import type { ActionRow } from "@dublin/tools/src/types";
 import { TOOL_LABELS } from "@dublin/tools/src/definitions";
@@ -129,12 +129,9 @@ function Spinner() {
 
 const ONBOARDING_STEP_ICONS: Record<
   DashboardOnboardingStep["id"],
-  typeof Phone
+  typeof Mail
 > = {
-  phone: Phone,
   email: Mail,
-  pin: Lock,
-  schedule: Calendar,
 };
 
 // ============================================================================
@@ -367,27 +364,27 @@ function PreviousSessionCard({
   );
 }
 
-function FirstCallCard() {
-  const benefits = [
-    "Hear what matters from your inbox without looking at a screen",
-    "Reply, archive, and triage by voice while you drive",
-    "Arrive with the easy email already handled",
+function EmptySessionsCard() {
+  const highlights = [
+    "New sessions start in WhatsApp, not from this dashboard",
+    "Use this dashboard to review sessions, actions, and email settings",
+    "Connect your inbox here so the WhatsApp agent can act on email",
   ];
 
   return (
     <section className="settings-panel">
       <div className="max-w-2xl">
         <h2 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 8px 0", letterSpacing: "-0.02em" }}>
-          Make your first call
+          No sessions yet
         </h2>
         <p style={{ fontSize: 15, color: "var(--text-secondary)", margin: "0 0 18px 0", lineHeight: 1.5 }}>
-          Clear your inbox on the drive to work. BrewDock reads your email aloud, drafts replies in your voice,
-          and helps you get through the easy stuff before you even arrive.
+          BrewDock now starts conversations through WhatsApp. This dashboard is where you review what
+          happened afterward and manage the settings that support those sessions.
         </p>
 
         <div className="mb-6 flex flex-col gap-3">
-          {benefits.map((benefit) => (
-            <div key={benefit} className="flex items-start gap-3">
+          {highlights.map((highlight) => (
+            <div key={highlight} className="flex items-start gap-3">
               <div
                 className="mt-0.5 flex h-7 w-7 items-center justify-center shrink-0"
                 style={{ background: "rgba(22, 163, 74, 0.1)", color: "#15803d" }}
@@ -395,34 +392,15 @@ function FirstCallCard() {
                 <Check size={14} strokeWidth={2.5} />
               </div>
               <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: 0, lineHeight: 1.45 }}>
-                {benefit}
+                {highlight}
               </p>
             </div>
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-4">
-          <Link
-            href="/dashboard/call"
-            style={{
-              background: "var(--btn-primary-bg)",
-              color: "var(--btn-primary-text)",
-              padding: "10px 16px",
-              fontSize: 13,
-              fontWeight: 500,
-              textDecoration: "none",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-            }}
-            className="hover:opacity-90 transition-opacity"
-          >
-            Make your first call <span style={{ fontSize: 16 }}>&rsaquo;</span>
-          </Link>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
-            No app to stare at. Just call and talk naturally.
-          </p>
-        </div>
+        <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
+          Once a WhatsApp session finishes, it will appear here automatically.
+        </p>
       </div>
     </section>
   );
@@ -454,8 +432,7 @@ function OnboardingCard({ settings, emailStatus }: { settings: UserSettings; ema
           <div style={{ maxWidth: 560 }}>
             <h2 style={{ margin: "0 0 6px 0" }}>Finish onboarding</h2>
             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
-              You can explore the dashboard first. Finish these setup steps when you&apos;re ready to make calls,
-              connect your inbox, and sign in securely.
+              Connect your inbox so BrewDock can process email during WhatsApp sessions.
             </p>
           </div>
           <span
@@ -722,7 +699,7 @@ export default function DashboardOverviewPage() {
       <div className="flex-1 flex flex-col">
         <div className="page-header">
           <h1>Overview</h1>
-          <p>Manage your Voice Email sessions and activities.</p>
+          <p>Review recent sessions, pending actions, and account status.</p>
         </div>
         <div className="page-content">
           <p className="text-[13px] text-[var(--text-secondary)]">Loading...</p>
@@ -765,7 +742,7 @@ export default function DashboardOverviewPage() {
             </Link>
           )}
         </div>
-        <p>Manage your Voice Email sessions and activities.</p>
+        <p>Review recent sessions, pending actions, and account status.</p>
       </div>
 
       <div className="page-content">
@@ -791,7 +768,7 @@ export default function DashboardOverviewPage() {
                 />
               </div>
             ) : (
-              <FirstCallCard />
+              <EmptySessionsCard />
             )}
 
             {/* Previous sessions */}

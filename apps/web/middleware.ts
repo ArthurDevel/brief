@@ -23,7 +23,6 @@ const PUBLIC_ROUTES = [
   "/api/auth",
   "/api/whatsapp/auth",
   "/ingest",
-  "/api/trigger-call",
   "/api/user/email-accounts/notify",
   "/api/cron/engagement-emails",
   "/review/session",
@@ -54,20 +53,6 @@ export async function middleware(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-pathname", pathname);
   requestHeaders.set("x-current-path", `${pathname}${request.nextUrl.search}`);
-
-  // CORS preflight for /api/trigger-call (cross-subdomain fetch from lander)
-  if (pathname === "/api/trigger-call" && request.method === "OPTIONS") {
-    const landerUrl = process.env.LANDER_URL || "";
-    return new NextResponse(null, {
-      status: 200,
-      headers: {
-        "Access-Control-Allow-Origin": landerUrl,
-        "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "content-type",
-      },
-    });
-  }
 
   // PostHog proxy: delegate /ingest requests to @posthog/next
   if (pathname.startsWith("/ingest")) {

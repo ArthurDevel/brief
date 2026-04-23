@@ -215,7 +215,7 @@ export default function VoiceTab() {
             )}
           </div>
           <p className={SETTINGS_SECTION_COPY}>
-            Adjust how quickly the assistant speaks during calls. You can preview the selected speed before saving.
+            Adjust how quickly the assistant speaks during WhatsApp voice sessions. You can preview the selected speed before saving.
           </p>
           <div className={`${SETTINGS_MAX_WIDTH} ${SETTINGS_FIELD_CARD}`}>
             <div className="flex items-center gap-2 md:gap-4 flex-wrap md:flex-nowrap">
@@ -255,7 +255,7 @@ export default function VoiceTab() {
             )}
           </div>
           <p className={SETTINGS_SECTION_COPY}>
-            Choose the voice you want to hear when BrewDock calls you.
+            Choose the voice BrewDock should use during WhatsApp voice sessions.
           </p>
           {voices.length === 0 ? (
             <p className="text-[13px] text-[var(--text-secondary)]">Loading voices...</p>

@@ -17,11 +17,9 @@ function makeSettings(overrides: Partial<UserSettings> = {}): UserSettings {
 }
 
 describe("getDashboardOnboardingState", () => {
-  it("treats phone, inbox, and pin as the required onboarding steps", () => {
+  it("treats inbox setup as the required onboarding step", () => {
     const state = getDashboardOnboardingState(
       makeSettings({
-        phone: { number: "+15551234567", countryCode: "US" },
-        hasPin: true,
         callSchedule: {
           timezone: "America/Los_Angeles",
           last_call_at: null,
@@ -37,13 +35,13 @@ describe("getDashboardOnboardingState", () => {
     );
 
     expect(state.isComplete).toBe(false);
-    expect(state.requiredCompleted).toBe(2);
-    expect(state.requiredTotal).toBe(3);
+    expect(state.requiredCompleted).toBe(0);
+    expect(state.requiredTotal).toBe(1);
     expect(state.primaryHref).toBe("/dashboard/settings?tab=email");
     expect(state.primaryLabel).toBe("Connect inbox");
   });
 
-  it("marks onboarding complete when phone, connected inbox, and pin are all present", () => {
+  it("marks onboarding complete when a connected inbox is present", () => {
     const state = getDashboardOnboardingState(
       makeSettings({
         emailAccount: {
@@ -56,18 +54,16 @@ describe("getDashboardOnboardingState", () => {
           hasImapPassword: false,
           hasSmtpPassword: false,
         },
-        phone: { number: "+15551234567", countryCode: "US" },
-        hasPin: true,
       })
     );
 
     expect(state.isComplete).toBe(true);
-    expect(state.requiredCompleted).toBe(3);
+    expect(state.requiredCompleted).toBe(1);
     expect(state.primaryHref).toBe("/dashboard/settings");
     expect(state.primaryLabel).toBe("Open settings");
   });
 
-  it("does not mark the optional schedule step complete when only timezone is stored", () => {
+  it("only includes the email step", () => {
     const state = getDashboardOnboardingState(
       makeSettings({
         callSchedule: {
@@ -84,7 +80,8 @@ describe("getDashboardOnboardingState", () => {
       })
     );
 
-    expect(state.steps.find((step) => step.id === "schedule")?.complete).toBe(false);
+    expect(state.steps).toHaveLength(1);
+    expect(state.steps[0]?.id).toBe("email");
   });
 
   it("prioritizes reconnecting inboxes before other completed steps when email status is degraded", () => {
@@ -100,8 +97,6 @@ describe("getDashboardOnboardingState", () => {
           hasImapPassword: false,
           hasSmtpPassword: false,
         },
-        phone: { number: "+15551234567", countryCode: "US" },
-        hasPin: true,
       }),
       "reconnect_required"
     );

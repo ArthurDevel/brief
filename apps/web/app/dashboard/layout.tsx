@@ -18,7 +18,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { EmailStatusProvider } from "@/contexts/EmailStatusContext";
 import { createBrowserClient } from "@/lib/supabase/client";
 import EmailStatusBanner from "./EmailStatusBanner";
-import { Home, Phone, Activity, Clock, Settings, Menu, User, LogOut, Shield } from "lucide-react";
+import { Home, Activity, Clock, Settings, Menu, User, LogOut, Shield } from "lucide-react";
 import { checkIsAdmin } from "@/app/admin/actions";
 
 // ============================================================================
@@ -28,7 +28,6 @@ import { checkIsAdmin } from "@/app/admin/actions";
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Overview", icon: Home },
   { href: "/dashboard/sessions", label: "Sessions", icon: Clock },
-  { href: "/dashboard/call", label: "Call", icon: Phone },
   { href: "/dashboard/actions", label: "Actions", icon: Activity },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ] as const;

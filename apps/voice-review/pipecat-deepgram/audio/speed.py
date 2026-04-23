@@ -4,7 +4,7 @@ WSOLA pitch-preserving speed processor for TTS audio.
 Uses a pure-numpy WSOLA (Waveform Similarity Overlap-Add) algorithm to apply
 tempo changes to audio without altering pitch. No native dependencies.
 
-Copied from apps/voice-pipeline/src/audio/speed.py.
+Shared WSOLA speed processor used by the voice review utilities.
 
 - WSOLAStreamer: streaming WSOLA time-stretcher with cross-correlation overlap
 - AudioSpeedProcessor: Pipecat FrameProcessor that intercepts TTS audio frames
