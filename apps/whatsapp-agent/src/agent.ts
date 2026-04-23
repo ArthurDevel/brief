@@ -9,12 +9,6 @@ import {
   voice
 } from "@livekit/agents";
 import { getEnv } from "./lib/env.js";
-import { buildAssistantInstructions } from "./lib/assistantInstructions.js";
-import {
-  createComposioSession,
-  createComposioTools,
-  type ComposioUserSession
-} from "./lib/composio.js";
 import {
   resolveWhatsAppCallerContext,
   type WhatsAppCallerContext
@@ -29,10 +23,13 @@ import {
   getDefaultWhatsAppVoiceConfig,
   type WhatsAppVoiceConfig,
 } from "./lib/whatsappVoice.js";
-import { getLastCallEndedAt } from "./lib/lastCall.js";
-import { buildGmailContextLine } from "./lib/gmailContext.js";
-import { buildSystemPrompt, type SessionContext } from "./lib/promptBuilder.js";
 import { getUserMemoryEntries, type MemoryEntry } from "./lib/memory.js";
+import {
+  createVoiceOpenPokeExecutionAgent,
+  type VoiceOpenPokeExecutionAgent,
+} from "./lib/openpoke/executionAgent.js";
+import { createVoiceOpenPokeInteractionAgent } from "./lib/openpoke/interactionAgent.js";
+import { VoiceOpenPokeLiveKitAgent } from "./lib/openpoke/liveKitAgent.js";
 
 const env = getEnv();
 
@@ -45,9 +42,6 @@ const KNOWN_STT_REJECTION_STACK_FRAGMENT = "SpeechStream.mainTask";
 const KNOWN_STT_ABORTED_ERROR_MESSAGE = "WebSocket connection aborted";
 const KNOWN_STT_ERROR_LABEL = "inference.STT";
 const KNOWN_UNHANDLED_ERROR_CODE = "ERR_UNHANDLED_ERROR";
-
-// Toolkit slug used to detect Gmail connectivity for context injection.
-const GMAIL_TOOLKIT_SLUG = "gmail";
 
 // ============================================================================
 // MAIN ENTRYPOINT HELPERS
@@ -138,33 +132,27 @@ interface BuiltAssistant {
 /**
  * Builds the LiveKit voice agent with caller-scoped tools and a composed prompt.
  * @param callerContext - Resolved caller context (toolkits, voice config)
- * @param composioSession - Composio user session for tool execution
- * @param instructions - Composed system prompt (base + injected context sections)
+ * @param executionAgent - Voice execution agent used for delegated work
+ * @param greeting - Initial greeting to speak
+ * @param memoryEntries - Loaded user memory entries
  * @returns Voice agent + voice config to use for the session
  */
 async function buildAssistant(
   callerContext: WhatsAppCallerContext,
-  composioSession: ComposioUserSession,
-  instructions: string
+  executionAgent: VoiceOpenPokeExecutionAgent,
+  greeting: string,
+  memoryEntries: MemoryEntry[]
 ): Promise<BuiltAssistant> {
-  const startedAt = Date.now();
-  console.info("[whatsapp-agent] buildAssistant start", {
-    supabaseUserId: callerContext.supabaseUserId,
-    toolkitCount: Object.keys(callerContext.connectedAccountsByToolkit).length,
-    hasConnectionGuidanceMessage: Boolean(callerContext.connectionGuidanceMessage),
-  });
-
-  const tools = await createComposioTools(env, callerContext, composioSession);
-  console.info("[whatsapp-agent] composio tools created", {
-    toolCount: Object.keys(tools).length,
-    elapsedMs: Date.now() - startedAt,
-  });
+  const interactionAgent = createVoiceOpenPokeInteractionAgent(env, executionAgent);
 
   return {
-    agent: new voice.Agent({
-      instructions,
-      tools
-    }),
+    agent: new VoiceOpenPokeLiveKitAgent(
+      env,
+      callerContext,
+      greeting,
+      interactionAgent,
+      memoryEntries
+    ),
     voiceConfig: callerContext.voiceConfig
   };
 }
@@ -218,25 +206,7 @@ async function entry(ctx: JobContext): Promise<void> {
       });
     }
 
-    // Look up the user's last completed call so we can mention "since last call"
-    // counts in the greeting. Soft-fail: a missing value just means we treat this
-    // as a first call.
-    let lastCallEndedAt: Date | null = null;
-    try {
-      lastCallEndedAt = await getLastCallEndedAt(env, callerContext.supabaseUserId);
-      console.info("[whatsapp-agent] last call lookup complete", {
-        supabaseUserId: callerContext.supabaseUserId,
-        hasLastCall: lastCallEndedAt !== null,
-        elapsedMs: Date.now() - startedAt,
-      });
-    } catch (error) {
-      console.warn("[whatsapp-agent] failed to fetch last call end time, treating as first call", {
-        supabaseUserId: callerContext.supabaseUserId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    // Load the user's saved memory entries for injection into the system prompt.
+    // Load the user's saved memory entries for prompt injection.
     // Soft-fail: a lookup failure should not block the call from starting.
     let memoryEntries: MemoryEntry[] = [];
     try {
@@ -253,53 +223,18 @@ async function entry(ctx: JobContext): Promise<void> {
       });
     }
 
-    // Create the Composio user session up-front so it can be reused by both the
-    // greeting context fetch (e.g. Gmail unread count) and the LLM tool wrappers.
-    const composioSession = await createComposioSession(env, callerContext);
-
-    // Build the email context line only if Gmail is one of the connected toolkits.
-    // Soft-fail: an API hiccup must not block the call from starting.
-    let emailContext: string | null = null;
-    if (GMAIL_TOOLKIT_SLUG in callerContext.connectedAccountsByToolkit) {
-      try {
-        emailContext = await buildGmailContextLine(composioSession, lastCallEndedAt);
-        console.info("[whatsapp-agent] gmail context line built", {
-          supabaseUserId: callerContext.supabaseUserId,
-          hasContext: emailContext !== null,
-          elapsedMs: Date.now() - startedAt,
-        });
-      } catch (error) {
-        console.warn("[whatsapp-agent] failed to build gmail context line, continuing without it", {
-          supabaseUserId: callerContext.supabaseUserId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    const sessionContext: SessionContext = {
-      currentDateTime: new Date().toISOString(),
-      lastCallDateTime: lastCallEndedAt?.toISOString() ?? null,
-    };
-
-    const baseInstructions = buildAssistantInstructions(
-      env.livekitAgentInstructions,
-      callerContext
+    const executionAgent = createVoiceOpenPokeExecutionAgent(env);
+    const builtAssistant = await buildAssistant(
+      callerContext,
+      executionAgent,
+      greeting,
+      memoryEntries
     );
-    const instructions = buildSystemPrompt({
-      baseInstructions,
-      memoryEntries,
-      sessionContext,
-      emailContext,
-    });
-    console.info("[whatsapp-agent] system prompt built", {
+    console.info("[whatsapp-agent] interaction agent built", {
       supabaseUserId: callerContext.supabaseUserId,
-      promptChars: instructions.length,
       memoryEntryCount: memoryEntries.length,
-      hasEmailContext: emailContext !== null,
       elapsedMs: Date.now() - startedAt,
     });
-
-    const builtAssistant = await buildAssistant(callerContext, composioSession, instructions);
     agent = builtAssistant.agent;
     voiceConfig = builtAssistant.voiceConfig;
   } catch (error) {
@@ -321,7 +256,6 @@ async function entry(ctx: JobContext): Promise<void> {
 
   const session = new voice.AgentSession({
     stt: env.livekitSttModel,
-    llm: env.livekitLlmModel,
     tts: createWhatsAppTts(env.deepgramApiKey, voiceConfig)
   });
 
@@ -341,15 +275,9 @@ async function entry(ctx: JobContext): Promise<void> {
     elapsedMs: Date.now() - startedAt,
   });
 
-  console.info("[whatsapp-agent] generateReply begin", {
-    elapsedMs: Date.now() - startedAt,
-  });
-  session.generateReply({
-    instructions: greeting
-  });
-  console.info("[whatsapp-agent] generateReply queued", {
-    elapsedMs: Date.now() - startedAt,
-  });
+  if (!(agent instanceof VoiceOpenPokeLiveKitAgent)) {
+    await session.say(greeting).waitForPlayout();
+  }
 
   try {
     await closed;

@@ -17,6 +17,7 @@ export interface AgentEnv {
   livekitWsUrl: string;
   livekitApiKey: string;
   livekitApiSecret: string;
+  openRouterApiKey: string;
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
   composioApiKey: string;
@@ -51,6 +52,7 @@ export function getEnv(): AgentEnv {
     livekitWsUrl: toWebSocketUrl(livekitUrl),
     livekitApiKey: requireEnv("LIVEKIT_API_KEY"),
     livekitApiSecret: requireEnv("LIVEKIT_API_SECRET"),
+    openRouterApiKey: requireEnv("OPENROUTER_API_KEY"),
     supabaseUrl: requireEnv("NEXT_PUBLIC_SUPABASE_URL"),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
     composioApiKey: requireEnv("COMPOSIO_API_KEY"),

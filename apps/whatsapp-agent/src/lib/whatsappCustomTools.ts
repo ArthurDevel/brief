@@ -74,8 +74,7 @@ export function createWhatsAppCustomTools(
         ),
       }),
       execute: async (input) => {
-        const config = getWhatsAppTemplateConfig(env);
-        await sendConnectorTemplate(config, callerContext.callerPhone, input.toolkit);
+        await sendWhatsAppConnectorAuthTemplate(env, callerContext.callerPhone, input.toolkit);
 
         return {
           message: `Sent the WhatsApp ${input.toolkit} connection template to the caller.`,
@@ -90,8 +89,7 @@ export function createWhatsAppCustomTools(
         "Send the caller a WhatsApp template that opens the connector overview page. Use this when the caller wants to review or reconnect their available app connections.",
       inputParams: z.object({}),
       execute: async () => {
-        const config = getWhatsAppTemplateConfig(env);
-        await sendOverviewTemplate(config, callerContext.callerPhone);
+        await sendWhatsAppConnectorOverviewTemplate(env, callerContext.callerPhone);
 
         return {
           message: "Sent the WhatsApp connector overview template to the caller.",
@@ -105,6 +103,36 @@ export function createWhatsAppCustomTools(
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+/**
+ * Sends one approved connector auth template through the Graph API.
+ * @param env - Agent environment config
+ * @param phone - Caller phone number in E.164 format
+ * @param toolkit - Supported connector toolkit
+ * @returns Promise that resolves when Meta accepts the message
+ */
+export async function sendWhatsAppConnectorAuthTemplate(
+  env: AgentEnv,
+  phone: string,
+  toolkit: SupportedConnectorToolkit
+): Promise<void> {
+  const config = getWhatsAppTemplateConfig(env);
+  await sendConnectorTemplate(config, phone, toolkit);
+}
+
+/**
+ * Sends the approved connector overview template through the Graph API.
+ * @param env - Agent environment config
+ * @param phone - Caller phone number in E.164 format
+ * @returns Promise that resolves when Meta accepts the message
+ */
+export async function sendWhatsAppConnectorOverviewTemplate(
+  env: AgentEnv,
+  phone: string
+): Promise<void> {
+  const config = getWhatsAppTemplateConfig(env);
+  await sendOverviewTemplate(config, phone);
+}
 
 /**
  * Reads the WhatsApp Graph API configuration required for template sends.

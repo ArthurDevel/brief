@@ -11,6 +11,7 @@ const TEST_ENV: AgentEnv = {
   livekitWsUrl: "wss://livekit.example.com",
   livekitApiKey: "lk_key",
   livekitApiSecret: "lk_secret",
+  openRouterApiKey: "openrouter_key",
   supabaseUrl: "https://supabase.example.com",
   supabaseServiceRoleKey: "supabase_secret",
   composioApiKey: "composio_key",
