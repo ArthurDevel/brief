@@ -2,7 +2,7 @@
  * Shared Supabase-backed storage for WhatsApp runtimes.
  *
  * Responsibilities:
- * - Resolve a WhatsApp-linked user from `user_settings`
+ * - Resolve or create a WhatsApp-linked user from `user_settings`
  * - Read user memory and WhatsApp thread history
  * - Persist inbound and outbound WhatsApp text rows to `whatsapp_messages`
  * - Persist execution-agent threads and messages for WhatsApp text agents
@@ -92,6 +92,8 @@ interface CreateWhatsAppCoreStoreConfig {
 // ============================================================================
 
 const UNIQUE_VIOLATION_CODE = "23505";
+const DEFAULT_WHATSAPP_AUTH_EMAIL_DOMAIN = "wa.brewdock.invalid";
+const WHATSAPP_SIGNUP_SOURCE = "whatsapp";
 
 // ============================================================================
 // MAIN CLASS
@@ -197,7 +199,7 @@ export class WhatsAppCoreStore {
   async storeInboundTextMessage(
     input: StoreInboundWhatsAppTextMessageDto
   ): Promise<StoreInboundWhatsAppTextMessageResultDto> {
-    const linkedUser = await this.requireLinkedUserByPhone(input.fromPhone);
+    const linkedUser = await this.resolveOrCreateLinkedUserByPhone(input.fromPhone);
     const { data, error } = await this.supabase
       .from("whatsapp_messages")
       .insert({
@@ -463,6 +465,167 @@ export class WhatsAppCoreStore {
     }
 
     return normalizedPhone;
+  }
+
+  /**
+   * Resolves a linked user, creating a synthetic WhatsApp account when needed.
+   * @param phone - Raw or normalized phone
+   * @returns Linked user DTO
+   */
+  private async resolveOrCreateLinkedUserByPhone(
+    phone: string
+  ): Promise<WhatsAppLinkedUserDto> {
+    const normalizedPhone = this.requireNormalizedPhone(phone);
+    const linkedUser = await this.findLinkedUserByPhone(normalizedPhone);
+
+    if (linkedUser) {
+      await this.ensureWhatsAppAuthEmail(linkedUser.userId, normalizedPhone);
+      return linkedUser;
+    }
+
+    return await this.createLinkedUserByPhone(normalizedPhone);
+  }
+
+  /**
+   * Loads a linked user when one exists for the normalized phone.
+   * @param normalizedPhone - Valid normalized WhatsApp phone
+   * @returns Linked user DTO or null
+   */
+  private async findLinkedUserByPhone(
+    normalizedPhone: string
+  ): Promise<WhatsAppLinkedUserDto | null> {
+    const { data, error } = await this.supabase
+      .from("user_settings")
+      .select("user_id, whatsapp_phone")
+      .eq("whatsapp_phone", normalizedPhone)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Failed to look up the WhatsApp caller: ${error.message}`);
+    }
+
+    const userRow = data as UserSettingsLookupRow | null;
+    if (!userRow?.user_id || !userRow.whatsapp_phone) {
+      return null;
+    }
+
+    return {
+      userId: userRow.user_id,
+      whatsappPhone: userRow.whatsapp_phone,
+    };
+  }
+
+  /**
+   * Ensures an existing WhatsApp-linked auth user has the internal email identity.
+   * @param userId - Supabase auth user ID
+   * @param normalizedPhone - Valid normalized WhatsApp phone
+   * @returns Promise that resolves when the user can be used for WhatsApp auth
+   */
+  private async ensureWhatsAppAuthEmail(
+    userId: string,
+    normalizedPhone: string
+  ): Promise<void> {
+    const { data: authUserResult, error: authUserError } =
+      await this.supabase.auth.admin.getUserById(userId);
+
+    if (authUserError) {
+      throw authUserError;
+    }
+
+    if (authUserResult.user?.email) {
+      return;
+    }
+
+    const syntheticEmail = this.buildWhatsAppSyntheticEmail(normalizedPhone);
+    const { data: updatedUserResult, error: updateError } =
+      await this.supabase.auth.admin.updateUserById(userId, {
+        email: syntheticEmail,
+        email_confirm: true,
+        user_metadata: {
+          ...(authUserResult.user?.user_metadata ?? {}),
+          whatsapp_phone: normalizedPhone,
+          whatsapp_auth: true,
+          whatsapp_auth_email: syntheticEmail,
+        },
+      });
+
+    if (updateError || !updatedUserResult.user?.email) {
+      throw updateError ?? new Error("Failed to attach an internal email to the WhatsApp account.");
+    }
+  }
+
+  /**
+   * Creates a synthetic Supabase auth user and links it to the WhatsApp phone.
+   * @param normalizedPhone - Valid normalized WhatsApp phone
+   * @returns Newly linked user DTO
+   */
+  private async createLinkedUserByPhone(
+    normalizedPhone: string
+  ): Promise<WhatsAppLinkedUserDto> {
+    const syntheticEmail = this.buildWhatsAppSyntheticEmail(normalizedPhone);
+    const { data: createdUserResult, error: createError } =
+      await this.supabase.auth.admin.createUser({
+        email: syntheticEmail,
+        email_confirm: true,
+        user_metadata: {
+          whatsapp_phone: normalizedPhone,
+          whatsapp_auth: true,
+          whatsapp_auth_email: syntheticEmail,
+        },
+        app_metadata: {
+          signup_source: WHATSAPP_SIGNUP_SOURCE,
+        },
+      });
+
+    if (createError || !createdUserResult.user?.id) {
+      throw createError ?? new Error("Failed to create the WhatsApp Supabase user.");
+    }
+
+    await this.saveWhatsAppPhoneForUser(createdUserResult.user.id, normalizedPhone);
+
+    return {
+      userId: createdUserResult.user.id,
+      whatsappPhone: normalizedPhone,
+    };
+  }
+
+  /**
+   * Saves the WhatsApp phone link for one Supabase auth user.
+   * @param userId - Supabase auth user ID
+   * @param normalizedPhone - Valid normalized WhatsApp phone
+   * @returns Promise that resolves when the link is persisted
+   */
+  private async saveWhatsAppPhoneForUser(
+    userId: string,
+    normalizedPhone: string
+  ): Promise<void> {
+    const { error } = await this.supabase
+      .from("user_settings")
+      .upsert(
+        {
+          user_id: userId,
+          whatsapp_phone: normalizedPhone,
+        },
+        { onConflict: "user_id" }
+      );
+
+    if (error) {
+      throw new Error(`Failed to save the WhatsApp phone link: ${error.message}`);
+    }
+  }
+
+  /**
+   * Builds the internal synthetic email used for WhatsApp-only auth accounts.
+   * @param normalizedPhone - Valid normalized WhatsApp phone
+   * @returns Synthetic auth email
+   */
+  private buildWhatsAppSyntheticEmail(normalizedPhone: string): string {
+    const digitsOnly = normalizedPhone.replace(/[^\d]/g, "");
+    const emailDomain =
+      process.env.WHATSAPP_AUTH_EMAIL_DOMAIN?.trim()
+      || DEFAULT_WHATSAPP_AUTH_EMAIL_DOMAIN;
+
+    return `wa_${digitsOnly}@${emailDomain}`;
   }
 
   /**

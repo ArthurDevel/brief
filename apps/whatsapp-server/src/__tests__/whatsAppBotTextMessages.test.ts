@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WhatsAppUserNotFoundError } from "@dublin/whatsapp-core";
 import { WhatsAppBot } from "../whatsAppBot.js";
 import type { PreparedInboundTextTurnResultDto } from "../text/types.js";
 
@@ -474,14 +473,12 @@ describe("WhatsAppBot text messages", () => {
     expect(textConversationStore.recordOutboundReply).not.toHaveBeenCalled();
   });
 
-  it("sends a connect-first message when the WhatsApp number is unknown", async () => {
+  it("sends a generic failure message when the text conversation setup fails", async () => {
     const client = createMockClient();
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const textConversationStore = {
-      prepareInboundTurn: vi.fn().mockRejectedValue(
-        new WhatsAppUserNotFoundError("+15551234567")
-      ),
+      prepareInboundTurn: vi.fn().mockRejectedValue(new Error("Supabase is down")),
       recordOutboundReply: vi.fn(),
     };
     const textInteractionAgent = {
@@ -526,7 +523,7 @@ describe("WhatsAppBot text messages", () => {
     });
 
     expect(client.messages.text).toHaveBeenCalledWith({
-      body: "I couldn't find an account for this WhatsApp number. Send authenticate overview to connect first.",
+      body: "The WhatsApp text assistant is unavailable right now. Please try again later.",
       to: "15551234567",
       replyMessageId: "wamid.unknown",
     });
