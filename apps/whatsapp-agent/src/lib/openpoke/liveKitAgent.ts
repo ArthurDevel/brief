@@ -116,6 +116,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
       });
 
       await this.speakText(GENERIC_VOICE_ERROR_MESSAGE, {
+        recordAsNarratorMessage: false,
         recordInConversationHistory: true,
       });
     }
@@ -204,6 +205,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
 
       if (this.isCurrentTurn(turnId)) {
         await this.speakText(GENERIC_VOICE_ERROR_MESSAGE, {
+          recordAsNarratorMessage: false,
           recordInConversationHistory: true,
         });
       }
@@ -291,6 +293,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
 
         if (action.type === "message") {
           await this.speakText(action.message, {
+            recordAsNarratorMessage: false,
             recordInConversationHistory: true,
           });
           toolObservation.update({
@@ -443,6 +446,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
     const narrationMessage = this.latestNarration.message;
     this.narrationPlaybackQueued = true;
     void this.speakText(narrationMessage, {
+      recordAsNarratorMessage: true,
       recordInConversationHistory: false,
     }).then(() => {
       this.lastSpokenNarrationMessage = narrationMessage;
@@ -465,6 +469,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
   private async speakText(
     text: string,
     options: {
+      recordAsNarratorMessage: boolean;
       recordInConversationHistory: boolean;
     }
   ): Promise<void> {
@@ -474,6 +479,8 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
 
       if (options.recordInConversationHistory) {
         await this.recordOutboundMessage(text);
+      } else if (options.recordAsNarratorMessage) {
+        await this.recordNarratorMessage(text);
       }
     });
 
@@ -521,6 +528,21 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
       text,
     });
     this.conversationHistory.push(storedMessage);
+  }
+
+  /**
+   * Persists one spoken narrator message without adding it to prompt history.
+   * @param text - Spoken narrator message
+   * @returns Nothing
+   */
+  private async recordNarratorMessage(text: string): Promise<void> {
+    if (!this.voiceInteractionAgentStore) {
+      return;
+    }
+
+    await this.voiceInteractionAgentStore.appendVoiceNarratorMessage({
+      text,
+    });
   }
 }
 

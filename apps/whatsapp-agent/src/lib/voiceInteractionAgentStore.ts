@@ -18,7 +18,7 @@ import type { VoiceConversationMessageDto } from "./openpoke/types.js";
 interface VoiceInteractionAgentMessageRow {
   created_at: string;
   id: string;
-  role: "assistant" | "tool" | "user";
+  role: "assistant" | "narrator" | "tool" | "user";
   session_id: string;
   text: string;
   tool_arguments: Record<string, unknown> | null;
@@ -31,6 +31,15 @@ interface VoiceInteractionAgentMessageRow {
 
 export interface AppendVoiceInteractionAgentMessageDto {
   role: "assistant" | "user";
+  text: string;
+}
+
+export interface AppendVoiceNarratorMessageDto {
+  text: string;
+}
+
+interface InsertVoiceInteractionAgentMessageDto {
+  role: "assistant" | "narrator" | "user";
   text: string;
 }
 
@@ -74,6 +83,7 @@ export class VoiceInteractionAgentStore {
   /**
    * Loads recent persisted interaction-agent messages for this voice session.
    * Only user and assistant message rows are returned for prompt history.
+   * Narrator rows are intentionally excluded so they never reach the LLM.
    * @param limit - Maximum message count to load
    * @returns Stored interaction-agent conversation messages
    */
@@ -86,6 +96,7 @@ export class VoiceInteractionAgentStore {
       .eq("session_id", this.sessionId)
       .eq("user_id", this.userId)
       .eq("type", "message")
+      .in("role", ["user", "assistant"])
       .order("created_at", { ascending: false })
       .limit(limit);
 
@@ -111,6 +122,35 @@ export class VoiceInteractionAgentStore {
    */
   async appendVoiceInteractionAgentMessage(
     input: AppendVoiceInteractionAgentMessageDto
+  ): Promise<VoiceConversationMessageDto> {
+    return await this.insertVoiceMessage({
+      role: input.role,
+      text: input.text,
+    });
+  }
+
+  /**
+   * Persists one spoken narrator message for this voice session.
+   * Narrator rows are stored for debugging but never returned to prompt history.
+   * @param input - Narrator message append DTO
+   * @returns Nothing
+   */
+  async appendVoiceNarratorMessage(
+    input: AppendVoiceNarratorMessageDto
+  ): Promise<void> {
+    await this.insertVoiceMessage({
+      role: "narrator",
+      text: input.text,
+    });
+  }
+
+  /**
+   * Persists one voice message row and maps it back into memory format.
+   * @param input - Voice message insert DTO
+   * @returns Stored conversation message DTO
+   */
+  private async insertVoiceMessage(
+    input: InsertVoiceInteractionAgentMessageDto
   ): Promise<VoiceConversationMessageDto> {
     const { data, error } = await this.supabase
       .from("whatsapp_voiceagent_messages")
