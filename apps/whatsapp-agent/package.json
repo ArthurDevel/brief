@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@composio/core": "^0.6.10",
+    "@dublin/whatsapp-core": "workspace:*",
     "@langfuse/otel": "^5.2.0",
     "@langfuse/tracing": "^5.2.0",
     "@livekit/agents": "1.2.7",

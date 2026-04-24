@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { VoiceOpenPokeInteractionAgentRuntime } from "../openpoke/interactionAgent.js";
+import type { VoiceExecutionObserver } from "../openpoke/narrationTypes.js";
 import {
   buildVoiceOpenPokeConversationStartUserPrompt,
   buildVoiceOpenPokeInteractionSystemPrompt,
@@ -201,7 +202,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
         callerPhone: "+15551234567",
       }),
       instructions: "Find the next meeting.",
-    });
+    }, undefined);
     expect(emitActionMock).toHaveBeenCalledWith({
       message: "Your next meeting is at 3 PM.",
       type: "message",
@@ -261,5 +262,82 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
       actions: [],
       status: "wait",
     });
+  });
+
+  it("forwards the execution observer to the execution agent", async () => {
+    const createChatCompletionMock = vi
+      .fn<OpenRouterTextClient["createChatCompletion"]>()
+      .mockResolvedValueOnce({
+        content: "",
+        toolCalls: [
+          {
+            arguments: {
+              agent_name: "calendar",
+              instructions: "Find the next meeting.",
+            },
+            id: "tool_1",
+            name: "send_message_to_agent",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        toolCalls: [
+          {
+            arguments: {
+              reason: "Done delegating.",
+            },
+            id: "tool_2",
+            name: "wait",
+          },
+        ],
+      });
+    const openRouterClient: OpenRouterTextClient = {
+      createChatCompletion: createChatCompletionMock,
+    };
+    const executeMock = vi.fn().mockResolvedValue({
+      agentName: "calendar",
+      response: "The next meeting is at 3 PM.",
+      success: true,
+    });
+    const executionAgent: VoiceOpenPokeExecutionAgent = {
+      execute: executeMock,
+    };
+    const executionObserver: VoiceExecutionObserver = {
+      onExecutionSnapshot: vi.fn(),
+    };
+    const runtime = new VoiceOpenPokeInteractionAgentRuntime(
+      openRouterClient,
+      executionAgent
+    );
+
+    await runtime.runTurn(
+      {
+        callerContext: {
+          callerPhone: "+15551234567",
+          connectionGuidanceMessage: null,
+          connectedAccountsByToolkit: {},
+          supabaseUserId: "user_123",
+          voiceConfig: getDefaultWhatsAppVoiceConfig(),
+        },
+        conversationHistory: [],
+        currentMessage: {
+          createdAt: "2026-04-23T10:01:00.000Z",
+          direction: "inbound",
+          text: "Check my next meeting",
+        },
+        memoryEntries: [],
+      },
+      undefined,
+      executionObserver
+    );
+
+    expect(executeMock).toHaveBeenCalledWith({
+      agentName: "calendar",
+      callerContext: expect.objectContaining({
+        callerPhone: "+15551234567",
+      }),
+      instructions: "Find the next meeting.",
+    }, executionObserver);
   });
 });

@@ -40,7 +40,8 @@ const WHATSAPP_VOICE_INTERACTION_SYSTEM_PROMPT = [
 const WHATSAPP_VOICE_EXECUTION_SYSTEM_PROMPT = [
   "You are the WhatsApp voice execution agent.",
   "You execute tasks for the interaction agent and do not talk to the user directly.",
-  "Use the available tools to complete the task. If a requested app is not connected, use the WhatsApp auth tools when available instead of pretending the task succeeded.",
+  "Use the available tools to complete the task.",
+  "If a requested app is not connected or needs reconnecting, say that plainly in your final response so the interaction agent can handle the WhatsApp auth or reconnect flow.",
   "Never send or execute a draft without explicit confirmation from the user.",
   "Your final response is for the interaction agent. Be direct and include exact next steps when relevant.",
 ].join("\n\n");

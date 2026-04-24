@@ -30,6 +30,12 @@ import {
 } from "./lib/openpoke/executionAgent.js";
 import { createVoiceOpenPokeInteractionAgent } from "./lib/openpoke/interactionAgent.js";
 import { VoiceOpenPokeLiveKitAgent } from "./lib/openpoke/liveKitAgent.js";
+import { createVoiceOpenPokeNarrationAgent } from "./lib/openpoke/narrationAgent.js";
+import {
+  createVoiceInteractionAgentStore,
+  type VoiceInteractionAgentStore,
+} from "./lib/voiceInteractionAgentStore.js";
+import type { VoiceConversationMessageDto } from "./lib/openpoke/types.js";
 
 const env = getEnv();
 
@@ -139,16 +145,28 @@ interface BuiltAssistant {
 async function buildAssistant(
   callerContext: WhatsAppCallerContext,
   executionAgent: VoiceOpenPokeExecutionAgent,
-  memoryEntries: MemoryEntry[]
+  memoryEntries: MemoryEntry[],
+  voiceInteractionAgentStore: VoiceInteractionAgentStore | null
 ): Promise<BuiltAssistant> {
-  const interactionAgent = createVoiceOpenPokeInteractionAgent(env, executionAgent);
+  const conversationHistory: VoiceConversationMessageDto[] = voiceInteractionAgentStore
+    ? await voiceInteractionAgentStore.listVoiceInteractionAgentMessages(20)
+    : [];
+  const interactionAgent = createVoiceOpenPokeInteractionAgent(
+    env,
+    executionAgent,
+    voiceInteractionAgentStore
+  );
+  const narrationAgent = createVoiceOpenPokeNarrationAgent(env);
 
   return {
     agent: new VoiceOpenPokeLiveKitAgent(
       env,
       callerContext,
       interactionAgent,
-      memoryEntries
+      narrationAgent,
+      memoryEntries,
+      conversationHistory,
+      voiceInteractionAgentStore
     ),
     voiceConfig: callerContext.voiceConfig
   };
@@ -221,10 +239,18 @@ async function entry(ctx: JobContext): Promise<void> {
     }
 
     const executionAgent = createVoiceOpenPokeExecutionAgent(env);
+    const voiceInteractionAgentStore = appSessionId
+      ? createVoiceInteractionAgentStore(
+        env,
+        appSessionId,
+        callerContext.supabaseUserId
+      )
+      : null;
     const builtAssistant = await buildAssistant(
       callerContext,
       executionAgent,
-      memoryEntries
+      memoryEntries,
+      voiceInteractionAgentStore
     );
     console.info("[whatsapp-agent] interaction agent built", {
       supabaseUserId: callerContext.supabaseUserId,
