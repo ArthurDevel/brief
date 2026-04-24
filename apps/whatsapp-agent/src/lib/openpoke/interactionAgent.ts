@@ -20,6 +20,7 @@ import {
   buildVoiceOpenPokeInteractionSystemPrompt,
   buildVoiceOpenPokeInteractionUserPrompt,
 } from "./promptBuilder.js";
+import type { VoiceExecutionObserver } from "./narrationTypes.js";
 import type {
   ExecuteVoiceAgentRequestDto,
   PreparedVoiceConversationStartDto,
@@ -197,11 +198,13 @@ export class VoiceOpenPokeInteractionAgentRuntime {
    * Runs the interaction loop for one prepared voice turn.
    * @param turn - Prepared voice conversation turn
    * @param emitAction - Optional callback for immediate user-visible actions
+   * @param executionObserver - Optional observer for delegated execution snapshots
    * @returns User-visible actions produced by the interaction loop
    */
   async runTurn(
     turn: PreparedVoiceTurnDto,
-    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
+    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>,
+    executionObserver?: VoiceExecutionObserver
   ): Promise<RunVoiceInteractionTurnResultDto> {
     return await this.runPrompt(
       {
@@ -212,7 +215,8 @@ export class VoiceOpenPokeInteractionAgentRuntime {
       },
       turn,
       buildVoiceOpenPokeInteractionUserPrompt(turn),
-      emitAction
+      emitAction,
+      executionObserver
     );
   }
 
@@ -220,11 +224,13 @@ export class VoiceOpenPokeInteractionAgentRuntime {
    * Runs the initial conversation-start turn before the user says anything.
    * @param turn - Prepared conversation-start context
    * @param emitAction - Optional callback for immediate user-visible actions
+   * @param executionObserver - Optional observer for delegated execution snapshots
    * @returns User-visible actions produced by the interaction loop
    */
   async runConversationStart(
     turn: PreparedVoiceConversationStartDto,
-    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
+    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>,
+    executionObserver?: VoiceExecutionObserver
   ): Promise<RunVoiceInteractionTurnResultDto> {
     return await this.runPrompt(
       {
@@ -235,7 +241,8 @@ export class VoiceOpenPokeInteractionAgentRuntime {
       },
       turn,
       buildVoiceOpenPokeConversationStartUserPrompt(turn),
-      emitAction
+      emitAction,
+      executionObserver
     );
   }
 
@@ -249,6 +256,7 @@ export class VoiceOpenPokeInteractionAgentRuntime {
    * @param turn - Prepared turn context
    * @param userPrompt - Prompt sent as the user message
    * @param emitAction - Optional callback for immediate user-visible actions
+   * @param executionObserver - Optional observer for delegated execution snapshots
    * @returns User-visible actions produced by the interaction loop
    */
   private async runPrompt(
@@ -260,7 +268,8 @@ export class VoiceOpenPokeInteractionAgentRuntime {
     },
     turn: PreparedVoiceTurnDto | PreparedVoiceConversationStartDto,
     userPrompt: string,
-    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
+    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>,
+    executionObserver?: VoiceExecutionObserver
   ): Promise<RunVoiceInteractionTurnResultDto> {
     return await startActiveObservation(
       "whatsapp-voice-interaction-agent",
@@ -302,7 +311,9 @@ export class VoiceOpenPokeInteractionAgentRuntime {
 
           const toolSummaries: Array<ToolExecutionSummary & { toolResult: string }> = [];
           for (const toolCall of assistantMessage.toolCalls) {
-            toolSummaries.push(await this.executeToolCall(turn, toolCall, emitAction));
+            toolSummaries.push(
+              await this.executeToolCall(turn, toolCall, emitAction, executionObserver)
+            );
           }
 
           for (let index = 0; index < assistantMessage.toolCalls.length; index += 1) {
@@ -355,12 +366,14 @@ export class VoiceOpenPokeInteractionAgentRuntime {
    * @param turn - Prepared voice turn
    * @param toolCall - Parsed OpenRouter tool call
    * @param emitAction - Optional callback for immediate user-visible actions
+   * @param executionObserver - Optional observer for delegated execution snapshots
    * @returns Tool result plus loop metadata
    */
   private async executeToolCall(
     turn: PreparedVoiceTurnDto | PreparedVoiceConversationStartDto,
     toolCall: OpenRouterToolCallDto,
-    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>
+    emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>,
+    executionObserver?: VoiceExecutionObserver
   ): Promise<ToolExecutionSummary & { toolResult: string }> {
     return await startActiveObservation(
       `interaction-tool:${toolCall.name}`,
@@ -380,7 +393,7 @@ export class VoiceOpenPokeInteractionAgentRuntime {
             agentName: argumentsDto.agent_name,
             callerContext: turn.callerContext,
             instructions: argumentsDto.instructions,
-          } satisfies ExecuteVoiceAgentRequestDto);
+          } satisfies ExecuteVoiceAgentRequestDto, executionObserver);
 
           const toolResult = JSON.stringify({
             agent_name: result.agentName,

@@ -18,6 +18,12 @@ import {
 } from "../whatsappCustomTools.js";
 import type { AgentEnv } from "../env.js";
 import type {
+  VoiceExecutionObserver,
+  VoiceExecutionSnapshotDto,
+  VoiceNarrationResultDto,
+  VoiceOpenPokeNarrationAgent,
+} from "./narrationTypes.js";
+import type {
   PreparedVoiceTurnDto,
   VoiceConversationMessageDto,
   VoiceUserVisibleActionDto,
@@ -33,30 +39,42 @@ import {
 // ============================================================================
 
 const GENERIC_VOICE_ERROR_MESSAGE = "Something went wrong. Please try again.";
+const NARRATION_REFRESH_INTERVAL_MS = 2000;
+const NARRATION_SILENCE_THRESHOLD_MS = 2000;
 
 // ============================================================================
 // MAIN CLASS
 // ============================================================================
 
-export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
+export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecutionObserver {
+  private activeExecutionSnapshot: VoiceExecutionSnapshotDto | null = null;
   private readonly callerContext: WhatsAppCallerContext;
   private readonly env: AgentEnv;
   private readonly interactionAgent: VoiceOpenPokeInteractionAgentRuntime;
+  private lastFinishedSpeechAt = Date.now();
+  private lastSpokenNarrationMessage: string | null = null;
+  private latestNarration: VoiceNarrationResultDto | null = null;
   private readonly memoryEntries: MemoryEntry[];
+  private narrationLoopGeneration = 0;
+  private narrationPlaybackQueued = false;
+  private readonly narrationAgent: VoiceOpenPokeNarrationAgent;
   private readonly conversationHistory: VoiceConversationMessageDto[] = [];
   private pendingTurn: Promise<void> = Promise.resolve();
+  private speechQueue: Promise<void> = Promise.resolve();
 
   /**
    * Creates the LiveKit-facing voice agent.
    * @param env - Agent environment config
    * @param callerContext - Caller-scoped runtime context
    * @param interactionAgent - Explicit voice OpenPoke interaction runtime
+   * @param narrationAgent - Text-only narration runtime used during execution waits
    * @param memoryEntries - Loaded user memory entries
    */
   constructor(
     env: AgentEnv,
     callerContext: WhatsAppCallerContext,
     interactionAgent: VoiceOpenPokeInteractionAgentRuntime,
+    narrationAgent: VoiceOpenPokeNarrationAgent,
     memoryEntries: MemoryEntry[]
   ) {
     super({
@@ -66,6 +84,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
     this.env = env;
     this.callerContext = callerContext;
     this.interactionAgent = interactionAgent;
+    this.narrationAgent = narrationAgent;
     this.memoryEntries = memoryEntries;
   }
 
@@ -89,8 +108,9 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
         error: error instanceof Error ? error.message : String(error),
       });
 
-      await this.session.say(GENERIC_VOICE_ERROR_MESSAGE).waitForPlayout();
-      this.recordOutboundMessage(GENERIC_VOICE_ERROR_MESSAGE);
+      await this.speakText(GENERIC_VOICE_ERROR_MESSAGE, {
+        recordInConversationHistory: true,
+      });
     }
   }
 
@@ -148,7 +168,8 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
               async () => {
                 const result = await this.interactionAgent.runTurn(
                   turn,
-                  async (action) => await this.emitAction(action)
+                  async (action) => await this.emitAction(action),
+                  this
                 );
 
                 turnObservation.update({
@@ -168,8 +189,9 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
           transcript,
         });
 
-        await this.session.say(GENERIC_VOICE_ERROR_MESSAGE).waitForPlayout();
-        this.recordOutboundMessage(GENERIC_VOICE_ERROR_MESSAGE);
+        await this.speakText(GENERIC_VOICE_ERROR_MESSAGE, {
+          recordInConversationHistory: true,
+        });
       }
     });
 
@@ -180,6 +202,33 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
   // ============================================================================
   // HELPER FUNCTIONS
   // ============================================================================
+
+  /**
+   * Receives one read-only execution snapshot from the delegated execution flow.
+   * @param snapshot - Current execution snapshot
+   * @returns Nothing
+   */
+  async onExecutionSnapshot(snapshot: VoiceExecutionSnapshotDto): Promise<void> {
+    if (snapshot.status === "finished" || snapshot.status === "failed") {
+      if (this.activeExecutionSnapshot?.executionId === snapshot.executionId) {
+        this.activeExecutionSnapshot = null;
+        this.latestNarration = null;
+      }
+
+      this.stopNarrationLoop();
+      return;
+    }
+
+    const isNewExecution = this.activeExecutionSnapshot?.executionId !== snapshot.executionId;
+    this.activeExecutionSnapshot = snapshot;
+
+    if (isNewExecution) {
+      this.latestNarration = null;
+      this.lastSpokenNarrationMessage = null;
+      this.stopNarrationLoop();
+      this.startNarrationLoop(snapshot.executionId);
+    }
+  }
 
   /**
    * Executes one user-visible interaction action.
@@ -199,8 +248,9 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
         });
 
         if (action.type === "message") {
-          await this.session.say(action.message).waitForPlayout();
-          this.recordOutboundMessage(action.message);
+          await this.speakText(action.message, {
+            recordInConversationHistory: true,
+          });
           toolObservation.update({
             output: {
               actionType: action.type,
@@ -247,6 +297,132 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
   }
 
   /**
+   * Starts a background loop that keeps the latest narration sentence fresh.
+   * @param executionId - Active execution ID the loop belongs to
+   * @returns Nothing
+   */
+  private startNarrationLoop(executionId: string): void {
+    const generation = ++this.narrationLoopGeneration;
+    void this.runNarrationLoop(generation, executionId).catch((error) => {
+      console.error("[whatsapp-agent] narration loop failed", {
+        callerPhone: this.callerContext.callerPhone,
+        error: error instanceof Error ? error.message : String(error),
+        executionId,
+      });
+    });
+  }
+
+  /**
+   * Stops the currently active narration refresh loop.
+   * @returns Nothing
+   */
+  private stopNarrationLoop(): void {
+    this.narrationLoopGeneration += 1;
+  }
+
+  /**
+   * Refreshes buffered narration while one execution is still active.
+   * @param generation - Current loop generation
+   * @param executionId - Execution ID the loop belongs to
+   * @returns Nothing
+   */
+  private async runNarrationLoop(generation: number, executionId: string): Promise<void> {
+    while (this.narrationLoopGeneration === generation) {
+      await delay(NARRATION_REFRESH_INTERVAL_MS);
+      if (this.narrationLoopGeneration !== generation) {
+        return;
+      }
+
+      const activeExecution = this.activeExecutionSnapshot;
+      if (!activeExecution || activeExecution.executionId !== executionId) {
+        return;
+      }
+
+      const narration = await this.narrationAgent.generateNarration({
+        activeExecution,
+        previousNarration: this.latestNarration?.message ?? this.lastSpokenNarrationMessage,
+      });
+      if (this.narrationLoopGeneration !== generation) {
+        return;
+      }
+
+      if (narration) {
+        this.latestNarration = narration;
+      }
+
+      this.maybeSpeakBufferedNarration(executionId);
+    }
+  }
+
+  /**
+   * Speaks the latest buffered narration when the execution wait has gone quiet.
+   * @param executionId - Execution ID the buffered narration belongs to
+   * @returns Nothing
+   */
+  private maybeSpeakBufferedNarration(executionId: string): void {
+    const activeExecution = this.activeExecutionSnapshot;
+    if (!activeExecution || activeExecution.executionId !== executionId) {
+      return;
+    }
+
+    if (!this.latestNarration?.message) {
+      return;
+    }
+
+    if (this.latestNarration.message === this.lastSpokenNarrationMessage) {
+      return;
+    }
+
+    if (this.narrationPlaybackQueued) {
+      return;
+    }
+
+    if (Date.now() - this.lastFinishedSpeechAt < NARRATION_SILENCE_THRESHOLD_MS) {
+      return;
+    }
+
+    const narrationMessage = this.latestNarration.message;
+    this.narrationPlaybackQueued = true;
+    void this.speakText(narrationMessage, {
+      recordInConversationHistory: false,
+    }).then(() => {
+      this.lastSpokenNarrationMessage = narrationMessage;
+    }).catch((error) => {
+      console.error("[whatsapp-agent] narration speech failed", {
+        callerPhone: this.callerContext.callerPhone,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => {
+      this.narrationPlaybackQueued = false;
+    });
+  }
+
+  /**
+   * Queues one spoken text segment through the shared speech path.
+   * @param text - Text to speak
+   * @param options - Speech options for history recording
+   * @returns Nothing
+   */
+  private async speakText(
+    text: string,
+    options: {
+      recordInConversationHistory: boolean;
+    }
+  ): Promise<void> {
+    const nextSpeech = this.speechQueue.then(async () => {
+      await this.session.say(text).waitForPlayout();
+      this.lastFinishedSpeechAt = Date.now();
+
+      if (options.recordInConversationHistory) {
+        this.recordOutboundMessage(text);
+      }
+    });
+
+    this.speechQueue = nextSpeech.catch(() => undefined);
+    await nextSpeech;
+  }
+
+  /**
    * Records one inbound user message in conversation history.
    * @param message - Inbound conversation message
    * @returns Nothing
@@ -267,4 +443,15 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
       text,
     });
   }
+}
+
+/**
+ * Waits for one timeout duration.
+ * @param durationMs - Delay length in milliseconds
+ * @returns Promise that resolves after the timeout
+ */
+function delay(durationMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
 }

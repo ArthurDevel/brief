@@ -30,6 +30,7 @@ import {
 } from "./lib/openpoke/executionAgent.js";
 import { createVoiceOpenPokeInteractionAgent } from "./lib/openpoke/interactionAgent.js";
 import { VoiceOpenPokeLiveKitAgent } from "./lib/openpoke/liveKitAgent.js";
+import { createVoiceOpenPokeNarrationAgent } from "./lib/openpoke/narrationAgent.js";
 
 const env = getEnv();
 
@@ -142,12 +143,14 @@ async function buildAssistant(
   memoryEntries: MemoryEntry[]
 ): Promise<BuiltAssistant> {
   const interactionAgent = createVoiceOpenPokeInteractionAgent(env, executionAgent);
+  const narrationAgent = createVoiceOpenPokeNarrationAgent(env);
 
   return {
     agent: new VoiceOpenPokeLiveKitAgent(
       env,
       callerContext,
       interactionAgent,
+      narrationAgent,
       memoryEntries
     ),
     voiceConfig: callerContext.voiceConfig

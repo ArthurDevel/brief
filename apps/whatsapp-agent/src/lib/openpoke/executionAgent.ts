@@ -23,6 +23,11 @@ import {
   buildVoiceOpenPokeExecutionSystemPrompt,
 } from "./promptBuilder.js";
 import type {
+  VoiceExecutionObserver,
+  VoiceExecutionSnapshotDto,
+  VoiceExecutionStatus,
+} from "./narrationTypes.js";
+import type {
   ExecuteVoiceAgentRequestDto,
   ExecuteVoiceAgentResultDto,
 } from "./types.js";
@@ -64,7 +69,10 @@ interface ExecutionTraceEntryDto {
 }
 
 export interface VoiceOpenPokeExecutionAgent {
-  execute(input: ExecuteVoiceAgentRequestDto): Promise<ExecuteVoiceAgentResultDto>;
+  execute(
+    input: ExecuteVoiceAgentRequestDto,
+    executionObserver?: VoiceExecutionObserver
+  ): Promise<ExecuteVoiceAgentResultDto>;
 }
 
 // ============================================================================
@@ -103,13 +111,19 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
   /**
    * Executes one delegated task for the interaction agent.
    * @param input - Execution request DTO
+   * @param executionObserver - Optional observer for read-only execution snapshots
    * @returns Final execution result for the interaction agent
    */
-  async execute(input: ExecuteVoiceAgentRequestDto): Promise<ExecuteVoiceAgentResultDto> {
+  async execute(
+    input: ExecuteVoiceAgentRequestDto,
+    executionObserver?: VoiceExecutionObserver
+  ): Promise<ExecuteVoiceAgentResultDto> {
     return await startActiveObservation(
       `execution-agent:${input.agentName}`,
       async (agentObservation) => {
         const executionTrace: ExecutionTraceEntryDto[] = [];
+        const executionStartedAt = new Date().toISOString();
+        const executionId = `${input.agentName}:${Date.now()}`;
 
         agentObservation.update({
           input: {
@@ -121,6 +135,19 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
         });
 
         try {
+          await notifyExecutionObserver(
+            executionObserver,
+            buildExecutionSnapshot({
+              currentToolName: null,
+              executionId,
+              executionTrace,
+              input,
+              latestAssistantText: null,
+              startedAt: executionStartedAt,
+              status: "starting",
+            })
+          );
+
           const session = await this.createExecutionSession(input.callerContext);
           const messages: OpenRouterChatMessageDto[] = [
             {
@@ -142,6 +169,19 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
               tools: session.toolSchemas,
             });
 
+            await notifyExecutionObserver(
+              executionObserver,
+              buildExecutionSnapshot({
+                currentToolName: null,
+                executionId,
+                executionTrace,
+                input,
+                latestAssistantText: assistantMessage.content,
+                startedAt: executionStartedAt,
+                status: "planning",
+              })
+            );
+
             messages.push({
               content: assistantMessage.content,
               role: "assistant",
@@ -162,6 +202,19 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
                 },
               });
 
+              await notifyExecutionObserver(
+                executionObserver,
+                buildExecutionSnapshot({
+                  currentToolName: null,
+                  executionId,
+                  executionTrace,
+                  input,
+                  latestAssistantText: assistantMessage.content,
+                  startedAt: executionStartedAt,
+                  status: "finished",
+                })
+              );
+
               return {
                 agentName: input.agentName,
                 response: assistantMessage.content.trim(),
@@ -170,6 +223,19 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
             }
 
             for (const toolCall of assistantMessage.toolCalls) {
+              await notifyExecutionObserver(
+                executionObserver,
+                buildExecutionSnapshot({
+                  currentToolName: toolCall.name,
+                  executionId,
+                  executionTrace,
+                  input,
+                  latestAssistantText: assistantMessage.content,
+                  startedAt: executionStartedAt,
+                  status: "running_tool",
+                })
+              );
+
               const toolResult = await executeToolCall(session, toolCall);
               executionTrace.push({
                 assistantText: assistantMessage.content,
@@ -178,6 +244,19 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
                 toolName: toolCall.name,
                 toolResult,
               });
+
+              await notifyExecutionObserver(
+                executionObserver,
+                buildExecutionSnapshot({
+                  currentToolName: toolCall.name,
+                  executionId,
+                  executionTrace,
+                  input,
+                  latestAssistantText: assistantMessage.content,
+                  startedAt: executionStartedAt,
+                  status: "running_tool",
+                })
+              );
 
               messages.push({
                 content: JSON.stringify(toolResult),
@@ -200,6 +279,19 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
             },
             statusMessage: errorMessage,
           });
+
+          await notifyExecutionObserver(
+            executionObserver,
+            buildExecutionSnapshot({
+              currentToolName: executionTrace.at(-1)?.toolName ?? null,
+              executionId,
+              executionTrace,
+              input,
+              latestAssistantText: summary,
+              startedAt: executionStartedAt,
+              status: "failed",
+            })
+          );
 
           return {
             agentName: input.agentName,
@@ -348,6 +440,86 @@ export function createVoiceOpenPokeExecutionAgent(
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+/**
+ * Notifies the execution observer with one read-only execution snapshot.
+ * @param executionObserver - Optional observer callback
+ * @param snapshot - Snapshot to publish
+ * @returns Nothing
+ */
+async function notifyExecutionObserver(
+  executionObserver: VoiceExecutionObserver | undefined,
+  snapshot: VoiceExecutionSnapshotDto
+): Promise<void> {
+  if (!executionObserver) {
+    return;
+  }
+
+  await executionObserver.onExecutionSnapshot(snapshot);
+}
+
+/**
+ * Builds a read-only execution snapshot for the narration flow.
+ * @param input - Snapshot builder inputs
+ * @returns Execution snapshot DTO
+ */
+function buildExecutionSnapshot(input: {
+  currentToolName: string | null;
+  executionId: string;
+  executionTrace: ExecutionTraceEntryDto[];
+  input: ExecuteVoiceAgentRequestDto;
+  latestAssistantText: string | null;
+  startedAt: string;
+  status: VoiceExecutionStatus;
+}): VoiceExecutionSnapshotDto {
+  const recentMessages = buildRecentExecutionMessages(
+    input.executionTrace,
+    input.latestAssistantText
+  );
+
+  return {
+    agentName: input.input.agentName,
+    currentToolName: input.currentToolName,
+    executionId: input.executionId,
+    instructions: input.input.instructions,
+    recentMessages,
+    startedAt: input.startedAt,
+    status: input.status,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Builds the recent execution-context lines exposed to the narrator.
+ * @param executionTrace - Recent execution trace entries
+ * @param latestAssistantText - Latest execution-agent assistant text
+ * @returns Recent execution context lines
+ */
+function buildRecentExecutionMessages(
+  executionTrace: ExecutionTraceEntryDto[],
+  latestAssistantText: string | null
+): string[] {
+  const recentTraceLines = executionTrace
+    .slice(-4)
+    .flatMap((entry) => {
+      const status = typeof entry.toolResult.status === "string"
+        ? entry.toolResult.status
+        : "unknown";
+
+      return [
+        entry.assistantText.trim()
+          ? `Execution thought: ${entry.assistantText.trim()}`
+          : null,
+        `Tool ${entry.toolName} finished with status ${status}.`,
+      ].filter((value): value is string => Boolean(value));
+    });
+
+  const assistantLine = latestAssistantText?.trim()
+    ? [`Latest execution note: ${latestAssistantText.trim()}`]
+    : [];
+
+  return [...recentTraceLines, ...assistantLine].slice(-5);
+}
 
 /**
  * Executes one session-backed tool call and normalizes the tool payload.
