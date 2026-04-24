@@ -17,8 +17,8 @@ import {
   sendWhatsAppConnectorOverviewTemplate,
 } from "../whatsappCustomTools.js";
 import type { AgentEnv } from "../env.js";
+import type { VoiceInteractionAgentStore } from "../voiceInteractionAgentStore.js";
 import type {
-  VoiceExecutionObserver,
   VoiceExecutionSnapshotDto,
   VoiceNarrationResultDto,
   VoiceOpenPokeNarrationAgent,
@@ -46,11 +46,12 @@ const NARRATION_SILENCE_THRESHOLD_MS = 2000;
 // MAIN CLASS
 // ============================================================================
 
-export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecutionObserver {
+export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
   private activeExecutionSnapshot: VoiceExecutionSnapshotDto | null = null;
   private readonly callerContext: WhatsAppCallerContext;
   private readonly env: AgentEnv;
   private readonly interactionAgent: VoiceOpenPokeInteractionAgentRuntime;
+  private readonly voiceInteractionAgentStore: VoiceInteractionAgentStore | null;
   private lastFinishedSpeechAt = Date.now();
   private lastSpokenNarrationMessage: string | null = null;
   private latestNarration: VoiceNarrationResultDto | null = null;
@@ -59,8 +60,8 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
   private narrationPlaybackQueued = false;
   private readonly narrationAgent: VoiceOpenPokeNarrationAgent;
   private readonly conversationHistory: VoiceConversationMessageDto[] = [];
-  private pendingTurn: Promise<void> = Promise.resolve();
   private speechQueue: Promise<void> = Promise.resolve();
+  private latestTurnId = 0;
 
   /**
    * Creates the LiveKit-facing voice agent.
@@ -69,13 +70,17 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
    * @param interactionAgent - Explicit voice OpenPoke interaction runtime
    * @param narrationAgent - Text-only narration runtime used during execution waits
    * @param memoryEntries - Loaded user memory entries
+   * @param conversationHistory - Persisted interaction-agent message history for this call
+   * @param voiceInteractionAgentStore - Optional voice interaction-agent store
    */
   constructor(
     env: AgentEnv,
     callerContext: WhatsAppCallerContext,
     interactionAgent: VoiceOpenPokeInteractionAgentRuntime,
     narrationAgent: VoiceOpenPokeNarrationAgent,
-    memoryEntries: MemoryEntry[]
+    memoryEntries: MemoryEntry[],
+    conversationHistory: VoiceConversationMessageDto[],
+    voiceInteractionAgentStore: VoiceInteractionAgentStore | null
   ) {
     super({
       instructions: "WhatsApp voice OpenPoke runtime",
@@ -86,6 +91,8 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
     this.interactionAgent = interactionAgent;
     this.narrationAgent = narrationAgent;
     this.memoryEntries = memoryEntries;
+    this.voiceInteractionAgentStore = voiceInteractionAgentStore;
+    this.conversationHistory.push(...conversationHistory);
   }
 
   /**
@@ -140,62 +147,68 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
       currentMessage,
       memoryEntries: this.memoryEntries,
     };
+    const turnId = this.startNewTurn();
 
-    this.recordInboundMessage(currentMessage);
+    try {
+      await this.recordInboundMessage(currentMessage);
+      await startActiveObservation(
+        WHATSAPP_VOICE_TRACE_NAME,
+        async (turnObservation) => {
+          turnObservation.update({
+            input: {
+              text: turn.currentMessage.text,
+              turnId,
+            },
+          });
 
-    this.pendingTurn = this.pendingTurn.then(async () => {
-      try {
-        await startActiveObservation(
-          WHATSAPP_VOICE_TRACE_NAME,
-          async (turnObservation) => {
-            turnObservation.update({
-              input: {
-                text: turn.currentMessage.text,
+          await propagateAttributes(
+            {
+              metadata: {
+                channel: "whatsapp_voice",
+                feature: "voice_agent",
+                turnId: String(turnId),
               },
-            });
+              sessionId: buildWhatsAppVoiceSessionId(this.callerContext),
+              tags: ["whatsapp", "voice-agent"],
+              traceName: WHATSAPP_VOICE_TRACE_NAME,
+              userId: this.callerContext.supabaseUserId,
+            },
+            async () => {
+              const result = await this.interactionAgent.runTurn(
+                turn,
+                async (action) => await this.emitActionForTurn(turnId, action),
+                {
+                  onExecutionSnapshot: async (snapshot) =>
+                    await this.handleExecutionSnapshot(turnId, snapshot),
+                }
+              );
 
-            await propagateAttributes(
-              {
-                metadata: {
-                  channel: "whatsapp_voice",
-                  feature: "voice_agent",
+              turnObservation.update({
+                output: {
+                  actionTypes: result.actions.map((action) => action.type),
+                  status: result.status,
+                  turnId,
                 },
-                sessionId: buildWhatsAppVoiceSessionId(this.callerContext),
-                tags: ["whatsapp", "voice-agent"],
-                traceName: WHATSAPP_VOICE_TRACE_NAME,
-                userId: this.callerContext.supabaseUserId,
-              },
-              async () => {
-                const result = await this.interactionAgent.runTurn(
-                  turn,
-                  async (action) => await this.emitAction(action),
-                  this
-                );
+              });
+            }
+          );
+        }
+      );
+    } catch (error) {
+      console.error("[whatsapp-agent] voice interaction turn failed", {
+        callerPhone: this.callerContext.callerPhone,
+        error: error instanceof Error ? error.message : String(error),
+        transcript,
+        turnId,
+      });
 
-                turnObservation.update({
-                  output: {
-                    actionTypes: result.actions.map((action) => action.type),
-                    status: result.status,
-                  },
-                });
-              }
-            );
-          }
-        );
-      } catch (error) {
-        console.error("[whatsapp-agent] voice interaction turn failed", {
-          callerPhone: this.callerContext.callerPhone,
-          error: error instanceof Error ? error.message : String(error),
-          transcript,
-        });
-
+      if (this.isCurrentTurn(turnId)) {
         await this.speakText(GENERIC_VOICE_ERROR_MESSAGE, {
           recordInConversationHistory: true,
         });
       }
-    });
+    }
 
-    await this.pendingTurn;
     throw new voice.StopResponse();
   }
 
@@ -208,7 +221,14 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
    * @param snapshot - Current execution snapshot
    * @returns Nothing
    */
-  async onExecutionSnapshot(snapshot: VoiceExecutionSnapshotDto): Promise<void> {
+  private async handleExecutionSnapshot(
+    turnId: number,
+    snapshot: VoiceExecutionSnapshotDto
+  ): Promise<void> {
+    if (!this.isCurrentTurn(turnId)) {
+      return;
+    }
+
     if (snapshot.status === "finished" || snapshot.status === "failed") {
       if (this.activeExecutionSnapshot?.executionId === snapshot.executionId) {
         this.activeExecutionSnapshot = null;
@@ -228,6 +248,28 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
       this.stopNarrationLoop();
       this.startNarrationLoop(snapshot.executionId);
     }
+  }
+
+  /**
+   * Starts one new user turn and clears stale execution state.
+   * @returns New turn ID
+   */
+  private startNewTurn(): number {
+    this.latestTurnId += 1;
+    this.activeExecutionSnapshot = null;
+    this.latestNarration = null;
+    this.stopNarrationLoop();
+
+    return this.latestTurnId;
+  }
+
+  /**
+   * Returns whether the supplied turn is still the newest user turn.
+   * @param turnId - Candidate turn ID
+   * @returns True when the turn is still current
+   */
+  private isCurrentTurn(turnId: number): boolean {
+    return turnId === this.latestTurnId;
   }
 
   /**
@@ -294,6 +336,23 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
         asType: "tool",
       }
     );
+  }
+
+  /**
+   * Executes one user-visible interaction action only when the turn is still current.
+   * @param turnId - Turn that owns the action
+   * @param action - User-visible action returned by the interaction runtime
+   * @returns Nothing
+   */
+  private async emitActionForTurn(
+    turnId: number,
+    action: VoiceUserVisibleActionDto
+  ): Promise<void> {
+    if (!this.isCurrentTurn(turnId)) {
+      return;
+    }
+
+    await this.emitAction(action);
   }
 
   /**
@@ -414,7 +473,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
       this.lastFinishedSpeechAt = Date.now();
 
       if (options.recordInConversationHistory) {
-        this.recordOutboundMessage(text);
+        await this.recordOutboundMessage(text);
       }
     });
 
@@ -427,8 +486,19 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
    * @param message - Inbound conversation message
    * @returns Nothing
    */
-  private recordInboundMessage(message: VoiceConversationMessageDto): void {
-    this.conversationHistory.push(message);
+  private async recordInboundMessage(
+    message: VoiceConversationMessageDto
+  ): Promise<void> {
+    if (!this.voiceInteractionAgentStore) {
+      this.conversationHistory.push(message);
+      return;
+    }
+
+    const storedMessage = await this.voiceInteractionAgentStore.appendVoiceInteractionAgentMessage({
+      role: "user",
+      text: message.text,
+    });
+    this.conversationHistory.push(storedMessage);
   }
 
   /**
@@ -436,12 +506,21 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent implements VoiceExecu
    * @param text - Spoken assistant message
    * @returns Nothing
    */
-  private recordOutboundMessage(text: string): void {
-    this.conversationHistory.push({
-      createdAt: new Date().toISOString(),
-      direction: "outbound",
+  private async recordOutboundMessage(text: string): Promise<void> {
+    if (!this.voiceInteractionAgentStore) {
+      this.conversationHistory.push({
+        createdAt: new Date().toISOString(),
+        direction: "outbound",
+        text,
+      });
+      return;
+    }
+
+    const storedMessage = await this.voiceInteractionAgentStore.appendVoiceInteractionAgentMessage({
+      role: "assistant",
       text,
     });
+    this.conversationHistory.push(storedMessage);
   }
 }
 

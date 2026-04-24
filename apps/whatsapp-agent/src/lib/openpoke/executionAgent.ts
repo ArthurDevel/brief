@@ -9,6 +9,13 @@
 
 import { startActiveObservation } from "@langfuse/tracing";
 import { Composio } from "@composio/core";
+import {
+  createWhatsAppCoreStore,
+  type ExecutionAgentMessageDto,
+  type ExecutionAgentThreadDto,
+  type ExecutionAgentToolCallDto,
+  type WhatsAppCoreStore,
+} from "@dublin/whatsapp-core";
 import type { AgentEnv } from "../env.js";
 import type { WhatsAppCallerContext } from "../whatsappRuntime.js";
 import {
@@ -81,6 +88,7 @@ export interface VoiceOpenPokeExecutionAgent {
 
 const WHATSAPP_VOICE_EXECUTION_MODEL = "google/gemini-3-flash-preview";
 const WHATSAPP_VOICE_EXECUTION_FAILURE_SUMMARIZER_MODEL = "google/gemini-3-flash-preview";
+const MAX_PERSISTED_EXECUTION_MESSAGES = 20;
 const MAX_TOOL_ITERATIONS = 8;
 
 // ============================================================================
@@ -91,20 +99,24 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
   private readonly composioApiKey: string;
   private readonly openRouterClient: OpenRouterTextClient;
   private readonly summarizerClient: OpenRouterTextClient;
+  private readonly whatsappCoreStore: WhatsAppCoreStore;
 
   /**
    * Creates the execution runtime for WhatsApp voice tasks.
    * @param openRouterClient - OpenRouter client used for execution planning
    * @param summarizerClient - OpenRouter client used for failed-execution summaries
+   * @param whatsappCoreStore - Shared store used for persisted execution threads
    * @param composioApiKey - Composio API key for caller-scoped sessions
    */
   constructor(
     openRouterClient: OpenRouterTextClient,
     summarizerClient: OpenRouterTextClient,
+    whatsappCoreStore: WhatsAppCoreStore,
     composioApiKey: string
   ) {
     this.openRouterClient = openRouterClient;
     this.summarizerClient = summarizerClient;
+    this.whatsappCoreStore = whatsappCoreStore;
     this.composioApiKey = composioApiKey;
   }
 
@@ -124,6 +136,7 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
         const executionTrace: ExecutionTraceEntryDto[] = [];
         const executionStartedAt = new Date().toISOString();
         const executionId = `${input.agentName}:${Date.now()}`;
+        let thread: ExecutionAgentThreadDto | null = null;
 
         agentObservation.update({
           input: {
@@ -148,6 +161,15 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
             })
           );
 
+          thread = await this.whatsappCoreStore.findOrCreateExecutionAgentThread({
+            agentName: input.agentName,
+            userId: input.callerContext.supabaseUserId,
+          });
+          const persistedMessages = await this.whatsappCoreStore.listExecutionAgentMessages({
+            limit: MAX_PERSISTED_EXECUTION_MESSAGES,
+            threadId: thread.id,
+            userId: input.callerContext.supabaseUserId,
+          });
           const session = await this.createExecutionSession(input.callerContext);
           const messages: OpenRouterChatMessageDto[] = [
             {
@@ -157,11 +179,18 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
                 session.connectedToolkitSlugs
               ),
             },
+            ...persistedMessages.map(mapPersistedExecutionMessageToOpenRouterMessage),
             {
               role: "user",
               content: input.instructions,
             },
           ];
+          await this.whatsappCoreStore.appendExecutionAgentMessage({
+            content: input.instructions,
+            role: "user",
+            threadId: thread.id,
+            userId: input.callerContext.supabaseUserId,
+          });
 
           for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
             const assistantMessage = await this.openRouterClient.createChatCompletion({
@@ -195,6 +224,13 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
                 throw new Error("Execution agent returned neither a tool call nor a final response.");
               }
 
+              await this.whatsappCoreStore.appendExecutionAgentMessage({
+                content: assistantMessage.content,
+                role: "assistant",
+                threadId: thread.id,
+                userId: input.callerContext.supabaseUserId,
+              });
+
               agentObservation.update({
                 output: {
                   response: assistantMessage.content.trim(),
@@ -221,6 +257,17 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
                 success: true,
               };
             }
+
+            await this.whatsappCoreStore.appendExecutionAgentToolCall({
+              content: assistantMessage.content,
+              threadId: thread.id,
+              toolCalls: assistantMessage.toolCalls.map((toolCall) => ({
+                arguments: toolCall.arguments,
+                id: toolCall.id,
+                name: toolCall.name,
+              })),
+              userId: input.callerContext.supabaseUserId,
+            });
 
             for (const toolCall of assistantMessage.toolCalls) {
               await notifyExecutionObserver(
@@ -263,6 +310,15 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
                 role: "tool",
                 toolCallId: toolCall.id ?? toolCall.name,
               });
+              await this.whatsappCoreStore.appendExecutionAgentToolResult({
+                content: JSON.stringify(toolResult),
+                threadId: thread.id,
+                toolArguments: toolCall.arguments,
+                toolCallId: toolCall.id ?? toolCall.name,
+                toolName: toolCall.name,
+                toolResult,
+                userId: input.callerContext.supabaseUserId,
+              });
             }
           }
 
@@ -270,6 +326,15 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           const summary = await this.summarizeFailedExecution(input, executionTrace, errorMessage);
+
+          if (thread) {
+            await this.whatsappCoreStore.appendExecutionAgentMessage({
+              content: summary,
+              role: "assistant",
+              threadId: thread.id,
+              userId: input.callerContext.supabaseUserId,
+            });
+          }
 
           agentObservation.update({
             level: "ERROR",
@@ -433,6 +498,10 @@ export function createVoiceOpenPokeExecutionAgent(
       apiKey: env.openRouterApiKey,
       model: WHATSAPP_VOICE_EXECUTION_FAILURE_SUMMARIZER_MODEL,
     }),
+    createWhatsAppCoreStore({
+      supabaseServiceRoleKey: env.supabaseServiceRoleKey,
+      supabaseUrl: env.supabaseUrl,
+    }),
     env.composioApiKey
   );
 }
@@ -456,6 +525,57 @@ async function notifyExecutionObserver(
   }
 
   await executionObserver.onExecutionSnapshot(snapshot);
+}
+
+/**
+ * Maps one persisted execution-agent row into the OpenRouter message format.
+ * @param message - Persisted execution-agent message
+ * @returns OpenRouter chat message DTO
+ */
+function mapPersistedExecutionMessageToOpenRouterMessage(
+  message: ExecutionAgentMessageDto
+): OpenRouterChatMessageDto {
+  if (message.role === "assistant") {
+    return {
+      content: message.content,
+      role: "assistant",
+      ...(message.toolCalls && message.toolCalls.length > 0
+        ? { toolCalls: message.toolCalls.map(mapPersistedExecutionToolCall) }
+        : {}),
+    };
+  }
+
+  if (message.role === "tool") {
+    if (!message.toolCallId) {
+      throw new Error("Persisted execution tool message is missing toolCallId.");
+    }
+
+    return {
+      content: message.content,
+      role: "tool",
+      toolCallId: message.toolCallId,
+    };
+  }
+
+  return {
+    content: message.content,
+    role: "user",
+  };
+}
+
+/**
+ * Maps one persisted execution-agent tool call into the OpenRouter format.
+ * @param toolCall - Persisted execution-agent tool call
+ * @returns OpenRouter tool call DTO
+ */
+function mapPersistedExecutionToolCall(
+  toolCall: ExecutionAgentToolCallDto
+): OpenRouterToolCallDto {
+  return {
+    arguments: toolCall.arguments,
+    id: toolCall.id,
+    name: toolCall.name,
+  };
 }
 
 /**

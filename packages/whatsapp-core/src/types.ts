@@ -118,6 +118,30 @@ export interface StoreExecutionAgentMessagesDto {
   userId: string;
 }
 
+export interface AppendExecutionAgentMessageDto {
+  content: string;
+  role: "assistant" | "user";
+  threadId: string;
+  userId: string;
+}
+
+export interface AppendExecutionAgentToolCallDto {
+  content: string;
+  threadId: string;
+  toolCalls: ExecutionAgentToolCallDto[];
+  userId: string;
+}
+
+export interface AppendExecutionAgentToolResultDto {
+  content: string;
+  threadId: string;
+  toolArguments: Record<string, unknown>;
+  toolCallId: string;
+  toolName: string;
+  toolResult: Record<string, unknown>;
+  userId: string;
+}
+
 export interface TouchExecutionAgentThreadDto {
   threadId: string;
   userId: string;

@@ -15,6 +15,9 @@ import {
 } from "./errors.js";
 import { normalizeWhatsAppPhone } from "./normalizeWhatsAppPhone.js";
 import type {
+  AppendExecutionAgentMessageDto,
+  AppendExecutionAgentToolCallDto,
+  AppendExecutionAgentToolResultDto,
   ExecutionAgentMessageDto,
   ExecutionAgentThreadDto,
   FindOrCreateExecutionAgentThreadDto,
@@ -23,6 +26,7 @@ import type {
   StoreInboundWhatsAppTextMessageDto,
   StoreInboundWhatsAppTextMessageResultDto,
   StoreOutboundWhatsAppTextMessageDto,
+  StoreExecutionAgentMessageDto,
   StoreExecutionAgentMessagesDto,
   TouchExecutionAgentThreadDto,
   WhatsAppConversationMessageDto,
@@ -368,6 +372,63 @@ export class WhatsAppCoreStore {
   }
 
   /**
+   * Persists one user or assistant execution-agent message and touches the thread.
+   * @param input - Execution-agent message append DTO
+   * @returns Stored execution-agent message row
+   */
+  async appendExecutionAgentMessage(
+    input: AppendExecutionAgentMessageDto
+  ): Promise<ExecutionAgentMessageDto> {
+    return await this.appendSingleExecutionAgentMessage(input.threadId, input.userId, {
+      content: input.content,
+      role: input.role,
+      toolArguments: null,
+      toolCallId: null,
+      toolCalls: null,
+      toolName: null,
+      toolResult: null,
+    });
+  }
+
+  /**
+   * Persists one assistant execution-agent tool-call step and touches the thread.
+   * @param input - Execution-agent tool-call append DTO
+   * @returns Stored execution-agent message row
+   */
+  async appendExecutionAgentToolCall(
+    input: AppendExecutionAgentToolCallDto
+  ): Promise<ExecutionAgentMessageDto> {
+    return await this.appendSingleExecutionAgentMessage(input.threadId, input.userId, {
+      content: input.content,
+      role: "assistant",
+      toolArguments: null,
+      toolCallId: null,
+      toolCalls: input.toolCalls,
+      toolName: null,
+      toolResult: null,
+    });
+  }
+
+  /**
+   * Persists one execution-agent tool result and touches the thread.
+   * @param input - Execution-agent tool-result append DTO
+   * @returns Stored execution-agent message row
+   */
+  async appendExecutionAgentToolResult(
+    input: AppendExecutionAgentToolResultDto
+  ): Promise<ExecutionAgentMessageDto> {
+    return await this.appendSingleExecutionAgentMessage(input.threadId, input.userId, {
+      content: input.content,
+      role: "tool",
+      toolArguments: input.toolArguments,
+      toolCallId: input.toolCallId,
+      toolCalls: null,
+      toolName: input.toolName,
+      toolResult: input.toolResult,
+    });
+  }
+
+  /**
    * Updates the persisted timestamp for one execution-agent thread.
    * @param input - Thread touch DTO
    * @returns Promise that resolves when the timestamp is updated
@@ -402,6 +463,36 @@ export class WhatsAppCoreStore {
     }
 
     return normalizedPhone;
+  }
+
+  /**
+   * Persists one execution-agent row and refreshes the parent thread timestamp.
+   * @param threadId - Persisted execution-agent thread ID
+   * @param userId - Supabase user ID that owns the thread
+   * @param message - One execution-agent message row
+   * @returns Stored execution-agent message row
+   */
+  private async appendSingleExecutionAgentMessage(
+    threadId: string,
+    userId: string,
+    message: StoreExecutionAgentMessageDto
+  ): Promise<ExecutionAgentMessageDto> {
+    const [storedMessage] = await this.storeExecutionAgentMessages({
+      messages: [message],
+      threadId,
+      userId,
+    });
+
+    if (!storedMessage) {
+      throw new Error("Failed to store execution-agent message.");
+    }
+
+    await this.touchExecutionAgentThread({
+      threadId,
+      userId,
+    });
+
+    return storedMessage;
   }
 
   /**

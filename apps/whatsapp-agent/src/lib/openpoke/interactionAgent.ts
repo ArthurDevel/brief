@@ -31,6 +31,10 @@ import type {
 } from "./types.js";
 import type { VoiceOpenPokeExecutionAgent } from "./executionAgent.js";
 import type { AgentEnv } from "../env.js";
+import type {
+  AppendVoiceInteractionAgentToolResultDto,
+  VoiceInteractionAgentStore,
+} from "../voiceInteractionAgentStore.js";
 
 // ============================================================================
 // TYPES
@@ -177,21 +181,25 @@ export class VoiceOpenPokeInteractionAgentRuntime {
   private readonly assistantInstructions: string;
   private readonly executionAgent: VoiceOpenPokeExecutionAgent;
   private readonly openRouterClient: OpenRouterTextClient;
+  private readonly voiceInteractionAgentStore: VoiceInteractionAgentStore | null;
 
   /**
    * Creates the WhatsApp voice interaction runtime.
    * @param openRouterClient - OpenRouter client used for interaction planning
    * @param executionAgent - Execution agent used for external tasks
    * @param assistantInstructions - Caller-facing assistant instructions from config
+   * @param voiceInteractionAgentStore - Optional voice interaction-agent store for persistence
    */
   constructor(
     openRouterClient: OpenRouterTextClient,
     executionAgent: VoiceOpenPokeExecutionAgent,
-    assistantInstructions = ""
+    assistantInstructions = "",
+    voiceInteractionAgentStore: VoiceInteractionAgentStore | null = null
   ) {
     this.openRouterClient = openRouterClient;
     this.executionAgent = executionAgent;
     this.assistantInstructions = assistantInstructions;
+    this.voiceInteractionAgentStore = voiceInteractionAgentStore;
   }
 
   /**
@@ -378,6 +386,7 @@ export class VoiceOpenPokeInteractionAgentRuntime {
     return await startActiveObservation(
       `interaction-tool:${toolCall.name}`,
       async (toolObservation) => {
+        const toolCallId = toolCall.id ?? toolCall.name;
         toolObservation.update({
           input: {
             arguments: toolCall.arguments,
@@ -386,6 +395,7 @@ export class VoiceOpenPokeInteractionAgentRuntime {
             userId: turn.callerContext.supabaseUserId,
           },
         });
+        await this.appendInteractionAgentToolCall(toolCall.name, toolCall.arguments, toolCallId);
 
         if (toolCall.name === "send_message_to_agent") {
           const argumentsDto = parseSendMessageToAgentArguments(toolCall.arguments);
@@ -395,10 +405,16 @@ export class VoiceOpenPokeInteractionAgentRuntime {
             instructions: argumentsDto.instructions,
           } satisfies ExecuteVoiceAgentRequestDto, executionObserver);
 
-          const toolResult = JSON.stringify({
+          const storedToolResult = {
             agent_name: result.agentName,
             response: result.response,
             success: result.success,
+          } satisfies Record<string, unknown>;
+          const toolResult = JSON.stringify(storedToolResult);
+          await this.appendInteractionAgentToolResult({
+            toolCallId,
+            toolName: toolCall.name,
+            toolResult: storedToolResult,
           });
 
           toolObservation.update({
@@ -427,9 +443,15 @@ export class VoiceOpenPokeInteractionAgentRuntime {
             await emitAction(action);
           }
 
-          const toolResult = JSON.stringify({
+          const storedToolResult = {
             message: argumentsDto.message,
             status: "recorded",
+          } satisfies Record<string, unknown>;
+          const toolResult = JSON.stringify(storedToolResult);
+          await this.appendInteractionAgentToolResult({
+            toolCallId,
+            toolName: toolCall.name,
+            toolResult: storedToolResult,
           });
 
           toolObservation.update({
@@ -457,9 +479,15 @@ export class VoiceOpenPokeInteractionAgentRuntime {
             await emitAction(action);
           }
 
-          const toolResult = JSON.stringify({
+          const storedToolResult = {
             status: "auth_template_sent",
             toolkit: argumentsDto.toolkit,
+          } satisfies Record<string, unknown>;
+          const toolResult = JSON.stringify(storedToolResult);
+          await this.appendInteractionAgentToolResult({
+            toolCallId,
+            toolName: toolCall.name,
+            toolResult: storedToolResult,
           });
 
           toolObservation.update({
@@ -486,8 +514,14 @@ export class VoiceOpenPokeInteractionAgentRuntime {
             await emitAction(action);
           }
 
-          const toolResult = JSON.stringify({
+          const storedToolResult = {
             status: "connector_overview_sent",
+          } satisfies Record<string, unknown>;
+          const toolResult = JSON.stringify(storedToolResult);
+          await this.appendInteractionAgentToolResult({
+            toolCallId,
+            toolName: toolCall.name,
+            toolResult: storedToolResult,
           });
 
           toolObservation.update({
@@ -507,9 +541,15 @@ export class VoiceOpenPokeInteractionAgentRuntime {
 
         if (toolCall.name === "wait") {
           const argumentsDto = parseWaitArguments(toolCall.arguments);
-          const toolResult = JSON.stringify({
+          const storedToolResult = {
             reason: argumentsDto.reason,
             status: "waiting",
+          } satisfies Record<string, unknown>;
+          const toolResult = JSON.stringify(storedToolResult);
+          await this.appendInteractionAgentToolResult({
+            toolCallId,
+            toolName: toolCall.name,
+            toolResult: storedToolResult,
           });
 
           toolObservation.update({
@@ -533,6 +573,44 @@ export class VoiceOpenPokeInteractionAgentRuntime {
       }
     );
   }
+
+  /**
+   * Persists one interaction-agent tool call when the voice interaction store is available.
+   * @param toolName - Tool name
+   * @param toolArguments - Parsed tool arguments
+   * @param toolCallId - Stable tool call ID
+   * @returns Nothing
+   */
+  private async appendInteractionAgentToolCall(
+    toolName: string,
+    toolArguments: Record<string, unknown>,
+    toolCallId: string
+  ): Promise<void> {
+    if (!this.voiceInteractionAgentStore) {
+      return;
+    }
+
+    await this.voiceInteractionAgentStore.appendVoiceInteractionAgentToolCall({
+      toolArguments,
+      toolCallId,
+      toolName,
+    });
+  }
+
+  /**
+   * Persists one interaction-agent tool result when the voice interaction store is available.
+   * @param input - Stored tool-result DTO
+   * @returns Nothing
+   */
+  private async appendInteractionAgentToolResult(
+    input: AppendVoiceInteractionAgentToolResultDto
+  ): Promise<void> {
+    if (!this.voiceInteractionAgentStore) {
+      return;
+    }
+
+    await this.voiceInteractionAgentStore.appendVoiceInteractionAgentToolResult(input);
+  }
 }
 
 // ============================================================================
@@ -547,7 +625,8 @@ export class VoiceOpenPokeInteractionAgentRuntime {
  */
 export function createVoiceOpenPokeInteractionAgent(
   env: AgentEnv,
-  executionAgent: VoiceOpenPokeExecutionAgent
+  executionAgent: VoiceOpenPokeExecutionAgent,
+  voiceInteractionAgentStore: VoiceInteractionAgentStore | null = null
 ): VoiceOpenPokeInteractionAgentRuntime {
   return new VoiceOpenPokeInteractionAgentRuntime(
     new FetchOpenRouterTextClient({
@@ -555,7 +634,8 @@ export function createVoiceOpenPokeInteractionAgent(
       model: WHATSAPP_VOICE_INTERACTION_MODEL,
     }),
     executionAgent,
-    env.livekitAgentInstructions
+    env.livekitAgentInstructions,
+    voiceInteractionAgentStore
   );
 }
 
