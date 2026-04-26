@@ -472,7 +472,7 @@ export class WhatsAppCoreStore {
    * @param phone - Raw or normalized phone
    * @returns Linked user DTO
    */
-  private async resolveOrCreateLinkedUserByPhone(
+  async resolveOrCreateLinkedUserByPhone(
     phone: string
   ): Promise<WhatsAppLinkedUserDto> {
     const normalizedPhone = this.requireNormalizedPhone(phone);
