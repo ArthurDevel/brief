@@ -26,7 +26,6 @@ export interface AgentEnv {
   whatsappApiVersion: string;
   deepgramApiKey: string;
   livekitSttModel: string;
-  livekitLlmModel: string;
   webAppUrl: string;
   internalApiKey: string;
 }
@@ -62,7 +61,6 @@ export function getEnv(): AgentEnv {
       process.env.WHATSAPP_API_VERSION?.trim() || getDefaultWhatsAppApiVersion(),
     deepgramApiKey: requireEnv("DEEPGRAM_API_KEY"),
     livekitSttModel: process.env.LIVEKIT_STT_MODEL?.trim() || "deepgram/nova-3:en",
-    livekitLlmModel: process.env.LIVEKIT_LLM_MODEL?.trim() || "openai/gpt-4.1-mini",
     webAppUrl: requireEnv("WEB_APP_URL"),
     internalApiKey: requireEnv("INTERNAL_API_KEY"),
   };

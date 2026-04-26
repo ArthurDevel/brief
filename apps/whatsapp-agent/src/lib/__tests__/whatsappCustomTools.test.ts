@@ -20,7 +20,6 @@ const TEST_ENV: AgentEnv = {
   whatsappApiVersion: "23",
   deepgramApiKey: "deepgram_key",
   livekitSttModel: "stt",
-  livekitLlmModel: "llm",
   webAppUrl: "https://app.example.com",
   internalApiKey: "internal_key",
 };
