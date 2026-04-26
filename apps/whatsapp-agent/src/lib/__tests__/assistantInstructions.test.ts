@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildAssistantInstructions } from "../assistantInstructions.js";
-import { getDefaultWhatsAppVoiceConfig } from "../whatsappVoice.js";
+import { getDefaultWhatsAppVoiceConfig } from "../voice/types.js";
 
 describe("buildAssistantInstructions", () => {
   it("lists the caller's connected apps when active accounts exist", () => {

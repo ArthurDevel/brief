@@ -24,8 +24,14 @@ export interface AgentEnv {
   whatsappAccessToken: string;
   whatsappPhoneNumberId: string;
   whatsappApiVersion: string;
-  deepgramApiKey: string;
-  livekitSttModel: string;
+  deepgramApiKey?: string;
+  xaiApiKey?: string;
+  whatsappSttProvider: string;
+  whatsappTtsProvider: string;
+  whatsappDeepgramSttModel: string;
+  whatsappXaiSttModel: string;
+  whatsappDefaultDeepgramVoice: string;
+  whatsappDefaultXaiVoice: string;
   webAppUrl: string;
   internalApiKey: string;
 }
@@ -59,8 +65,18 @@ export function getEnv(): AgentEnv {
     whatsappPhoneNumberId: requireEnv("WHATSAPP_PHONE_NUMBER_ID"),
     whatsappApiVersion:
       process.env.WHATSAPP_API_VERSION?.trim() || getDefaultWhatsAppApiVersion(),
-    deepgramApiKey: requireEnv("DEEPGRAM_API_KEY"),
-    livekitSttModel: process.env.LIVEKIT_STT_MODEL?.trim() || "deepgram/nova-3:en",
+    deepgramApiKey: process.env.DEEPGRAM_API_KEY?.trim() || undefined,
+    xaiApiKey: process.env.XAI_API_KEY?.trim() || undefined,
+    whatsappSttProvider: process.env.WHATSAPP_STT_PROVIDER?.trim() || "deepgram",
+    whatsappTtsProvider: process.env.WHATSAPP_TTS_PROVIDER?.trim() || "deepgram",
+    whatsappDeepgramSttModel:
+      process.env.WHATSAPP_DEEPGRAM_STT_MODEL?.trim() || "deepgram/nova-3:en",
+    whatsappXaiSttModel:
+      process.env.WHATSAPP_XAI_STT_MODEL?.trim() || "xai/stt-1:en",
+    whatsappDefaultDeepgramVoice:
+      process.env.WHATSAPP_DEFAULT_DEEPGRAM_VOICE?.trim() || "aura-2-andromeda-en",
+    whatsappDefaultXaiVoice:
+      process.env.WHATSAPP_DEFAULT_XAI_VOICE?.trim() || "ara",
     webAppUrl: requireEnv("WEB_APP_URL"),
     internalApiKey: requireEnv("INTERNAL_API_KEY"),
   };

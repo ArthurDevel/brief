@@ -1,27 +1,44 @@
 /**
- * Deepgram TTS wrapper for WhatsApp calls.
+ * Deepgram voice provider for WhatsApp calls.
  *
  * Responsibilities:
+ * - Return the configured Deepgram STT model descriptor
  * - Stream Deepgram Aura audio into LiveKit
- * - Apply speed adjustment and loudness normalization
- * - Keep the WhatsApp agent TTS creation simple
+ * - Apply shared WhatsApp TTS post-processing
  */
 
 import { AudioByteStream, type APIConnectOptions, tts } from "@livekit/agents";
 import { TTS as DeepgramTTS } from "@livekit/agents-plugin-deepgram";
-import { AudioFrame } from "@livekit/rtc-node";
-import { StreamingAudioPostProcessor } from "../audio/postprocess.js";
-import { NUM_CHANNELS, SAMPLE_RATE } from "../whatsappVoice.js";
+import type { AudioFrame } from "@livekit/rtc-node";
+import {
+  createStreamingPostProcessor,
+  emitAudioFrames,
+  int16ToBytes,
+} from "../postprocessor.js";
+import { NUM_CHANNELS, SAMPLE_RATE } from "../types.js";
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-interface ProcessedTtsOptions {
+interface ProcessedDeepgramTtsOptions {
+  apiKey: string;
   model: string;
   speed: number;
   sampleRate?: number;
-  apiKey: string;
+}
+
+// ============================================================================
+// MAIN HELPERS
+// ============================================================================
+
+/**
+ * Returns the Deepgram STT model descriptor for LiveKit AgentSession.
+ * @param model - Configured Deepgram STT model descriptor
+ * @returns LiveKit STT model descriptor
+ */
+export function createDeepgramStt(model: string): string {
+  return model;
 }
 
 // ============================================================================
@@ -41,7 +58,7 @@ export class ProcessedDeepgramTTS extends tts.TTS {
    * Creates the processed Deepgram TTS wrapper.
    * @param options - TTS model and audio settings
    */
-  constructor(options: ProcessedTtsOptions) {
+  constructor(options: ProcessedDeepgramTtsOptions) {
     super(options.sampleRate ?? SAMPLE_RATE, NUM_CHANNELS, { streaming: true });
     this.speed = options.speed;
     this.voiceModel = options.model;
@@ -83,7 +100,7 @@ export class ProcessedDeepgramTTS extends tts.TTS {
     connOptions?: APIConnectOptions,
     abortSignal?: AbortSignal
   ): tts.ChunkedStream {
-    return new ProcessedChunkedStream(
+    return new ProcessedDeepgramChunkedStream(
       this,
       this.baseTts.synthesize(text, connOptions, abortSignal),
       text,
@@ -100,7 +117,7 @@ export class ProcessedDeepgramTTS extends tts.TTS {
    * @returns Streaming synthesis stream
    */
   stream(options?: { connOptions?: APIConnectOptions }): tts.SynthesizeStream {
-    return new ProcessedSynthesizeStream(
+    return new ProcessedDeepgramSynthesizeStream(
       this,
       this.baseTts.stream(),
       this.speed,
@@ -122,8 +139,8 @@ export class ProcessedDeepgramTTS extends tts.TTS {
 // INTERNAL STREAMS
 // ============================================================================
 
-class ProcessedChunkedStream extends tts.ChunkedStream {
-  readonly label = "whatsapp.ProcessedChunkedStream";
+class ProcessedDeepgramChunkedStream extends tts.ChunkedStream {
+  readonly label = "whatsapp.ProcessedDeepgramChunkedStream";
   private readonly inner: tts.ChunkedStream;
   private readonly speed: number;
   private readonly sampleRate: number;
@@ -144,7 +161,7 @@ class ProcessedChunkedStream extends tts.ChunkedStream {
   }
 
   protected async run(): Promise<void> {
-    const processor = new StreamingAudioPostProcessor({
+    const processor = createStreamingPostProcessor({
       speed: this.speed,
       sampleRate: this.sampleRate,
       numChannels: NUM_CHANNELS,
@@ -164,9 +181,9 @@ class ProcessedChunkedStream extends tts.ChunkedStream {
             ...(flushed.length > 0 ? byteStream.write(int16ToBytes(flushed)) : []),
             ...byteStream.flush(),
           ];
-          pendingFrame = emitFrames(this.queue, event, flushedFrames, true, pendingFrame);
+          pendingFrame = emitAudioFrames(this.queue, event, flushedFrames, true, pendingFrame);
         } else {
-          pendingFrame = emitFrames(this.queue, event, frames, false, pendingFrame);
+          pendingFrame = emitAudioFrames(this.queue, event, frames, false, pendingFrame);
         }
       }
 
@@ -185,8 +202,8 @@ class ProcessedChunkedStream extends tts.ChunkedStream {
   }
 }
 
-class ProcessedSynthesizeStream extends tts.SynthesizeStream {
-  readonly label = "whatsapp.ProcessedSynthesizeStream";
+class ProcessedDeepgramSynthesizeStream extends tts.SynthesizeStream {
+  readonly label = "whatsapp.ProcessedDeepgramSynthesizeStream";
   private readonly inner: tts.SynthesizeStream;
   private readonly speed: number;
   private readonly sampleRate: number;
@@ -205,7 +222,7 @@ class ProcessedSynthesizeStream extends tts.SynthesizeStream {
   }
 
   protected async run(): Promise<void> {
-    const processor = new StreamingAudioPostProcessor({
+    const processor = createStreamingPostProcessor({
       speed: this.speed,
       sampleRate: this.sampleRate,
       numChannels: NUM_CHANNELS,
@@ -215,7 +232,7 @@ class ProcessedSynthesizeStream extends tts.SynthesizeStream {
 
     const inputTask = (async () => {
       for await (const item of this.input) {
-        if (item === ProcessedSynthesizeStream.FLUSH_SENTINEL) {
+        if (item === ProcessedDeepgramSynthesizeStream.FLUSH_SENTINEL) {
           this.inner.flush();
         } else {
           this.inner.pushText(item);
@@ -237,7 +254,7 @@ class ProcessedSynthesizeStream extends tts.SynthesizeStream {
             });
             pendingFrame = null;
           }
-          this.queue.put(ProcessedSynthesizeStream.END_OF_STREAM);
+          this.queue.put(ProcessedDeepgramSynthesizeStream.END_OF_STREAM);
           continue;
         }
 
@@ -251,9 +268,9 @@ class ProcessedSynthesizeStream extends tts.SynthesizeStream {
             ...(flushed.length > 0 ? byteStream.write(int16ToBytes(flushed)) : []),
             ...byteStream.flush(),
           ];
-          pendingFrame = emitFrames(this.queue, event, flushedFrames, true, pendingFrame);
+          pendingFrame = emitAudioFrames(this.queue, event, flushedFrames, true, pendingFrame);
         } else {
-          pendingFrame = emitFrames(this.queue, event, frames, false, pendingFrame);
+          pendingFrame = emitAudioFrames(this.queue, event, frames, false, pendingFrame);
         }
       }
     })();
@@ -264,63 +281,4 @@ class ProcessedSynthesizeStream extends tts.SynthesizeStream {
       this.inner.close();
     }
   }
-}
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/**
- * Converts int16 PCM samples to bytes.
- * @param samples - PCM samples
- * @returns Uint8Array view of the PCM buffer
- */
-function int16ToBytes(samples: Int16Array): Uint8Array {
-  return new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
-}
-
-/**
- * Emits completed audio frames into the LiveKit queue.
- * @param queue - LiveKit queue
- * @param source - Source synthesized audio event
- * @param frames - Completed audio frames
- * @param final - Whether this is the final event
- * @param pendingFrame - Previous pending frame
- * @returns Next pending frame
- */
-function emitFrames(
-  queue: {
-    put(value: tts.SynthesizedAudio | typeof tts.SynthesizeStream.END_OF_STREAM): void;
-  },
-  source: tts.SynthesizedAudio,
-  frames: AudioFrame[],
-  final: boolean,
-  pendingFrame: AudioFrame | null
-): AudioFrame | null {
-  const completeFrames = pendingFrame ? [pendingFrame, ...frames] : frames;
-  let nextPendingFrame: AudioFrame | null = null;
-
-  if (!final) {
-    if (completeFrames.length === 0) {
-      return nextPendingFrame;
-    }
-
-    for (let index = 0; index < completeFrames.length - 1; index += 1) {
-      queue.put({ ...source, frame: completeFrames[index], final: false, timedTranscripts: undefined });
-    }
-
-    nextPendingFrame = completeFrames[completeFrames.length - 1] ?? null;
-    return nextPendingFrame;
-  }
-
-  for (let index = 0; index < completeFrames.length; index += 1) {
-    queue.put({
-      ...source,
-      frame: completeFrames[index],
-      final: index === completeFrames.length - 1,
-      timedTranscripts: undefined,
-    });
-  }
-
-  return null;
 }

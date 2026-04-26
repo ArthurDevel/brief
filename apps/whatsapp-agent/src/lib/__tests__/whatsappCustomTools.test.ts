@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEnv } from "../env.js";
 import { createWhatsAppCustomTools } from "../whatsappCustomTools.js";
-import { getDefaultWhatsAppVoiceConfig } from "../whatsappVoice.js";
+import { getDefaultWhatsAppVoiceConfig } from "../voice/types.js";
 
 const TEST_ENV: AgentEnv = {
   livekitAgentName: "whatsapp-composio-agent",
@@ -19,7 +19,13 @@ const TEST_ENV: AgentEnv = {
   whatsappPhoneNumberId: "123456789",
   whatsappApiVersion: "23",
   deepgramApiKey: "deepgram_key",
-  livekitSttModel: "stt",
+  xaiApiKey: "xai_key",
+  whatsappSttProvider: "deepgram",
+  whatsappTtsProvider: "deepgram",
+  whatsappDeepgramSttModel: "deepgram/nova-3:en",
+  whatsappXaiSttModel: "xai/stt-1:en",
+  whatsappDefaultDeepgramVoice: "aura-2-andromeda-en",
+  whatsappDefaultXaiVoice: "ara",
   webAppUrl: "https://app.example.com",
   internalApiKey: "internal_key",
 };
