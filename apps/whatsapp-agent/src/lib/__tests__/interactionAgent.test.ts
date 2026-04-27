@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { LlmTextClient } from "@dublin/llm/types";
 import { VoiceOpenPokeInteractionAgentRuntime } from "../openpoke/interactionAgent.js";
 import type { VoiceExecutionObserver } from "../openpoke/narrationTypes.js";
 import {
@@ -6,7 +7,6 @@ import {
   buildVoiceOpenPokeInteractionSystemPrompt,
   buildVoiceOpenPokeInteractionUserPrompt,
 } from "../openpoke/promptBuilder.js";
-import type { OpenRouterTextClient } from "../openpoke/openRouterClient.js";
 import type { VoiceOpenPokeExecutionAgent } from "../openpoke/executionAgent.js";
 import { getDefaultWhatsAppVoiceConfig } from "../whatsappVoice.js";
 
@@ -94,7 +94,7 @@ describe("buildVoiceOpenPokeConversationStartUserPrompt", () => {
 
 describe("VoiceOpenPokeInteractionAgentRuntime", () => {
   it("emits the initial greeting from the interaction agent on conversation start", async () => {
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: vi.fn().mockResolvedValue({
         content: "",
         toolCalls: [
@@ -150,7 +150,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
 
   it("delegates to the execution agent and emits the final spoken message", async () => {
     const createChatCompletionMock = vi
-      .fn<OpenRouterTextClient["createChatCompletion"]>()
+      .fn<LlmTextClient["createChatCompletion"]>()
       .mockResolvedValueOnce({
         content: "",
         toolCalls: [
@@ -176,7 +176,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           },
         ],
       });
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: createChatCompletionMock,
     };
     const executeMock = vi.fn().mockResolvedValue({
@@ -237,7 +237,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
   });
 
   it("returns wait when the model chooses the wait tool", async () => {
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: vi.fn().mockResolvedValue({
         content: "",
         toolCalls: [
@@ -285,7 +285,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
 
   it("forwards the execution observer to the execution agent", async () => {
     const createChatCompletionMock = vi
-      .fn<OpenRouterTextClient["createChatCompletion"]>()
+      .fn<LlmTextClient["createChatCompletion"]>()
       .mockResolvedValueOnce({
         content: "",
         toolCalls: [
@@ -311,7 +311,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           },
         ],
       });
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: createChatCompletionMock,
     };
     const executeMock = vi.fn().mockResolvedValue({

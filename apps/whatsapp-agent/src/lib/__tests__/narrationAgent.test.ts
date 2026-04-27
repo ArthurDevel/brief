@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import type { LlmTextClient } from "@dublin/llm/types";
 import { VoiceOpenPokeNarrationAgentRuntime } from "../openpoke/narrationAgent.js";
-import type { OpenRouterTextClient } from "../openpoke/openRouterClient.js";
 
 describe("VoiceOpenPokeNarrationAgentRuntime", () => {
   it("returns one short narration sentence", async () => {
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: vi.fn().mockResolvedValue({
         content: "I'm checking that now. I will let you know soon.",
         toolCalls: [],
@@ -36,7 +36,7 @@ describe("VoiceOpenPokeNarrationAgentRuntime", () => {
   });
 
   it("returns null when the narrator chooses to skip", async () => {
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: vi.fn().mockResolvedValue({
         content: "SKIP",
         toolCalls: [],
