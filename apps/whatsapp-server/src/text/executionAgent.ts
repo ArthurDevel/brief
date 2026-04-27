@@ -101,6 +101,8 @@ const MAX_PERSISTED_EXECUTION_MESSAGES = 20;
 const MAX_EXECUTION_PROMPT_TOKENS = 130000;
 const MAX_TOOL_ITERATIONS = 8;
 
+const runningExecutionAgentKeys = new Set<string>();
+
 // ============================================================================
 // MAIN CLASS
 // ============================================================================
@@ -154,6 +156,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
         const startedAt = Date.now();
         const executionTrace: ExecutionTraceEntryDto[] = [];
         let thread: ExecutionAgentThreadDto | null = null;
+        const executionKey = buildExecutionAgentKey(input.linkedUser.userId, input.agentName);
         console.info("[whatsapp-server] execution agent started", {
           agentName: input.agentName,
           instructionLength: input.instructions.length,
@@ -173,6 +176,29 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
             agentName: input.agentName,
             userId: input.linkedUser.userId,
           });
+
+          if (runningExecutionAgentKeys.has(executionKey)) {
+            const busyResponse = buildExecutionAgentBusyResponse(input.agentName);
+            console.info("[whatsapp-server] execution agent busy", {
+              agentName: input.agentName,
+              userId: input.linkedUser.userId,
+            });
+
+            agentObservation.update({
+              output: {
+                response: busyResponse,
+                success: false,
+              },
+            });
+
+            return {
+              agentName: input.agentName,
+              response: busyResponse,
+              success: false,
+            };
+          }
+
+          runningExecutionAgentKeys.add(executionKey);
           const persistedMessages = await this.whatsappCoreStore.listExecutionAgentMessages({
             limit: MAX_PERSISTED_EXECUTION_MESSAGES,
             threadId: thread.id,
@@ -332,6 +358,8 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
             response: summary,
             success: false,
           };
+        } finally {
+          runningExecutionAgentKeys.delete(executionKey);
         }
       },
       {
@@ -557,6 +585,25 @@ export function createWhatsAppTextExecutionAgent(): WhatsAppTextExecutionAgentRu
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+/**
+ * Builds the busy response returned when the same executor is already running.
+ * @param agentName - Executor agent name
+ * @returns User-safe busy response
+ */
+function buildExecutionAgentBusyResponse(agentName: string): string {
+  return `${agentName} is already working on a previous request. Please wait a moment before sending another task to this same executor agent.`;
+}
+
+/**
+ * Builds the in-process lock key for one user's named executor agent.
+ * @param userId - Supabase user ID
+ * @param agentName - Executor agent name
+ * @returns Stable lock key
+ */
+function buildExecutionAgentKey(userId: string, agentName: string): string {
+  return `${userId}:${agentName}`;
+}
 
 /**
  * Executes one session-backed tool call and normalizes the tool payload.
