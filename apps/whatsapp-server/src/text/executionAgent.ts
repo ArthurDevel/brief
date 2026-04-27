@@ -13,6 +13,7 @@ import { Composio } from "@composio/core";
 import { createLlmTextClient } from "@dublin/llm/client";
 import {
   createWhatsAppCoreStore,
+  fitExecutionHistoryToTokenBudget,
   postProcessExecutionToolResultData,
   type ExecutionAgentMessageDto,
   type ExecutionAgentThreadDto,
@@ -96,6 +97,7 @@ const WHATSAPP_TEXT_EXECUTION_MODEL = "zai-glm-4.7";
 const WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_PROVIDER: LlmProvider = "openrouter";
 const WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_MODEL = "google/gemini-3-flash-preview";
 const MAX_PERSISTED_EXECUTION_MESSAGES = 20;
+const MAX_EXECUTION_PROMPT_TOKENS = 130000;
 const MAX_TOOL_ITERATIONS = 8;
 
 // ============================================================================
@@ -176,15 +178,30 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
             userId: input.linkedUser.userId,
           });
           const session = await this.createExecutionSession(input.linkedUser);
+          const systemMessage = buildWhatsAppExecutionSystemPrompt(
+            input.agentName,
+            session.connectedToolkitSlugs
+          );
+          const replaySafePersistedMessages = fitExecutionHistoryToTokenBudget({
+            maxPromptTokens: MAX_EXECUTION_PROMPT_TOKENS,
+            persistedMessages,
+            systemMessage,
+            toolSchemas: session.toolSchemas,
+            userMessage: input.instructions,
+          });
+          if (replaySafePersistedMessages.length < persistedMessages.length) {
+            console.info("[whatsapp-server] trimmed persisted execution history for prompt budget", {
+              agentName: input.agentName,
+              originalMessageCount: persistedMessages.length,
+              retainedMessageCount: replaySafePersistedMessages.length,
+            });
+          }
           const messages: LlmChatMessageDto[] = [
             {
               role: "system",
-              content: buildWhatsAppExecutionSystemPrompt(
-                input.agentName,
-                session.connectedToolkitSlugs
-              ),
+              content: systemMessage,
             },
-            ...persistedMessages.map(mapPersistedExecutionMessageToLlmMessage),
+            ...replaySafePersistedMessages.map(mapPersistedExecutionMessageToLlmMessage),
             {
               role: "user",
               content: input.instructions,
