@@ -96,6 +96,11 @@ export interface FindOrCreateExecutionAgentThreadDto {
   userId: string;
 }
 
+export interface ListExecutionAgentThreadsDto {
+  limit: number;
+  userId: string;
+}
+
 export interface ListExecutionAgentMessagesDto {
   limit: number;
   threadId: string;

@@ -66,6 +66,15 @@ describe("buildWhatsAppTextUserPrompt", () => {
         text: "current user message",
         userId: "user-1",
       },
+      executionAgentThreads: [
+        {
+          agentName: "gmailInbox",
+          createdAt: "2026-04-22T09:00:00.000Z",
+          id: "thread-1",
+          updatedAt: "2026-04-22T10:00:00.000Z",
+          userId: "user-1",
+        },
+      ],
       linkedUser: {
         userId: "user-1",
         whatsappPhone: "+15551234567",
@@ -79,6 +88,11 @@ describe("buildWhatsAppTextUserPrompt", () => {
     });
 
     expect(prompt).toContain("<conversation_history>");
+    expect(prompt).toContain("<execution_agent_threads>");
+    expect(prompt).toContain("- gmailInbox (updated 2026-04-22T10:00:00.000Z)");
+    expect(prompt).toContain(
+      "If none are relevant, create a new persisted thread by using a different short camelCase agent_name."
+    );
     expect(prompt).toContain("<user_message timestamp=\"2026-04-22T10:00:00.000Z\">");
     expect(prompt).toContain("<poke_reply timestamp=\"2026-04-22T10:00:10.000Z\">");
     expect(prompt).toContain("<new_user_message>\ncurrent user message\n</new_user_message>");
@@ -114,6 +128,7 @@ describe("buildWhatsAppTextUserPrompt", () => {
         text: "current user message",
         userId: "user-1",
       },
+      executionAgentThreads: [],
       linkedUser: {
         userId: "user-1",
         whatsappPhone: "+15551234567",

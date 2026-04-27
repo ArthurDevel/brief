@@ -25,6 +25,10 @@ import {
 } from "./lib/whatsappVoice.js";
 import { getUserMemoryEntries, type MemoryEntry } from "./lib/memory.js";
 import {
+  createWhatsAppCoreStore,
+  type WhatsAppCoreStore,
+} from "@dublin/whatsapp-core";
+import {
   createVoiceOpenPokeExecutionAgent,
   type VoiceOpenPokeExecutionAgent,
 } from "./lib/openpoke/executionAgent.js";
@@ -140,12 +144,15 @@ interface BuiltAssistant {
  * @param callerContext - Resolved caller context (toolkits, voice config)
  * @param executionAgent - Voice execution agent used for delegated work
  * @param memoryEntries - Loaded user memory entries
+ * @param whatsappCoreStore - Shared WhatsApp core store
+ * @param voiceInteractionAgentStore - Optional voice interaction-agent store
  * @returns Voice agent + voice config to use for the session
  */
 async function buildAssistant(
   callerContext: WhatsAppCallerContext,
   executionAgent: VoiceOpenPokeExecutionAgent,
   memoryEntries: MemoryEntry[],
+  whatsappCoreStore: WhatsAppCoreStore,
   voiceInteractionAgentStore: VoiceInteractionAgentStore | null
 ): Promise<BuiltAssistant> {
   const conversationHistory: VoiceConversationMessageDto[] = voiceInteractionAgentStore
@@ -165,6 +172,7 @@ async function buildAssistant(
       interactionAgent,
       narrationAgent,
       memoryEntries,
+      whatsappCoreStore,
       conversationHistory,
       voiceInteractionAgentStore
     ),
@@ -238,6 +246,10 @@ async function entry(ctx: JobContext): Promise<void> {
       });
     }
 
+    const whatsappCoreStore = createWhatsAppCoreStore({
+      supabaseServiceRoleKey: env.supabaseServiceRoleKey,
+      supabaseUrl: env.supabaseUrl,
+    });
     const executionAgent = createVoiceOpenPokeExecutionAgent(env);
     const voiceInteractionAgentStore = appSessionId
       ? createVoiceInteractionAgentStore(
@@ -250,6 +262,7 @@ async function entry(ctx: JobContext): Promise<void> {
       callerContext,
       executionAgent,
       memoryEntries,
+      whatsappCoreStore,
       voiceInteractionAgentStore
     );
     console.info("[whatsapp-agent] interaction agent built", {

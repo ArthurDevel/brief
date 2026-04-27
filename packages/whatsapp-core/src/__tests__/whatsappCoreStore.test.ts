@@ -15,6 +15,7 @@ interface AuthUserRecord {
 
 interface MockSupabaseState {
   authUsersById: Map<string, AuthUserRecord>;
+  executionAgentThreads: Array<Record<string, unknown>>;
   nextMessageId: number;
   nextUserId: number;
   userSettingsByPhone: Map<string, string>;
@@ -50,6 +51,7 @@ function createSupabaseMock(): {
 } {
   const state: MockSupabaseState = {
     authUsersById: new Map<string, AuthUserRecord>(),
+    executionAgentThreads: [],
     nextMessageId: 1,
     nextUserId: 1,
     userSettingsByPhone: new Map<string, string>(),
@@ -158,6 +160,30 @@ function createSupabaseMock(): {
         };
       }
 
+      if (tableName === "execution_agent_threads") {
+        return {
+          select: () => ({
+            eq: (_columnName: string, userId: string) => ({
+              order: () => ({
+                limit: async (limit: number) => {
+                  const rows = state.executionAgentThreads
+                    .filter((row) => row.user_id === userId)
+                    .sort((first, second) => {
+                      return String(second.updated_at).localeCompare(String(first.updated_at));
+                    })
+                    .slice(0, limit);
+
+                  return {
+                    data: rows,
+                    error: null,
+                  };
+                },
+              }),
+            }),
+          }),
+        };
+      }
+
       if (tableName === "whatsapp_messages") {
         return {
           insert: (input: InsertWhatsAppMessageInput) => ({
@@ -242,5 +268,44 @@ describe("WhatsAppCoreStore", () => {
       text: "hi",
       user_id: "user-1",
     });
+  });
+
+  it("lists execution-agent threads for a user by most recent update", async () => {
+    const { state, supabase } = createSupabaseMock();
+    const store = new WhatsAppCoreStore(supabase);
+
+    state.executionAgentThreads.push(
+      {
+        agent_name: "calendar",
+        created_at: "2026-04-22T09:00:00.000Z",
+        id: "thread-1",
+        updated_at: "2026-04-22T10:00:00.000Z",
+        user_id: "user-1",
+      },
+      {
+        agent_name: "gmailInbox",
+        created_at: "2026-04-22T09:30:00.000Z",
+        id: "thread-2",
+        updated_at: "2026-04-22T11:00:00.000Z",
+        user_id: "user-1",
+      },
+      {
+        agent_name: "otherUser",
+        created_at: "2026-04-22T09:30:00.000Z",
+        id: "thread-3",
+        updated_at: "2026-04-22T12:00:00.000Z",
+        user_id: "user-2",
+      }
+    );
+
+    const threads = await store.listExecutionAgentThreads({
+      limit: 10,
+      userId: "user-1",
+    });
+
+    expect(threads.map((thread) => thread.agentName)).toEqual([
+      "gmailInbox",
+      "calendar",
+    ]);
   });
 });

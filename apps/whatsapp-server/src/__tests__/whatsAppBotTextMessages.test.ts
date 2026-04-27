@@ -79,6 +79,7 @@ function createPreparedTurn(text: string): PreparedInboundTextTurnResultDto {
         text,
         userId: "user-1",
       },
+      executionAgentThreads: [],
       linkedUser: {
         userId: "user-1",
         whatsappPhone: "+15551234567",

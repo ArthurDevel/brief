@@ -8,6 +8,7 @@
  */
 
 import type {
+  ExecutionAgentThreadDto,
   WhatsAppConversationMessageDto,
   WhatsAppLinkedUserDto,
   WhatsAppMemoryEntryDto,
@@ -27,6 +28,7 @@ export interface PrepareInboundTextTurnDto {
 export interface PreparedTextTurnDto {
   conversationHistory: WhatsAppConversationMessageDto[];
   currentMessage: WhatsAppConversationMessageDto;
+  executionAgentThreads: ExecutionAgentThreadDto[];
   linkedUser: WhatsAppLinkedUserDto;
   memoryEntries: WhatsAppMemoryEntryDto[];
 }
