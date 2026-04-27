@@ -1,8 +1,8 @@
 /**
- * Prompt builders for the WhatsApp voice OpenPoke runtimes.
+ * Prompt builders for the WhatsApp voice BrewDock runtimes.
  *
  * Responsibilities:
- * - Build the OpenPoke-style interaction prompt for WhatsApp voice turns
+ * - Build the BrewDock interaction prompt for WhatsApp voice turns
  * - Build the execution-agent prompt used for real tool execution
  * - Render voice conversation history into the same tagged structure as text
  */
@@ -22,7 +22,7 @@ const MAX_CONVERSATION_MESSAGES_IN_PROMPT = 20;
 const MAX_HISTORY_MESSAGES_BEFORE_CURRENT = MAX_CONVERSATION_MESSAGES_IN_PROMPT - 1;
 
 const WHATSAPP_VOICE_INTERACTION_SYSTEM_PROMPT = [
-  "You are OpenPoke on WhatsApp voice.",
+  "You are BrewDock on WhatsApp voice.",
   "You are the interaction agent for this WhatsApp voice channel.",
   "Always communicate with the user through the available tools. Do not reply with plain assistant text instead of a tool call.",
   "Use send_message_to_agent whenever a task needs external app access, lookup, or execution.",
@@ -201,7 +201,7 @@ function buildMemorySection(
 }
 
 /**
- * Renders recent conversation history into OpenPoke-style message tags.
+ * Renders recent conversation history into BrewDock-style message tags.
  * @param messages - Recent conversation messages
  * @returns Tagged history section
  */
