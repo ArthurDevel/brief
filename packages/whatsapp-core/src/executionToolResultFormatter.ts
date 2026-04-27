@@ -1,31 +1,41 @@
 /**
- * Shared formatter for WhatsApp execution-tool results.
+ * Shared execution-tool result post-processing.
  *
  * Responsibilities:
- * - Keep large Composio tool payloads small enough for execution-agent context
- * - Recursively format nested COMPOSIO_MULTI_EXECUTE_TOOL results
- * - Mark COMPOSIO_SEARCH_WEB summaries as source pointers, not verified data
- * - Preserve enough metadata for agents to continue with the right follow-up tool
+ * - Shrink large tool payloads before they are stored or replayed
+ * - Apply tool-specific shaping for Gmail and future toolkit integrations
+ * - Keep tool-result post-processing in one shared place for text and voice runtimes
  */
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
+interface ExecutionToolResultFormatterInputDto {
+  toolArguments: Record<string, unknown>;
+  toolName: string;
+  toolResultData: unknown;
+}
+
 interface HeaderEntry {
   name?: string;
   value?: string;
 }
 
-interface GmailMessage {
-  attachmentList?: unknown[];
+interface GmailMessageDto {
+  cc?: string;
   display_url?: string;
   labelIds?: string[];
   messageId?: string;
   messageText?: string;
   messageTimestamp?: string;
   payload?: {
+    body?: {
+      data?: string;
+    };
     headers?: HeaderEntry[];
+    mimeType?: string;
+    parts?: GmailPayloadPartDto[];
   };
   preview?: {
     body?: string;
@@ -37,103 +47,244 @@ interface GmailMessage {
   to?: string;
 }
 
-interface MultiExecuteToolInput {
+interface GmailFullMessageDto {
+  from: string;
+  fullText: string;
+  id: string | null;
+  receivedAt: string | null;
+  subject: string;
+  threadId: string | null;
+  to: string | null;
+  cc: string | null;
+}
+
+interface GmailFullThreadDto {
+  messages: GmailFullMessageDto[];
+  threadId: string | null;
+}
+
+interface GmailPayloadPartDto {
+  body?: {
+    attachmentId?: string;
+    data?: string;
+  };
+  mimeType?: string;
+  parts?: GmailPayloadPartDto[];
+}
+
+interface GmailMessageSummaryDto {
+  from: string;
+  id: string | null;
+  labels: string[];
+  preview: string;
+  receivedAt: string | null;
+  subject: string;
+  threadId: string | null;
+  to: string | null;
+  unread: boolean;
+  url: string | null;
+}
+
+interface ComposioRequestedToolDto {
   arguments?: Record<string, unknown>;
   tool_slug?: string;
 }
 
-interface MultiExecuteResult {
-  index?: number;
-  response?: {
-    data?: unknown;
-    [key: string]: unknown;
-  };
-  tool_slug?: string;
-  [key: string]: unknown;
-}
-
-interface SearchCitation {
+interface SearchCitationDto {
   title?: string;
   url?: string;
-  [key: string]: unknown;
 }
+
+type ExecutionToolResultFormatter = (
+  input: ExecutionToolResultFormatterInputDto
+) => unknown;
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-const COMPOSIO_MULTI_EXECUTE_TOOL = "COMPOSIO_MULTI_EXECUTE_TOOL";
+const MAX_GMAIL_PREVIEW_LENGTH = 240;
+const MAX_TOOL_RESULT_CHARACTERS = 20000;
+const TOOL_RESULT_TRUNCATION_MARKER = "[tool result truncuated due to size constraints]";
 const COMPOSIO_SEARCH_FETCH_URL_CONTENT = "COMPOSIO_SEARCH_FETCH_URL_CONTENT";
-const COMPOSIO_SEARCH_WEB = "COMPOSIO_SEARCH_WEB";
-const GMAIL_FETCH_EMAILS = "GMAIL_FETCH_EMAILS";
-const GMAIL_LIST_LABELS = "GMAIL_LIST_LABELS";
-const GMAIL_SEND_EMAIL = "GMAIL_SEND_EMAIL";
-const MAX_TEXT_PREVIEW_LENGTH = 240;
-
 const SEARCH_WEB_SOURCE_VERIFICATION_INSTRUCTION = [
   "This COMPOSIO_SEARCH_WEB result is a search summary, not verified source data.",
   "If the current task requires specific information from a source, call COMPOSIO_SEARCH_FETCH_URL_CONTENT with the relevant citation URL or URLs before using that information in a final answer.",
 ].join(" ");
 
+const TOOL_RESULT_FORMATTERS: Partial<Record<string, ExecutionToolResultFormatter>> = {
+  COMPOSIO_MULTI_EXECUTE_TOOL: formatComposioMultiExecuteToolResult,
+  COMPOSIO_SEARCH_WEB: formatComposioSearchWebResult,
+  GMAIL_FETCH_EMAILS: formatGmailFetchEmailsResult,
+  GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID: formatGmailFetchMessageByMessageIdResult,
+  GMAIL_FETCH_MESSAGE_BY_THREAD_ID: formatGmailFetchMessageByThreadIdResult,
+  GMAIL_GET_ATTACHMENT: formatGmailGetAttachmentResult,
+  GMAIL_LIST_LABELS: formatGmailListLabelsResult,
+  GMAIL_SEND_EMAIL: formatGmailSendEmailResult,
+};
+
 // ============================================================================
-// MAIN FORMATTER
+// MAIN ENTRYPOINT
 // ============================================================================
 
 /**
- * Post-processes one tool result data payload before it is shown to an execution agent.
- * @param toolName - Composio tool name that produced the data
- * @param data - Raw result data from Composio
- * @param toolArguments - Original tool arguments used to execute the tool
- * @returns Formatted result data
+ * Post-processes one tool result payload before it is stored or replayed.
+ * @param input - Tool name, arguments, and raw tool result data
+ * @returns Tool-specific compacted result data
  */
 export function postProcessExecutionToolResultData(
-  toolName: string,
-  data: unknown,
-  toolArguments: Record<string, unknown> = {}
+  input: ExecutionToolResultFormatterInputDto
 ): unknown {
-  if (toolName === COMPOSIO_MULTI_EXECUTE_TOOL) {
-    return formatMultiExecuteResult(data, toolArguments);
-  }
-
-  if (toolName === COMPOSIO_SEARCH_WEB) {
-    return formatComposioSearchWebResult(data);
-  }
-
-  if (toolName === GMAIL_FETCH_EMAILS) {
-    return formatGmailFetchResult(data);
-  }
-
-  if (toolName === GMAIL_LIST_LABELS) {
-    return formatGmailLabelResult(data);
-  }
-
-  if (toolName === GMAIL_SEND_EMAIL) {
-    return formatGmailSendResult(data);
-  }
-
-  return data;
+  const formatter = TOOL_RESULT_FORMATTERS[input.toolName];
+  const formattedResult = formatter ? formatter(input) : input.toolResultData;
+  return truncateToolResultForAgent(formattedResult);
 }
 
 // ============================================================================
-// COMPOSIO SEARCH FORMATTERS
+// HELPER FUNCTIONS
 // ============================================================================
 
 /**
- * Marks a COMPOSIO_SEARCH_WEB result as a summary that needs source fetching for specifics.
- * @param data - Raw COMPOSIO_SEARCH_WEB data
- * @returns Search data with source-verification guidance
+ * Formats Gmail fetch results into a smaller email-summary payload.
+ * @param input - Tool result formatter input
+ * @returns Reduced Gmail fetch data
  */
-function formatComposioSearchWebResult(data: unknown): unknown {
-  if (!isRecord(data)) {
-    return data;
+function formatGmailFetchEmailsResult(
+  input: ExecutionToolResultFormatterInputDto
+): unknown {
+  const data = asRecord(input.toolResultData);
+  if (!data) {
+    return input.toolResultData;
   }
 
-  const citationUrls = extractCitationUrls(data);
+  const messages = Array.isArray(data.messages)
+    ? data.messages.filter(isRecord).map(summarizeGmailMessage)
+    : [];
+
+  return {
+    messages,
+    ...(typeof data.nextPageToken === "string"
+      ? { nextPageToken: data.nextPageToken }
+      : {}),
+    resultSizeEstimate:
+      typeof data.resultSizeEstimate === "number"
+        ? data.resultSizeEstimate
+        : messages.length,
+  };
+}
+
+/**
+ * Formats Gmail label-list results into a smaller payload.
+ * @param input - Tool result formatter input
+ * @returns Reduced Gmail label data
+ */
+function formatGmailListLabelsResult(
+  input: ExecutionToolResultFormatterInputDto
+): unknown {
+  const data = asRecord(input.toolResultData);
+  if (!data) {
+    return input.toolResultData;
+  }
+
+  const labels = Array.isArray(data.labels)
+    ? data.labels.filter(isRecord).map((label) => ({
+        id: getOptionalString(label.id),
+        name: getOptionalString(label.name),
+        type: getOptionalString(label.type),
+      }))
+    : [];
+
+  return { labels };
+}
+
+/**
+ * Formats Gmail send results into a smaller payload.
+ * @param input - Tool result formatter input
+ * @returns Reduced Gmail send data
+ */
+function formatGmailSendEmailResult(
+  input: ExecutionToolResultFormatterInputDto
+): unknown {
+  const data = asRecord(input.toolResultData);
+  if (!data) {
+    return input.toolResultData;
+  }
+
+  return {
+    id: getOptionalString(data.id),
+    labelIds: Array.isArray(data.labelIds) ? data.labelIds : [],
+    threadId: getOptionalString(data.threadId),
+  };
+}
+
+/**
+ * Formats one full Gmail message fetch into readable email text only.
+ * @param input - Tool result formatter input
+ * @returns Full Gmail message text plus identifying metadata
+ */
+function formatGmailFetchMessageByMessageIdResult(
+  input: ExecutionToolResultFormatterInputDto
+): unknown {
+  const data = asRecord(input.toolResultData);
+  if (!data) {
+    return input.toolResultData;
+  }
+
+  return buildFullGmailMessage(data as GmailMessageDto);
+}
+
+/**
+ * Formats one Gmail thread fetch into full text for each returned message.
+ * @param input - Tool result formatter input
+ * @returns Full Gmail thread content
+ */
+function formatGmailFetchMessageByThreadIdResult(
+  input: ExecutionToolResultFormatterInputDto
+): unknown {
+  const data = asRecord(input.toolResultData);
+  if (!data) {
+    return input.toolResultData;
+  }
+
+  const rawMessages = Array.isArray(data.messages)
+    ? data.messages.filter(isRecord).map((message) => message as GmailMessageDto)
+    : [];
+  const messages = rawMessages
+    .slice()
+    .sort(compareGmailMessagesByTimestamp)
+    .map(buildFullGmailMessage);
+
+  return {
+    messages,
+    threadId: messages[0]?.threadId ?? getOptionalString(data.threadId),
+  } satisfies GmailFullThreadDto;
+}
+
+/**
+ * Formats Gmail attachments as unsupported for agent execution.
+ * @returns Unsupported attachment marker
+ */
+function formatGmailGetAttachmentResult(): string {
+  return "attachments not supported yet";
+}
+
+/**
+ * Marks Composio web-search output as a summary that needs source fetching for specifics.
+ * @param input - Tool result formatter input
+ * @returns Search output plus source-verification metadata
+ */
+function formatComposioSearchWebResult(
+  input: ExecutionToolResultFormatterInputDto
+): unknown {
+  const data = asRecord(input.toolResultData);
+  if (!data) {
+    return input.toolResultData;
+  }
 
   return {
     ...data,
     sourceVerification: {
-      citationUrls,
+      citationUrls: extractCitationUrls(data),
       fetchTool: COMPOSIO_SEARCH_FETCH_URL_CONTENT,
       instruction: SEARCH_WEB_SOURCE_VERIFICATION_INSTRUCTION,
       requiredWhen: "the current task requires specific information from a source",
@@ -143,289 +294,496 @@ function formatComposioSearchWebResult(data: unknown): unknown {
 }
 
 /**
- * Recursively post-processes nested COMPOSIO_MULTI_EXECUTE_TOOL results.
- * @param data - Raw multi-execute result data
- * @param toolArguments - Original multi-execute arguments
- * @returns Multi-execute result data with nested outputs formatted
+ * Formats Composio multi-execute results by shrinking each nested tool result.
+ * @param input - Tool result formatter input
+ * @returns Reduced multi-execute data
  */
-function formatMultiExecuteResult(
-  data: unknown,
-  toolArguments: Record<string, unknown>
+function formatComposioMultiExecuteToolResult(
+  input: ExecutionToolResultFormatterInputDto
 ): unknown {
-  if (!isRecord(data) || !Array.isArray(data.results)) {
-    return data;
+  const data = asRecord(input.toolResultData);
+  if (!data || !Array.isArray(data.results)) {
+    return input.toolResultData;
   }
 
-  const requestedTools = getMultiExecuteRequestedTools(toolArguments);
+  const requestedTools = getRequestedComposioTools(input.toolArguments);
+  const formattedResults = data.results.map((resultEntry, fallbackIndex) =>
+    formatComposioMultiExecuteResultEntry(resultEntry, requestedTools, fallbackIndex)
+  );
 
   return {
     ...data,
-    results: data.results.map((result, arrayIndex) => (
-      formatMultiExecuteNestedResult(result, requestedTools, arrayIndex)
-    )),
+    results: formattedResults,
   };
 }
 
 /**
- * Post-processes one nested result inside COMPOSIO_MULTI_EXECUTE_TOOL.
- * @param result - Raw nested result
- * @param requestedTools - Original nested tool requests
- * @param arrayIndex - Result array index
- * @returns Formatted nested result
+ * Formats one nested Composio multi-execute result entry.
+ * @param resultEntry - One raw result entry from Composio
+ * @param requestedTools - Original requested tool descriptors
+ * @param fallbackIndex - Array index used when Composio omits the entry index
+ * @returns Reduced nested result entry
  */
-function formatMultiExecuteNestedResult(
-  result: unknown,
-  requestedTools: MultiExecuteToolInput[],
-  arrayIndex: number
+function formatComposioMultiExecuteResultEntry(
+  resultEntry: unknown,
+  requestedTools: ComposioRequestedToolDto[],
+  fallbackIndex: number
 ): unknown {
-  if (!isRecord(result)) {
-    return result;
+  const entry = asRecord(resultEntry);
+  if (!entry) {
+    return resultEntry;
   }
 
-  const typedResult = result as MultiExecuteResult;
-  const requestedTool = requestedTools[getResultToolIndex(typedResult, arrayIndex)];
-  const nestedToolName = getNestedToolName(typedResult, requestedTool);
-  if (!nestedToolName) {
-    return result;
+  const resultIndex =
+    typeof entry.index === "number" && Number.isInteger(entry.index)
+      ? entry.index
+      : fallbackIndex;
+  const requestedTool = requestedTools[resultIndex];
+  if (!requestedTool?.tool_slug) {
+    return resultEntry;
+  }
+
+  const response = asRecord(entry.response);
+  if (!response || !Object.prototype.hasOwnProperty.call(response, "data")) {
+    return {
+      ...entry,
+      toolSlug: requestedTool.tool_slug,
+    };
   }
 
   return {
-    ...typedResult,
-    response: formatNestedResponse(typedResult.response, nestedToolName, requestedTool?.arguments),
+    ...entry,
+    toolSlug: requestedTool.tool_slug,
+    response: {
+      ...response,
+      data: postProcessExecutionToolResultData({
+        toolArguments: requestedTool.arguments ?? {},
+        toolName: requestedTool.tool_slug,
+        toolResultData: response.data,
+      }),
+    },
   };
 }
 
 /**
- * Post-processes a nested Composio response object when it has data.
- * @param response - Nested response object
- * @param nestedToolName - Real nested Composio tool slug
- * @param nestedArguments - Arguments used for the nested tool
- * @returns Formatted nested response
- */
-function formatNestedResponse(
-  response: MultiExecuteResult["response"],
-  nestedToolName: string,
-  nestedArguments: Record<string, unknown> | undefined
-): MultiExecuteResult["response"] {
-  if (!isRecord(response) || !Object.prototype.hasOwnProperty.call(response, "data")) {
-    return response;
-  }
-
-  return {
-    ...response,
-    data: postProcessExecutionToolResultData(
-      nestedToolName,
-      response.data,
-      nestedArguments ?? {}
-    ),
-  };
-}
-
-// ============================================================================
-// GMAIL FORMATTERS
-// ============================================================================
-
-/**
- * Formats Gmail fetch results into a smaller JSON payload.
- * @param data - Raw Gmail fetch data
- * @returns Smaller Gmail fetch payload
- */
-function formatGmailFetchResult(data: unknown): unknown {
-  if (!isRecord(data)) {
-    return data;
-  }
-
-  const messages = Array.isArray(data.messages)
-    ? (data.messages as GmailMessage[])
-    : [];
-
-  return {
-    messages: messages.map(summarizeGmailMessage),
-    nextPageToken: typeof data.nextPageToken === "string" ? data.nextPageToken : undefined,
-    resultSizeEstimate: typeof data.resultSizeEstimate === "number"
-      ? data.resultSizeEstimate
-      : messages.length,
-  };
-}
-
-/**
- * Formats Gmail label results into a smaller payload.
- * @param data - Raw Gmail label data
- * @returns Smaller label payload
- */
-function formatGmailLabelResult(data: unknown): unknown {
-  if (!isRecord(data)) {
-    return data;
-  }
-
-  const labels = Array.isArray(data.labels)
-    ? (data.labels as Array<{ id?: string; name?: string; type?: string }>).map((label) => ({
-        id: label.id,
-        name: label.name,
-        type: label.type,
-      }))
-    : [];
-
-  return { labels };
-}
-
-/**
- * Formats Gmail send results into a smaller payload.
- * @param data - Raw Gmail send data
- * @returns Smaller send payload
- */
-function formatGmailSendResult(data: unknown): unknown {
-  if (!isRecord(data)) {
-    return data;
-  }
-
-  return {
-    id: data.id,
-    threadId: data.threadId,
-    labelIds: data.labelIds,
-  };
-}
-
-/**
- * Maps one Gmail message into a smaller summary payload.
+ * Summarizes one Gmail message into a compact replay-safe shape.
  * @param message - Raw Gmail message payload
- * @returns Simplified message summary
+ * @returns Reduced Gmail message summary
  */
-function summarizeGmailMessage(message: GmailMessage): Record<string, unknown> {
-  const subject = message.subject?.trim()
-    || message.preview?.subject?.trim()
-    || extractHeader(message, "subject")
+function summarizeGmailMessage(message: Record<string, unknown>): GmailMessageSummaryDto {
+  const gmailMessage = message as GmailMessageDto;
+  const subject = gmailMessage.subject?.trim()
+    || gmailMessage.preview?.subject?.trim()
+    || extractHeader(gmailMessage, "subject")
     || "(no subject)";
-  const sender = message.sender?.trim() || extractHeader(message, "from") || "Unknown sender";
-  const previewSource = message.preview?.body?.trim() || message.messageText?.trim() || "";
+  const from = getGmailFrom(gmailMessage);
+  const to = getGmailTo(gmailMessage);
+  const previewSource = gmailMessage.preview?.body?.trim()
+    || stripHtml(gmailMessage.messageText?.trim() || "");
   const preview = previewSource
-    ? truncate(compactWhitespace(previewSource), MAX_TEXT_PREVIEW_LENGTH)
+    ? truncate(compactWhitespace(previewSource), MAX_GMAIL_PREVIEW_LENGTH)
     : "";
 
   return {
-    id: message.messageId,
-    labels: (message.labelIds ?? []).filter((label) => label !== "UNREAD"),
+    from,
+    id: gmailMessage.messageId ?? null,
+    labels: Array.isArray(gmailMessage.labelIds)
+      ? gmailMessage.labelIds.filter((label) => label !== "UNREAD")
+      : [],
     preview,
-    receivedAt: message.messageTimestamp,
-    sender,
+    receivedAt: gmailMessage.messageTimestamp ?? null,
     subject,
-    threadId: message.threadId,
-    unread: message.labelIds?.includes("UNREAD") ?? false,
-    unsupportedAttachments: Array.isArray(message.attachmentList) && message.attachmentList.length > 0
-      ? message.attachmentList.length
-      : undefined,
-    url: message.display_url,
+    threadId: gmailMessage.threadId ?? null,
+    to,
+    unread: gmailMessage.labelIds?.includes("UNREAD") ?? false,
+    url: gmailMessage.display_url ?? null,
   };
 }
 
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
+/**
+ * Builds one full Gmail message DTO with readable text.
+ * @param message - Raw Gmail message payload
+ * @returns Full Gmail message content
+ */
+function buildFullGmailMessage(message: GmailMessageDto): GmailFullMessageDto {
+  return {
+    cc: getGmailCc(message),
+    from: getGmailFrom(message),
+    fullText: extractFullEmailText(message),
+    id: message.messageId ?? null,
+    receivedAt: message.messageTimestamp ?? null,
+    subject: getGmailSubject(message),
+    threadId: message.threadId ?? null,
+    to: getGmailTo(message),
+  };
+}
 
 /**
- * Returns one named email header value.
+ * Extracts the best readable full-text body from one Gmail message payload.
+ * @param message - Raw Gmail message payload
+ * @returns Readable email text
+ */
+function extractFullEmailText(message: GmailMessageDto): string {
+  const plainTextFromPayload = extractDecodedPayloadText(message.payload, "text/plain");
+  if (plainTextFromPayload) {
+    return normalizePlainText(plainTextFromPayload);
+  }
+
+  const htmlTextFromPayload = extractDecodedPayloadText(message.payload, "text/html");
+  if (htmlTextFromPayload) {
+    return normalizeHtmlToText(htmlTextFromPayload);
+  }
+
+  if (message.messageText?.trim()) {
+    return looksLikeHtml(message.messageText)
+      ? normalizeHtmlToText(message.messageText)
+      : normalizePlainText(message.messageText);
+  }
+
+  if (message.preview?.body?.trim()) {
+    return normalizePlainText(message.preview.body);
+  }
+
+  return "";
+}
+
+/**
+ * Returns the normalized subject for one Gmail message.
+ * @param message - Raw Gmail message payload
+ * @returns Message subject
+ */
+function getGmailSubject(message: GmailMessageDto): string {
+  return message.subject?.trim()
+    || message.preview?.subject?.trim()
+    || extractHeader(message, "subject")
+    || "(no subject)";
+}
+
+/**
+ * Returns the normalized sender for one Gmail message.
+ * @param message - Raw Gmail message payload
+ * @returns Message sender
+ */
+function getGmailFrom(message: GmailMessageDto): string {
+  return message.sender?.trim()
+    || extractHeader(message, "from")
+    || "Unknown sender";
+}
+
+/**
+ * Returns the normalized To recipients for one Gmail message.
+ * @param message - Raw Gmail message payload
+ * @returns To recipients or null
+ */
+function getGmailTo(message: GmailMessageDto): string | null {
+  return message.to?.trim() || extractHeader(message, "to") || null;
+}
+
+/**
+ * Returns the normalized Cc recipients for one Gmail message.
+ * @param message - Raw Gmail message payload
+ * @returns Cc recipients or null
+ */
+function getGmailCc(message: GmailMessageDto): string | null {
+  return message.cc?.trim() || extractHeader(message, "cc") || null;
+}
+
+/**
+ * Returns the requested nested tools from one Composio multi-execute call.
+ * @param toolArguments - Raw outer meta-tool arguments
+ * @returns Ordered requested tool descriptors
+ */
+function getRequestedComposioTools(
+  toolArguments: Record<string, unknown>
+): ComposioRequestedToolDto[] {
+  if (!Array.isArray(toolArguments.tools)) {
+    return [];
+  }
+
+  return toolArguments.tools.filter(isRecord).map((tool) => ({
+    arguments: isRecord(tool.arguments) ? tool.arguments : undefined,
+    tool_slug: typeof tool.tool_slug === "string" ? tool.tool_slug : undefined,
+  }));
+}
+
+/**
+ * Extracts citation URLs from common Composio web-search result shapes.
+ * @param data - Composio web-search output
+ * @returns Citation URLs in source order
+ */
+function extractCitationUrls(data: Record<string, unknown>): string[] {
+  const directCitations = Array.isArray(data.citations) ? data.citations : [];
+  const nestedResults = asRecord(data.results);
+  const nestedCitations = Array.isArray(nestedResults?.citations)
+    ? nestedResults.citations
+    : [];
+
+  return [...directCitations, ...nestedCitations]
+    .filter(isRecord)
+    .map((citation) => (citation as SearchCitationDto).url)
+    .filter((url): url is string => typeof url === "string" && url.trim().length > 0);
+}
+
+/**
+ * Sorts Gmail messages by their receive timestamp, oldest first.
+ * @param left - Left Gmail message
+ * @param right - Right Gmail message
+ * @returns Sort order
+ */
+function compareGmailMessagesByTimestamp(
+  left: GmailMessageDto,
+  right: GmailMessageDto
+): number {
+  const leftTimestamp = getGmailMessageSortTimestamp(left);
+  const rightTimestamp = getGmailMessageSortTimestamp(right);
+  return leftTimestamp - rightTimestamp;
+}
+
+/**
+ * Returns a sortable timestamp for one Gmail message.
+ * @param message - Gmail message payload
+ * @returns Milliseconds since epoch, or positive infinity when unavailable
+ */
+function getGmailMessageSortTimestamp(message: GmailMessageDto): number {
+  if (!message.messageTimestamp) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const parsedTimestamp = Date.parse(message.messageTimestamp);
+  return Number.isFinite(parsedTimestamp) ? parsedTimestamp : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Applies one global size limit to the final agent-visible tool result.
+ * @param value - Final formatted tool result
+ * @returns Truncated value when the serialized form exceeds the global cap
+ */
+function truncateToolResultForAgent(value: unknown): unknown {
+  if (typeof value === "string") {
+    return truncateSerializedToolResult(value);
+  }
+
+  const serializedValue = JSON.stringify(value);
+  if (serializedValue.length <= MAX_TOOL_RESULT_CHARACTERS) {
+    return value;
+  }
+
+  return truncateSerializedToolResult(serializedValue);
+}
+
+/**
+ * Truncates one serialized tool result string to the global cap.
+ * @param value - Serialized tool result
+ * @returns Truncated serialized result with a marker suffix
+ */
+function truncateSerializedToolResult(value: string): string {
+  if (value.length <= MAX_TOOL_RESULT_CHARACTERS) {
+    return value;
+  }
+
+  const allowedPrefixLength =
+    MAX_TOOL_RESULT_CHARACTERS - TOOL_RESULT_TRUNCATION_MARKER.length - 1;
+  if (allowedPrefixLength <= 0) {
+    return TOOL_RESULT_TRUNCATION_MARKER;
+  }
+
+  return `${value.slice(0, allowedPrefixLength)} ${TOOL_RESULT_TRUNCATION_MARKER}`;
+}
+
+/**
+ * Extracts one named header value from a Gmail message.
  * @param message - Gmail message payload
  * @param name - Target header name
  * @returns Trimmed header value when present
  */
-function extractHeader(message: GmailMessage, name: string): string | undefined {
-  const target = name.toLowerCase();
-
+function extractHeader(message: GmailMessageDto, name: string): string | undefined {
+  const targetName = name.toLowerCase();
   return message.payload?.headers
-    ?.find((header) => header.name?.toLowerCase() === target)
-    ?.value
-    ?.trim();
+    ?.find((header) => header.name?.toLowerCase() === targetName)
+    ?.value?.trim();
 }
 
 /**
- * Compacts repeated whitespace into single spaces.
- * @param value - Raw text value
- * @returns Cleaned single-line text
+ * Collapses repeated whitespace into single spaces.
+ * @param value - Raw text
+ * @returns Cleaned one-line text
  */
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
 /**
- * Extracts citation URLs from common COMPOSIO_SEARCH_WEB result shapes.
- * @param data - Search result data
- * @returns Citation URLs in original order
+ * Removes simple HTML tags from a string.
+ * @param value - Raw text or HTML string
+ * @returns Plain-text approximation
  */
-function extractCitationUrls(data: Record<string, unknown>): string[] {
-  const directCitations = Array.isArray(data.citations) ? data.citations : [];
-  const nestedResults = isRecord(data.results) ? data.results : {};
-  const nestedCitations = Array.isArray(nestedResults.citations) ? nestedResults.citations : [];
-
-  return [...directCitations, ...nestedCitations]
-    .map((citation) => isRecord(citation) ? (citation as SearchCitation).url : null)
-    .filter((url): url is string => typeof url === "string" && url.trim().length > 0);
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]+>/g, " ");
 }
 
 /**
- * Returns the original nested tool requests from multi-execute arguments.
- * @param toolArguments - Raw multi-execute arguments
- * @returns Original nested tool inputs
+ * Returns decoded payload text for the requested MIME type when present.
+ * @param payload - Gmail payload root
+ * @param targetMimeType - MIME type to extract
+ * @returns Decoded text body or null
  */
-function getMultiExecuteRequestedTools(
-  toolArguments: Record<string, unknown>
-): MultiExecuteToolInput[] {
-  if (!Array.isArray(toolArguments.tools)) {
-    return [];
-  }
-
-  return toolArguments.tools.filter((tool): tool is MultiExecuteToolInput => isRecord(tool));
-}
-
-/**
- * Returns the result index used to map a response back to the requested nested tool.
- * @param result - Nested multi-execute result
- * @param arrayIndex - Fallback result array index
- * @returns Requested tool index
- */
-function getResultToolIndex(result: MultiExecuteResult, arrayIndex: number): number {
-  return typeof result.index === "number" ? result.index : arrayIndex;
-}
-
-/**
- * Returns the real nested tool slug for a multi-execute result.
- * @param result - Nested multi-execute result
- * @param requestedTool - Matching original nested tool request
- * @returns Nested tool slug when known
- */
-function getNestedToolName(
-  result: MultiExecuteResult,
-  requestedTool: MultiExecuteToolInput | undefined
+function extractDecodedPayloadText(
+  payload: GmailMessageDto["payload"],
+  targetMimeType: string
 ): string | null {
-  if (typeof result.tool_slug === "string" && result.tool_slug.trim()) {
-    return result.tool_slug;
+  if (!payload) {
+    return null;
   }
 
-  if (typeof requestedTool?.tool_slug === "string" && requestedTool.tool_slug.trim()) {
-    return requestedTool.tool_slug;
+  const directMimeType = payload.mimeType?.toLowerCase();
+  const directBodyData = payload.body?.data;
+  if (directMimeType === targetMimeType && typeof directBodyData === "string") {
+    return decodeBase64UrlToUtf8(directBodyData);
+  }
+
+  return extractDecodedPayloadPartText(payload.parts ?? [], targetMimeType);
+}
+
+/**
+ * Recursively searches nested Gmail payload parts for one MIME type.
+ * @param parts - Nested Gmail MIME parts
+ * @param targetMimeType - MIME type to extract
+ * @returns Decoded text body or null
+ */
+function extractDecodedPayloadPartText(
+  parts: GmailPayloadPartDto[],
+  targetMimeType: string
+): string | null {
+  for (const part of parts) {
+    const mimeType = part.mimeType?.toLowerCase();
+    const partBodyData = part.body?.data;
+    if (mimeType === targetMimeType && typeof partBodyData === "string") {
+      return decodeBase64UrlToUtf8(partBodyData);
+    }
+
+    if (Array.isArray(part.parts) && part.parts.length > 0) {
+      const nestedMatch = extractDecodedPayloadPartText(part.parts, targetMimeType);
+      if (nestedMatch) {
+        return nestedMatch;
+      }
+    }
   }
 
   return null;
 }
 
 /**
- * Returns whether a value is a non-array object.
- * @param value - Unknown value
- * @returns True when the value is a record
+ * Decodes one Gmail base64url body into UTF-8 text.
+ * @param value - Gmail base64url-encoded body
+ * @returns Decoded UTF-8 text
  */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+function decodeBase64UrlToUtf8(value: string): string {
+  const normalizedValue = value.replace(/-/g, "+").replace(/_/g, "/");
+  const paddingLength = (4 - (normalizedValue.length % 4)) % 4;
+  const paddedValue = `${normalizedValue}${"=".repeat(paddingLength)}`;
+  return Buffer.from(paddedValue, "base64").toString("utf8");
 }
 
 /**
- * Truncates a string for compact summaries.
+ * Returns whether the string looks like HTML.
  * @param value - Raw text value
- * @param maxLength - Maximum allowed string length
- * @returns Truncated string
+ * @returns True when the value appears to be HTML
+ */
+function looksLikeHtml(value: string): boolean {
+  return /<[^>]+>/.test(value);
+}
+
+/**
+ * Normalizes plain text while keeping paragraph breaks readable.
+ * @param value - Raw plain-text body
+ * @returns Cleaned plain-text body
+ */
+function normalizePlainText(value: string): string {
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/[ \u00A0]+\n/g, "\n")
+    .replace(/\n[ \u00A0]+/g, "\n")
+    .replace(/[ \u00A0]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Converts HTML email content into readable plain text.
+ * @param value - Raw HTML body
+ * @returns Readable text body
+ */
+function normalizeHtmlToText(value: string): string {
+  const withoutScripts = value
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+  const withLineBreakHints = withoutScripts
+    .replace(/<(br|hr)\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|section|article|header|footer|tr|table|h[1-6])>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "\n- ");
+  const decodedEntities = decodeHtmlEntities(stripHtml(withLineBreakHints));
+  return normalizePlainText(decodedEntities);
+}
+
+/**
+ * Decodes a small set of common HTML entities.
+ * @param value - Text containing HTML entities
+ * @returns Decoded text
+ */
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'");
+}
+
+/**
+ * Truncates a string to the requested maximum length.
+ * @param value - Raw text
+ * @param maxLength - Maximum output length
+ * @returns Truncated text
  */
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;
   }
 
-  return `${value.slice(0, maxLength - 1).trimEnd()}...`;
+  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+/**
+ * Casts an unknown value to a plain record when possible.
+ * @param value - Unknown value
+ * @returns Plain object record or null
+ */
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return value;
+}
+
+/**
+ * Returns whether a value is a plain object record.
+ * @param value - Unknown value
+ * @returns True when the value is a non-array object
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Returns a string value when the candidate is a string.
+ * @param value - Unknown value
+ * @returns String value or null
+ */
+function getOptionalString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }

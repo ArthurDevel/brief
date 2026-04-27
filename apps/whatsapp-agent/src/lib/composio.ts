@@ -188,8 +188,8 @@ export function mapSessionToolsToLiveKitTools(
 
           return formatToolResult(
             slug,
-            result,
-            (rawArguments ?? {}) as Record<string, unknown>
+            (rawArguments ?? {}) as Record<string, unknown>,
+            result
           );
         },
       }),
@@ -243,22 +243,26 @@ function isComposioMetaTool(toolSlug: string): boolean {
 /**
  * Formats selected Composio tool results into smaller spoken-friendly payloads.
  * @param toolSlug - Executed Composio tool slug
+ * @param toolArguments - Tool arguments used for execution
  * @param result - Raw Composio execution result
- * @param toolArguments - Original tool arguments
  * @returns Stringified result payload for the LLM
  */
 function formatToolResult(
   toolSlug: string,
-  result: ToolExecutionResult,
-  toolArguments: Record<string, unknown>
+  toolArguments: Record<string, unknown>,
+  result: ToolExecutionResult
 ): string {
   if (result.error) {
     return JSON.stringify(result);
   }
 
-  const formattedData = Object.prototype.hasOwnProperty.call(result, "data")
-    ? postProcessExecutionToolResultData(toolSlug, result.data, toolArguments)
-    : result;
+  const formattedResult = postProcessExecutionToolResultData({
+    toolArguments,
+    toolName: toolSlug,
+    toolResultData: result.data ?? result,
+  });
 
-  return JSON.stringify(formattedData);
+  return typeof formattedResult === "string"
+    ? formattedResult
+    : JSON.stringify(formattedResult);
 }

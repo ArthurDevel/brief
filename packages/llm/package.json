@@ -1,0 +1,17 @@
+{
+  "name": "@dublin/llm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./client.ts",
+  "exports": {
+    ".": "./client.ts",
+    "./client": "./client.ts",
+    "./types": "./types.ts",
+    "./providers/openrouter": "./providers/openrouter.ts",
+    "./providers/cerebras": "./providers/cerebras.ts"
+  },
+  "dependencies": {
+    "@langfuse/tracing": "^5.2.0"
+  }
+}

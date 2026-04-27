@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { WhatsAppInteractionAgent } from "../text/interactionAgent.js";
 import type {
-  OpenRouterAssistantMessageDto,
-  OpenRouterTextClient,
-} from "../text/openRouterClient.js";
+  LlmAssistantMessageDto,
+  LlmTextClient,
+} from "@dublin/llm/types";
+import { WhatsAppInteractionAgent } from "../text/interactionAgent.js";
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -26,6 +26,7 @@ function createPreparedTurn() {
       text: "check my inbox",
       userId: "user-1",
     },
+    executionAgentThreads: [],
     linkedUser: {
       userId: "user-1",
       whatsappPhone: "+15551234567",
@@ -40,8 +41,8 @@ function createPreparedTurn() {
  * @returns Mock OpenRouter client
  */
 function createMockOpenRouterClient(
-  responses: OpenRouterAssistantMessageDto[]
-): OpenRouterTextClient {
+  responses: LlmAssistantMessageDto[]
+): LlmTextClient {
   return {
     createChatCompletion: vi.fn().mockImplementation(async () => {
       const response = responses.shift();

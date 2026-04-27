@@ -5,7 +5,11 @@ import type {
   VoiceMessageTranscriptionRequest,
   VoiceMessageTranscriptionResult,
 } from "../deepgramVoiceMessageTranscriber.js";
-import type { PreparedInboundTextTurnResultDto } from "../text/types.js";
+import type {
+  PreparedInboundTextTurnResultDto,
+  PreparedTextTurnDto,
+  WhatsAppUserVisibleActionDto,
+} from "../text/types.js";
 
 // ============================================================================
 // TYPES
@@ -36,7 +40,7 @@ interface MockTextAgentDependencies {
     recordOutboundReply: ReturnType<typeof vi.fn>;
   };
   textInteractionAgent: {
-    generateReply: ReturnType<typeof vi.fn>;
+    runTurn: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -138,6 +142,7 @@ function createTextAgentDependencies(): MockTextAgentDependencies {
         text: "hello world",
         userId: "user-1",
       },
+      executionAgentThreads: [],
       linkedUser: {
         userId: "user-1",
         whatsappPhone: "+15551234567",
@@ -152,7 +157,24 @@ function createTextAgentDependencies(): MockTextAgentDependencies {
       recordOutboundReply: vi.fn().mockResolvedValue(undefined),
     },
     textInteractionAgent: {
-      generateReply: vi.fn().mockResolvedValue("mocked text reply"),
+      runTurn: vi.fn().mockImplementation(async (
+        _turn: PreparedTextTurnDto,
+        emitAction?: (action: WhatsAppUserVisibleActionDto) => Promise<void>
+      ) => {
+        const action = {
+          message: "mocked text reply",
+          type: "message",
+        } satisfies WhatsAppUserVisibleActionDto;
+
+        if (emitAction) {
+          await emitAction(action);
+        }
+
+        return {
+          actions: [action],
+          status: "completed",
+        };
+      }),
     },
   };
 }
@@ -390,7 +412,7 @@ describe("WhatsAppBot voice messages", () => {
       },
       text: "hello world",
     });
-    expect(textDeps.textInteractionAgent.generateReply).toHaveBeenCalledTimes(1);
+    expect(textDeps.textInteractionAgent.runTurn).toHaveBeenCalledTimes(1);
     expect(client.messages.text).toHaveBeenCalledTimes(1);
     expect(client.messages.text).toHaveBeenCalledWith({
       body: "mocked text reply",
@@ -427,7 +449,7 @@ describe("WhatsAppBot voice messages", () => {
 
     await bot.handleWebhook(createAudioWebhookBody());
 
-    expect(textDeps.textInteractionAgent.generateReply).not.toHaveBeenCalled();
+    expect(textDeps.textInteractionAgent.runTurn).not.toHaveBeenCalled();
     expect(client.messages.text).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { LlmTextClient } from "@dublin/llm/types";
 import { VoiceOpenPokeInteractionAgentRuntime } from "../openpoke/interactionAgent.js";
 import type { VoiceExecutionObserver } from "../openpoke/narrationTypes.js";
 import {
@@ -6,7 +7,6 @@ import {
   buildVoiceOpenPokeInteractionSystemPrompt,
   buildVoiceOpenPokeInteractionUserPrompt,
 } from "../openpoke/promptBuilder.js";
-import type { OpenRouterTextClient } from "../openpoke/openRouterClient.js";
 import type { VoiceOpenPokeExecutionAgent } from "../openpoke/executionAgent.js";
 import { getDefaultWhatsAppVoiceConfig } from "../whatsappVoice.js";
 
@@ -32,6 +32,15 @@ describe("buildVoiceOpenPokeInteractionUserPrompt", () => {
         direction: "inbound",
         text: "Check my next meeting",
       },
+      executionAgentThreads: [
+        {
+          agentName: "calendar",
+          createdAt: "2026-04-23T09:00:00.000Z",
+          id: "thread-1",
+          updatedAt: "2026-04-23T09:30:00.000Z",
+          userId: "user_123",
+        },
+      ],
       memoryEntries: [
         {
           id: "memory_1",
@@ -40,9 +49,15 @@ describe("buildVoiceOpenPokeInteractionUserPrompt", () => {
       ],
     });
 
+    expect(buildVoiceOpenPokeInteractionSystemPrompt()).toContain(
+      "You are BrewDock on WhatsApp voice."
+    );
+    expect(buildVoiceOpenPokeInteractionSystemPrompt()).not.toContain("You are OpenPoke");
     expect(buildVoiceOpenPokeInteractionSystemPrompt()).toContain("interaction agent");
     expect(prompt).toContain("<channel_context>");
     expect(prompt).toContain("<user_memory>");
+    expect(prompt).toContain("<execution_agent_threads>");
+    expect(prompt).toContain("- calendar (updated 2026-04-23T09:30:00.000Z)");
     expect(prompt).toContain("<conversation_history>");
     expect(prompt).toContain("<new_user_message>");
     expect(prompt).toContain("Check my next meeting");
@@ -60,6 +75,7 @@ describe("buildVoiceOpenPokeConversationStartUserPrompt", () => {
         voiceConfig: getDefaultWhatsAppVoiceConfig(),
       },
       conversationHistory: [],
+      executionAgentThreads: [],
       memoryEntries: [
         {
           id: "memory_1",
@@ -78,7 +94,7 @@ describe("buildVoiceOpenPokeConversationStartUserPrompt", () => {
 
 describe("VoiceOpenPokeInteractionAgentRuntime", () => {
   it("emits the initial greeting from the interaction agent on conversation start", async () => {
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: vi.fn().mockResolvedValue({
         content: "",
         toolCalls: [
@@ -111,6 +127,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           voiceConfig: getDefaultWhatsAppVoiceConfig(),
         },
         conversationHistory: [],
+        executionAgentThreads: [],
         memoryEntries: [],
       },
       emitActionMock
@@ -133,7 +150,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
 
   it("delegates to the execution agent and emits the final spoken message", async () => {
     const createChatCompletionMock = vi
-      .fn<OpenRouterTextClient["createChatCompletion"]>()
+      .fn<LlmTextClient["createChatCompletion"]>()
       .mockResolvedValueOnce({
         content: "",
         toolCalls: [
@@ -159,7 +176,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           },
         ],
       });
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: createChatCompletionMock,
     };
     const executeMock = vi.fn().mockResolvedValue({
@@ -191,6 +208,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           direction: "inbound",
           text: "Check my next meeting",
         },
+        executionAgentThreads: [],
         memoryEntries: [],
       },
       emitActionMock
@@ -219,7 +237,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
   });
 
   it("returns wait when the model chooses the wait tool", async () => {
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: vi.fn().mockResolvedValue({
         content: "",
         toolCalls: [
@@ -255,6 +273,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
         direction: "inbound",
         text: "Anything else?",
       },
+      executionAgentThreads: [],
       memoryEntries: [],
     });
 
@@ -266,7 +285,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
 
   it("forwards the execution observer to the execution agent", async () => {
     const createChatCompletionMock = vi
-      .fn<OpenRouterTextClient["createChatCompletion"]>()
+      .fn<LlmTextClient["createChatCompletion"]>()
       .mockResolvedValueOnce({
         content: "",
         toolCalls: [
@@ -292,7 +311,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           },
         ],
       });
-    const openRouterClient: OpenRouterTextClient = {
+    const openRouterClient: LlmTextClient = {
       createChatCompletion: createChatCompletionMock,
     };
     const executeMock = vi.fn().mockResolvedValue({
@@ -326,6 +345,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           direction: "inbound",
           text: "Check my next meeting",
         },
+        executionAgentThreads: [],
         memoryEntries: [],
       },
       undefined,
