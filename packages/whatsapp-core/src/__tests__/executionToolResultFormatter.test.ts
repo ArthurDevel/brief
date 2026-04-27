@@ -2,6 +2,89 @@ import { describe, expect, it } from "vitest";
 import { postProcessExecutionToolResultData } from "../executionToolResultFormatter.js";
 
 describe("postProcessExecutionToolResultData", () => {
+  it("marks Composio web-search output as summary data that needs source fetching for specifics", () => {
+    const result = postProcessExecutionToolResultData({
+      toolArguments: {
+        query: "specific source-backed question",
+      },
+      toolName: "COMPOSIO_SEARCH_WEB",
+      toolResultData: {
+        answer: "A summarized answer.",
+        citations: [
+          {
+            title: "Official source",
+            url: "https://example.com/source",
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      answer: "A summarized answer.",
+      sourceVerification: {
+        citationUrls: ["https://example.com/source"],
+        fetchTool: "COMPOSIO_SEARCH_FETCH_URL_CONTENT",
+        requiredWhen: "the current task requires specific information from a source",
+        searchResultType: "summary",
+      },
+    });
+    expect(JSON.stringify(result)).toContain(
+      "If the current task requires specific information from a source"
+    );
+  });
+
+  it("marks nested Composio web-search output inside COMPOSIO_MULTI_EXECUTE_TOOL", () => {
+    const result = postProcessExecutionToolResultData({
+      toolArguments: {
+        tools: [
+          {
+            arguments: {
+              query: "specific source-backed question",
+            },
+            tool_slug: "COMPOSIO_SEARCH_WEB",
+          },
+        ],
+      },
+      toolName: "COMPOSIO_MULTI_EXECUTE_TOOL",
+      toolResultData: {
+        results: [
+          {
+            index: 0,
+            response: {
+              data: {
+                answer: "A nested summarized answer.",
+                citations: [
+                  {
+                    title: "Nested source",
+                    url: "https://example.com/nested-source",
+                  },
+                ],
+              },
+              successful: true,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      results: [
+        {
+          response: {
+            data: {
+              answer: "A nested summarized answer.",
+              sourceVerification: {
+                citationUrls: ["https://example.com/nested-source"],
+                fetchTool: "COMPOSIO_SEARCH_FETCH_URL_CONTENT",
+              },
+            },
+          },
+          toolSlug: "COMPOSIO_SEARCH_WEB",
+        },
+      ],
+    });
+  });
+
   it("shrinks direct Gmail fetch results to compact message summaries", () => {
     const result = postProcessExecutionToolResultData({
       toolArguments: {

@@ -90,6 +90,11 @@ interface ComposioRequestedToolDto {
   tool_slug?: string;
 }
 
+interface SearchCitationDto {
+  title?: string;
+  url?: string;
+}
+
 type ExecutionToolResultFormatter = (
   input: ExecutionToolResultFormatterInputDto
 ) => unknown;
@@ -101,9 +106,15 @@ type ExecutionToolResultFormatter = (
 const MAX_GMAIL_PREVIEW_LENGTH = 240;
 const MAX_TOOL_RESULT_CHARACTERS = 20000;
 const TOOL_RESULT_TRUNCATION_MARKER = "[tool result truncuated due to size constraints]";
+const COMPOSIO_SEARCH_FETCH_URL_CONTENT = "COMPOSIO_SEARCH_FETCH_URL_CONTENT";
+const SEARCH_WEB_SOURCE_VERIFICATION_INSTRUCTION = [
+  "This COMPOSIO_SEARCH_WEB result is a search summary, not verified source data.",
+  "If the current task requires specific information from a source, call COMPOSIO_SEARCH_FETCH_URL_CONTENT with the relevant citation URL or URLs before using that information in a final answer.",
+].join(" ");
 
 const TOOL_RESULT_FORMATTERS: Partial<Record<string, ExecutionToolResultFormatter>> = {
   COMPOSIO_MULTI_EXECUTE_TOOL: formatComposioMultiExecuteToolResult,
+  COMPOSIO_SEARCH_WEB: formatComposioSearchWebResult,
   GMAIL_FETCH_EMAILS: formatGmailFetchEmailsResult,
   GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID: formatGmailFetchMessageByMessageIdResult,
   GMAIL_FETCH_MESSAGE_BY_THREAD_ID: formatGmailFetchMessageByThreadIdResult,
@@ -255,6 +266,31 @@ function formatGmailFetchMessageByThreadIdResult(
  */
 function formatGmailGetAttachmentResult(): string {
   return "attachments not supported yet";
+}
+
+/**
+ * Marks Composio web-search output as a summary that needs source fetching for specifics.
+ * @param input - Tool result formatter input
+ * @returns Search output plus source-verification metadata
+ */
+function formatComposioSearchWebResult(
+  input: ExecutionToolResultFormatterInputDto
+): unknown {
+  const data = asRecord(input.toolResultData);
+  if (!data) {
+    return input.toolResultData;
+  }
+
+  return {
+    ...data,
+    sourceVerification: {
+      citationUrls: extractCitationUrls(data),
+      fetchTool: COMPOSIO_SEARCH_FETCH_URL_CONTENT,
+      instruction: SEARCH_WEB_SOURCE_VERIFICATION_INSTRUCTION,
+      requiredWhen: "the current task requires specific information from a source",
+      searchResultType: "summary",
+    },
+  };
 }
 
 /**
@@ -468,6 +504,24 @@ function getRequestedComposioTools(
     arguments: isRecord(tool.arguments) ? tool.arguments : undefined,
     tool_slug: typeof tool.tool_slug === "string" ? tool.tool_slug : undefined,
   }));
+}
+
+/**
+ * Extracts citation URLs from common Composio web-search result shapes.
+ * @param data - Composio web-search output
+ * @returns Citation URLs in source order
+ */
+function extractCitationUrls(data: Record<string, unknown>): string[] {
+  const directCitations = Array.isArray(data.citations) ? data.citations : [];
+  const nestedResults = asRecord(data.results);
+  const nestedCitations = Array.isArray(nestedResults?.citations)
+    ? nestedResults.citations
+    : [];
+
+  return [...directCitations, ...nestedCitations]
+    .filter(isRecord)
+    .map((citation) => (citation as SearchCitationDto).url)
+    .filter((url): url is string => typeof url === "string" && url.trim().length > 0);
 }
 
 /**
