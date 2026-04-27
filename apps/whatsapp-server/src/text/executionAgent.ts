@@ -13,6 +13,7 @@ import { Composio } from "@composio/core";
 import { createLlmTextClient } from "@dublin/llm/client";
 import {
   createWhatsAppCoreStore,
+  postProcessExecutionToolResultData,
   type ExecutionAgentMessageDto,
   type ExecutionAgentThreadDto,
   type StoreExecutionAgentMessageDto,
@@ -90,8 +91,8 @@ export interface WhatsAppTextExecutionAgent {
 // CONSTANTS
 // ============================================================================
 
-const WHATSAPP_TEXT_EXECUTION_PROVIDER: LlmProvider = "openrouter";
-const WHATSAPP_TEXT_EXECUTION_MODEL = "google/gemini-3-flash-preview";
+const WHATSAPP_TEXT_EXECUTION_PROVIDER: LlmProvider = "cerebras";
+const WHATSAPP_TEXT_EXECUTION_MODEL = "zai-glm-4.7";
 const WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_PROVIDER: LlmProvider = "openrouter";
 const WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_MODEL = "google/gemini-3-flash-preview";
 const MAX_PERSISTED_EXECUTION_MESSAGES = 20;
@@ -562,7 +563,7 @@ async function executeToolCall(
         const result = await session.executeTool(toolCall.name, toolCall.arguments);
         const formattedResult = {
           arguments: toolCall.arguments,
-          result: formatToolResult(toolCall.name, result),
+          result: formatToolResult(toolCall.name, toolCall.arguments, result),
           status: "success",
           tool: toolCall.name,
         };
@@ -795,10 +796,15 @@ function normalizeParametersSchema(parameters: unknown): Record<string, unknown>
 /**
  * Normalizes tool execution payloads across Composio response shapes.
  * @param toolName - Tool name used for execution
+ * @param toolArguments - Tool arguments used for execution
  * @param result - Raw tool result
  * @returns Structured tool result
  */
-function formatToolResult(toolName: string, result: unknown): unknown {
+function formatToolResult(
+  toolName: string,
+  toolArguments: Record<string, unknown>,
+  result: unknown
+): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return result;
   }
@@ -814,7 +820,11 @@ function formatToolResult(toolName: string, result: unknown): unknown {
 
   if (Object.prototype.hasOwnProperty.call(typedResult, "data")) {
     return {
-      data: typedResult.data,
+      data: postProcessExecutionToolResultData({
+        toolArguments,
+        toolName,
+        toolResultData: typedResult.data,
+      }),
       logId: typedResult.logId ?? null,
       tool: toolName,
     };

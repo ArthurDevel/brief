@@ -10,6 +10,7 @@
 import { llm } from "@livekit/agents";
 import type { llm as llmNamespace } from "@livekit/agents";
 import { Composio } from "@composio/core";
+import { postProcessExecutionToolResultData } from "@dublin/whatsapp-core";
 import type { AgentEnv } from "./env.js";
 import { createWhatsAppCustomTools } from "./whatsappCustomTools.js";
 import type { WhatsAppCallerContext } from "./whatsappRuntime.js";
@@ -17,31 +18,6 @@ import type { WhatsAppCallerContext } from "./whatsappRuntime.js";
 // ============================================================================
 // TYPES
 // ============================================================================
-
-interface HeaderEntry {
-  name?: string;
-  value?: string;
-}
-
-interface GmailMessage {
-  attachmentList?: unknown[];
-  display_url?: string;
-  labelIds?: string[];
-  messageId?: string;
-  messageText?: string;
-  messageTimestamp?: string;
-  payload?: {
-    headers?: HeaderEntry[];
-  };
-  preview?: {
-    body?: string;
-    subject?: string;
-  };
-  sender?: string;
-  subject?: string;
-  threadId?: string;
-  to?: string;
-}
 
 interface ToolExecutionResult {
   data?: unknown;
@@ -210,7 +186,11 @@ export function mapSessionToolsToLiveKitTools(
                 (rawArguments ?? {}) as Record<string, unknown>
               );
 
-          return formatToolResult(slug, result);
+          return formatToolResult(
+            slug,
+            (rawArguments ?? {}) as Record<string, unknown>,
+            result
+          );
         },
       }),
     ] as const;
@@ -261,156 +241,27 @@ function isComposioMetaTool(toolSlug: string): boolean {
 }
 
 /**
- * Returns one named email header value.
- * @param message - Gmail message payload
- * @param name - Target header name
- * @returns Trimmed header value when present
- */
-function extractHeader(message: GmailMessage, name: string): string | undefined {
-  const target = name.toLowerCase();
-  return message.payload?.headers?.find((header) => header.name?.toLowerCase() === target)?.value?.trim();
-}
-
-/**
- * Compacts repeated whitespace into single spaces.
- * @param value - Raw text value
- * @returns Cleaned single-line text
- */
-function compactWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-/**
- * Truncates a string for spoken-friendly summaries.
- * @param value - Raw text value
- * @param maxLength - Maximum allowed string length
- * @returns Truncated string
- */
-function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-
-  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
-}
-
-/**
- * Maps one Gmail message into a smaller summary payload.
- * @param message - Raw Gmail message payload
- * @returns Simplified message summary
- */
-function summarizeGmailMessage(message: GmailMessage): Record<string, unknown> {
-  const subject = message.subject?.trim()
-    || message.preview?.subject?.trim()
-    || extractHeader(message, "subject")
-    || "(no subject)";
-  const sender = message.sender?.trim() || extractHeader(message, "from") || "Unknown sender";
-  const previewSource = message.preview?.body?.trim() || message.messageText?.trim() || "";
-  const preview = previewSource ? truncate(compactWhitespace(previewSource), 240) : "";
-
-  return {
-    id: message.messageId,
-    threadId: message.threadId,
-    subject,
-    sender,
-    preview,
-    receivedAt: message.messageTimestamp,
-    unread: message.labelIds?.includes("UNREAD") ?? false,
-    labels: (message.labelIds ?? []).filter((label) => label !== "UNREAD"),
-    url: message.display_url,
-  };
-}
-
-/**
- * Formats Gmail fetch results into a smaller JSON payload.
- * @param result - Raw Composio execution result
- * @returns Stringified JSON payload
- */
-function formatGmailFetchResult(result: ToolExecutionResult): string {
-  const data = result.data;
-  if (!data || typeof data !== "object") {
-    return JSON.stringify(result);
-  }
-
-  const messages = Array.isArray((data as { messages?: unknown[] }).messages)
-    ? ((data as { messages: unknown[] }).messages as GmailMessage[])
-    : [];
-
-  const formatted = {
-    messages: messages.map(summarizeGmailMessage),
-    nextPageToken:
-      typeof (data as { nextPageToken?: unknown }).nextPageToken === "string"
-        ? (data as { nextPageToken: string }).nextPageToken
-        : undefined,
-    resultSizeEstimate:
-      typeof (data as { resultSizeEstimate?: unknown }).resultSizeEstimate === "number"
-        ? (data as { resultSizeEstimate: number }).resultSizeEstimate
-        : messages.length,
-  };
-
-  return JSON.stringify(formatted);
-}
-
-/**
- * Formats Gmail label results into a smaller JSON payload.
- * @param result - Raw Composio execution result
- * @returns Stringified JSON payload
- */
-function formatGmailLabelResult(result: ToolExecutionResult): string {
-  const data = result.data;
-  if (!data || typeof data !== "object") {
-    return JSON.stringify(result);
-  }
-
-  const labels = Array.isArray((data as { labels?: unknown[] }).labels)
-    ? (data as { labels: Array<{ id?: string; name?: string; type?: string }> }).labels.map((label) => ({
-        id: label.id,
-        name: label.name,
-        type: label.type,
-      }))
-    : [];
-
-  return JSON.stringify({ labels });
-}
-
-/**
- * Formats Gmail send results into a smaller JSON payload.
- * @param result - Raw Composio execution result
- * @returns Stringified JSON payload
- */
-function formatGmailSendResult(result: ToolExecutionResult): string {
-  const data = result.data;
-  if (!data || typeof data !== "object") {
-    return JSON.stringify(result);
-  }
-
-  const payload = data as Record<string, unknown>;
-  return JSON.stringify({
-    id: payload.id,
-    threadId: payload.threadId,
-    labelIds: payload.labelIds,
-  });
-}
-
 /**
  * Formats selected Composio tool results into smaller spoken-friendly payloads.
  * @param toolSlug - Executed Composio tool slug
+ * @param toolArguments - Tool arguments used for execution
  * @param result - Raw Composio execution result
  * @returns Stringified result payload for the LLM
  */
-function formatToolResult(toolSlug: string, result: ToolExecutionResult): string {
+function formatToolResult(
+  toolSlug: string,
+  toolArguments: Record<string, unknown>,
+  result: ToolExecutionResult
+): string {
   if (result.error) {
     return JSON.stringify(result);
   }
 
-  switch (toolSlug) {
-    case "GMAIL_FETCH_EMAILS":
-      return formatGmailFetchResult(result);
-    case "GMAIL_LIST_LABELS":
-      return formatGmailLabelResult(result);
-    case "GMAIL_SEND_EMAIL":
-      return formatGmailSendResult(result);
-    default:
-      return JSON.stringify(result.data ?? result);
-  }
+  return JSON.stringify(
+    postProcessExecutionToolResultData({
+      toolArguments,
+      toolName: toolSlug,
+      toolResultData: result.data ?? result,
+    })
+  );
 }

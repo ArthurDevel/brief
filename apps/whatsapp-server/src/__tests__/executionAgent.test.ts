@@ -293,6 +293,159 @@ describe("WhatsAppTextExecutionAgentRuntime", () => {
     ]);
   });
 
+  it("shrinks nested Gmail fetch results before storing tool history", async () => {
+    const executionClient: LlmTextClient = {
+      createChatCompletion: vi.fn()
+        .mockResolvedValueOnce({
+          content: "Checking the inbox now.",
+          toolCalls: [
+            {
+              arguments: {
+                tools: [
+                  {
+                    arguments: {
+                      max_results: 5,
+                      query: "in:inbox",
+                    },
+                    tool_slug: "GMAIL_FETCH_EMAILS",
+                  },
+                ],
+              },
+              id: "tool-1",
+              name: "COMPOSIO_MULTI_EXECUTE_TOOL",
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          content: "I found the latest inbox emails.",
+          toolCalls: [],
+        }),
+    };
+    const summarizerClient: LlmTextClient = {
+      createChatCompletion: vi.fn(),
+    };
+    const coreStore = createMockWhatsAppCoreStore();
+    const runtime = new WhatsAppTextExecutionAgentRuntime(
+      executionClient,
+      summarizerClient,
+      coreStore,
+      "composio-key",
+      "whatsapp-token",
+      "23",
+      "phone-id"
+    );
+
+    vi.spyOn(runtime as never, "createExecutionSession").mockResolvedValue({
+      connectedToolkitSlugs: ["gmail"],
+      executeTool: vi.fn().mockResolvedValue({
+        data: {
+          results: [
+            {
+              index: 0,
+              response: {
+                data: {
+                  messages: [
+                    {
+                      display_url: "https://mail.google.com/mail/u/0/#inbox/abc",
+                      labelIds: ["UNREAD", "INBOX"],
+                      messageId: "message-1",
+                      messageText:
+                        "<html><body>This very large HTML email should not be kept in execution history.</body></html>",
+                      payload: {
+                        headers: [
+                          {
+                            name: "From",
+                            value: "Sarah <sarah@example.com>",
+                          },
+                          {
+                            name: "Subject",
+                            value: "Urgent update",
+                          },
+                        ],
+                      },
+                      threadId: "thread-1",
+                    },
+                  ],
+                },
+                successful: true,
+              },
+            },
+          ],
+        },
+      }),
+      toolSchemas: [
+        {
+          function: {
+            description: "Run one or more tools",
+            name: "COMPOSIO_MULTI_EXECUTE_TOOL",
+            parameters: {
+              type: "object",
+            },
+          },
+          type: "function",
+        },
+      ],
+    });
+
+    await runtime.execute(createExecutionRequest());
+
+    const threadMessages = await coreStore.listExecutionAgentMessages({
+      limit: 20,
+      threadId: "thread-1",
+      userId: "user-1",
+    });
+    const storedToolMessage = threadMessages.find((message) => message.role === "tool");
+
+    expect(storedToolMessage?.toolResult).toEqual({
+      arguments: {
+        tools: [
+          {
+            arguments: {
+              max_results: 5,
+              query: "in:inbox",
+            },
+            tool_slug: "GMAIL_FETCH_EMAILS",
+          },
+        ],
+      },
+      result: {
+        data: {
+          results: [
+            {
+              index: 0,
+              response: {
+                data: {
+                  messages: [
+                    {
+                      id: "message-1",
+                      labels: ["INBOX"],
+                      preview:
+                        "This very large HTML email should not be kept in execution history.",
+                      receivedAt: null,
+                      sender: "Sarah <sarah@example.com>",
+                      subject: "Urgent update",
+                      threadId: "thread-1",
+                      unread: true,
+                      url: "https://mail.google.com/mail/u/0/#inbox/abc",
+                    },
+                  ],
+                  resultSizeEstimate: 1,
+                },
+                successful: true,
+              },
+              toolSlug: "GMAIL_FETCH_EMAILS",
+            },
+          ],
+        },
+        logId: null,
+        tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
+      },
+      status: "success",
+      tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
+    });
+    expect(JSON.stringify(storedToolMessage?.toolResult)).not.toContain("messageText");
+  });
+
   it("returns a summarized failure when the execution loop reaches the iteration limit", async () => {
     const executionClient: LlmTextClient = {
       createChatCompletion: vi.fn().mockResolvedValue({
