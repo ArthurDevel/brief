@@ -99,6 +99,8 @@ type ExecutionToolResultFormatter = (
 // ============================================================================
 
 const MAX_GMAIL_PREVIEW_LENGTH = 240;
+const MAX_TOOL_RESULT_CHARACTERS = 20000;
+const TOOL_RESULT_TRUNCATION_MARKER = "[tool result truncuated due to size constraints]";
 
 const TOOL_RESULT_FORMATTERS: Partial<Record<string, ExecutionToolResultFormatter>> = {
   COMPOSIO_MULTI_EXECUTE_TOOL: formatComposioMultiExecuteToolResult,
@@ -123,11 +125,8 @@ export function postProcessExecutionToolResultData(
   input: ExecutionToolResultFormatterInputDto
 ): unknown {
   const formatter = TOOL_RESULT_FORMATTERS[input.toolName];
-  if (!formatter) {
-    return input.toolResultData;
-  }
-
-  return formatter(input);
+  const formattedResult = formatter ? formatter(input) : input.toolResultData;
+  return truncateToolResultForAgent(formattedResult);
 }
 
 // ============================================================================
@@ -498,6 +497,43 @@ function getGmailMessageSortTimestamp(message: GmailMessageDto): number {
 
   const parsedTimestamp = Date.parse(message.messageTimestamp);
   return Number.isFinite(parsedTimestamp) ? parsedTimestamp : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Applies one global size limit to the final agent-visible tool result.
+ * @param value - Final formatted tool result
+ * @returns Truncated value when the serialized form exceeds the global cap
+ */
+function truncateToolResultForAgent(value: unknown): unknown {
+  if (typeof value === "string") {
+    return truncateSerializedToolResult(value);
+  }
+
+  const serializedValue = JSON.stringify(value);
+  if (serializedValue.length <= MAX_TOOL_RESULT_CHARACTERS) {
+    return value;
+  }
+
+  return truncateSerializedToolResult(serializedValue);
+}
+
+/**
+ * Truncates one serialized tool result string to the global cap.
+ * @param value - Serialized tool result
+ * @returns Truncated serialized result with a marker suffix
+ */
+function truncateSerializedToolResult(value: string): string {
+  if (value.length <= MAX_TOOL_RESULT_CHARACTERS) {
+    return value;
+  }
+
+  const allowedPrefixLength =
+    MAX_TOOL_RESULT_CHARACTERS - TOOL_RESULT_TRUNCATION_MARKER.length - 1;
+  if (allowedPrefixLength <= 0) {
+    return TOOL_RESULT_TRUNCATION_MARKER;
+  }
+
+  return `${value.slice(0, allowedPrefixLength)} ${TOOL_RESULT_TRUNCATION_MARKER}`;
 }
 
 /**

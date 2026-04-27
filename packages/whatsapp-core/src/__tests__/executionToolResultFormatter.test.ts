@@ -349,4 +349,46 @@ describe("postProcessExecutionToolResultData", () => {
 
     expect(result).toBe("attachments not supported yet");
   });
+
+  it("truncates oversized full-message text with the shared marker", () => {
+    const longParagraph = "A".repeat(25050);
+    const result = postProcessExecutionToolResultData({
+      toolArguments: {
+        format: "full",
+        message_id: "message-8",
+      },
+      toolName: "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
+      toolResultData: {
+        messageId: "message-8",
+        messageText: longParagraph,
+        payload: {
+          headers: [
+            { name: "From", value: "Alice <alice@example.com>" },
+            { name: "Subject", value: "Long email" },
+          ],
+          mimeType: "text/plain",
+        },
+      },
+    });
+
+    expect(typeof result).toBe("string");
+    expect((result as string).length).toBe(20000);
+    expect(result).toContain("[tool result truncuated due to size constraints]");
+  });
+
+  it("truncates oversized unknown-tool objects through the global fallback", () => {
+    const result = postProcessExecutionToolResultData({
+      toolArguments: {},
+      toolName: "UNKNOWN_TOOL",
+      toolResultData: {
+        nested: {
+          payload: "B".repeat(25050),
+        },
+      },
+    });
+
+    expect(typeof result).toBe("string");
+    expect((result as string).length).toBe(20000);
+    expect(result).toContain("[tool result truncuated due to size constraints]");
+  });
 });
