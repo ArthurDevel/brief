@@ -117,6 +117,69 @@ function createMockWhatsAppCoreStore(): WhatsAppCoreStore {
 // ============================================================================
 
 describe("WhatsAppTextExecutionAgentRuntime", () => {
+  it("returns busy when the same user and agent name is already running", async () => {
+    let resolveFirstCompletion: ((value: { content: string; toolCalls: [] }) => void) | null = null;
+    const executionClient: LlmTextClient = {
+      createChatCompletion: vi.fn().mockImplementation(
+        () => new Promise((resolve) => {
+          resolveFirstCompletion = resolve;
+        })
+      ),
+    };
+    const summarizerClient: LlmTextClient = {
+      createChatCompletion: vi.fn(),
+    };
+    const coreStore = createMockWhatsAppCoreStore();
+    const runtime = new WhatsAppTextExecutionAgentRuntime(
+      executionClient,
+      summarizerClient,
+      coreStore,
+      "composio-key",
+      "whatsapp-token",
+      "23",
+      "phone-id"
+    );
+
+    vi.spyOn(runtime as never, "createExecutionSession").mockResolvedValue({
+      connectedToolkitSlugs: ["gmail"],
+      executeTool: vi.fn(),
+      toolSchemas: [],
+    });
+
+    const firstExecution = runtime.execute(createExecutionRequest());
+    await vi.waitFor(() => {
+      expect(executionClient.createChatCompletion).toHaveBeenCalledTimes(1);
+    });
+
+    const busyResult = await runtime.execute({
+      ...createExecutionRequest(),
+      instructions: "Check a second thing before the first request finishes.",
+    });
+
+    expect(busyResult).toEqual({
+      agentName: "Gmail Agent",
+      response:
+        "Gmail Agent is already working on a previous request. Please wait a moment before sending another task to this same executor agent.",
+      success: false,
+    });
+    expect(executionClient.createChatCompletion).toHaveBeenCalledTimes(1);
+
+    if (!resolveFirstCompletion) {
+      throw new Error("First execution did not reach the LLM completion call");
+    }
+
+    resolveFirstCompletion({
+      content: "First request is done.",
+      toolCalls: [],
+    });
+
+    await expect(firstExecution).resolves.toEqual({
+      agentName: "Gmail Agent",
+      response: "First request is done.",
+      success: true,
+    });
+  });
+
   it("continues the persisted execution conversation for the same user and agent name", async () => {
     const executionClient: LlmTextClient = {
       createChatCompletion: vi.fn()
