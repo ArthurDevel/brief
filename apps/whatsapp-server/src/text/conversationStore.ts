@@ -23,6 +23,7 @@ import type {
 // ============================================================================
 
 const MAX_HISTORY_MESSAGES = 20;
+const MAX_EXECUTION_AGENT_THREADS = 20;
 
 // ============================================================================
 // MAIN CLASS
@@ -74,10 +75,14 @@ export class WhatsAppTextConversationStore {
       };
     }
 
-    const [conversationHistory, memoryEntries] = await Promise.all([
+    const [conversationHistory, executionAgentThreads, memoryEntries] = await Promise.all([
       this.coreStore.listConversationMessages({
         contactPhoneNumber: storedInboundMessage.user.whatsappPhone,
         limit: MAX_HISTORY_MESSAGES,
+        userId: storedInboundMessage.user.userId,
+      }),
+      this.coreStore.listExecutionAgentThreads({
+        limit: MAX_EXECUTION_AGENT_THREADS,
         userId: storedInboundMessage.user.userId,
       }),
       this.coreStore.getUserMemoryEntries(storedInboundMessage.user.userId),
@@ -85,6 +90,7 @@ export class WhatsAppTextConversationStore {
 
     console.info("[whatsapp-server] prepared inbound text turn", {
       currentMessageId: storedInboundMessage.message.id,
+      executionAgentThreadCount: executionAgentThreads.length,
       historyCount: conversationHistory.length,
       memoryCount: memoryEntries.length,
       userId: storedInboundMessage.user.userId,
@@ -99,6 +105,7 @@ export class WhatsAppTextConversationStore {
           (message) => message.id !== storedInboundMessage.message?.id
         ),
         currentMessage: storedInboundMessage.message,
+        executionAgentThreads,
         linkedUser: storedInboundMessage.user,
         memoryEntries,
       },

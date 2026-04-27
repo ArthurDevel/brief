@@ -32,6 +32,15 @@ describe("buildVoiceOpenPokeInteractionUserPrompt", () => {
         direction: "inbound",
         text: "Check my next meeting",
       },
+      executionAgentThreads: [
+        {
+          agentName: "calendar",
+          createdAt: "2026-04-23T09:00:00.000Z",
+          id: "thread-1",
+          updatedAt: "2026-04-23T09:30:00.000Z",
+          userId: "user_123",
+        },
+      ],
       memoryEntries: [
         {
           id: "memory_1",
@@ -47,6 +56,8 @@ describe("buildVoiceOpenPokeInteractionUserPrompt", () => {
     expect(buildVoiceOpenPokeInteractionSystemPrompt()).toContain("interaction agent");
     expect(prompt).toContain("<channel_context>");
     expect(prompt).toContain("<user_memory>");
+    expect(prompt).toContain("<execution_agent_threads>");
+    expect(prompt).toContain("- calendar (updated 2026-04-23T09:30:00.000Z)");
     expect(prompt).toContain("<conversation_history>");
     expect(prompt).toContain("<new_user_message>");
     expect(prompt).toContain("Check my next meeting");
@@ -64,6 +75,7 @@ describe("buildVoiceOpenPokeConversationStartUserPrompt", () => {
         voiceConfig: getDefaultWhatsAppVoiceConfig(),
       },
       conversationHistory: [],
+      executionAgentThreads: [],
       memoryEntries: [
         {
           id: "memory_1",
@@ -115,6 +127,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           voiceConfig: getDefaultWhatsAppVoiceConfig(),
         },
         conversationHistory: [],
+        executionAgentThreads: [],
         memoryEntries: [],
       },
       emitActionMock
@@ -195,6 +208,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           direction: "inbound",
           text: "Check my next meeting",
         },
+        executionAgentThreads: [],
         memoryEntries: [],
       },
       emitActionMock
@@ -259,6 +273,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
         direction: "inbound",
         text: "Anything else?",
       },
+      executionAgentThreads: [],
       memoryEntries: [],
     });
 
@@ -330,6 +345,7 @@ describe("VoiceOpenPokeInteractionAgentRuntime", () => {
           direction: "inbound",
           text: "Check my next meeting",
         },
+        executionAgentThreads: [],
         memoryEntries: [],
       },
       undefined,

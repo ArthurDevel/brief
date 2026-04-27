@@ -21,6 +21,7 @@ import type {
   ExecutionAgentMessageDto,
   ExecutionAgentThreadDto,
   FindOrCreateExecutionAgentThreadDto,
+  ListExecutionAgentThreadsDto,
   ListWhatsAppConversationMessagesDto,
   ListExecutionAgentMessagesDto,
   StoreInboundWhatsAppTextMessageDto,
@@ -299,6 +300,32 @@ export class WhatsAppCoreStore {
     }
 
     return this.mapExecutionAgentThreadRow(existingThread as ExecutionAgentThreadRow);
+  }
+
+  /**
+   * Loads recent persisted execution-agent threads for one user.
+   * @param input - Thread list lookup DTO
+   * @returns Execution-agent threads ordered most recently updated first
+   */
+  async listExecutionAgentThreads(
+    input: ListExecutionAgentThreadsDto
+  ): Promise<ExecutionAgentThreadDto[]> {
+    const { data, error } = await this.supabase
+      .from("execution_agent_threads")
+      .select("id, user_id, agent_name, created_at, updated_at")
+      .eq("user_id", input.userId)
+      .order("updated_at", { ascending: false })
+      .limit(input.limit);
+
+    if (error) {
+      throw new Error(`Failed to load execution-agent threads: ${error.message}`);
+    }
+
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    return data.map((row) => this.mapExecutionAgentThreadRow(row as ExecutionAgentThreadRow));
   }
 
   /**

@@ -10,6 +10,10 @@
 
 import { propagateAttributes, startActiveObservation } from "@langfuse/tracing";
 import { llm, voice } from "@livekit/agents";
+import type {
+  ExecutionAgentThreadDto,
+  WhatsAppCoreStore,
+} from "@dublin/whatsapp-core";
 import type { WhatsAppCallerContext } from "../whatsappRuntime.js";
 import type { MemoryEntry } from "../memory.js";
 import {
@@ -39,6 +43,7 @@ import {
 // ============================================================================
 
 const GENERIC_VOICE_ERROR_MESSAGE = "Something went wrong. Please try again.";
+const MAX_EXECUTION_AGENT_THREADS = 20;
 const NARRATION_REFRESH_INTERVAL_MS = 2000;
 const NARRATION_SILENCE_THRESHOLD_MS = 2000;
 
@@ -50,6 +55,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
   private activeExecutionSnapshot: VoiceExecutionSnapshotDto | null = null;
   private readonly callerContext: WhatsAppCallerContext;
   private readonly env: AgentEnv;
+  private executionAgentThreads: ExecutionAgentThreadDto[] = [];
   private readonly interactionAgent: VoiceOpenPokeInteractionAgentRuntime;
   private readonly voiceInteractionAgentStore: VoiceInteractionAgentStore | null;
   private lastFinishedSpeechAt = Date.now();
@@ -62,6 +68,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
   private readonly conversationHistory: VoiceConversationMessageDto[] = [];
   private speechQueue: Promise<void> = Promise.resolve();
   private latestTurnId = 0;
+  private readonly whatsappCoreStore: WhatsAppCoreStore;
 
   /**
    * Creates the LiveKit-facing voice agent.
@@ -70,6 +77,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
    * @param interactionAgent - Explicit voice BrewDock interaction runtime
    * @param narrationAgent - Text-only narration runtime used during execution waits
    * @param memoryEntries - Loaded user memory entries
+   * @param whatsappCoreStore - Shared WhatsApp core store
    * @param conversationHistory - Persisted interaction-agent message history for this call
    * @param voiceInteractionAgentStore - Optional voice interaction-agent store
    */
@@ -79,6 +87,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
     interactionAgent: VoiceOpenPokeInteractionAgentRuntime,
     narrationAgent: VoiceOpenPokeNarrationAgent,
     memoryEntries: MemoryEntry[],
+    whatsappCoreStore: WhatsAppCoreStore,
     conversationHistory: VoiceConversationMessageDto[],
     voiceInteractionAgentStore: VoiceInteractionAgentStore | null
   ) {
@@ -91,6 +100,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
     this.interactionAgent = interactionAgent;
     this.narrationAgent = narrationAgent;
     this.memoryEntries = memoryEntries;
+    this.whatsappCoreStore = whatsappCoreStore;
     this.voiceInteractionAgentStore = voiceInteractionAgentStore;
     this.conversationHistory.push(...conversationHistory);
   }
@@ -101,10 +111,12 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
    */
   override async onEnter(): Promise<void> {
     try {
+      await this.refreshExecutionAgentThreads();
       await this.interactionAgent.runConversationStart(
         {
           callerContext: this.callerContext,
           conversationHistory: [...this.conversationHistory],
+          executionAgentThreads: this.executionAgentThreads,
           memoryEntries: this.memoryEntries,
         },
         async (action) => await this.emitAction(action)
@@ -142,15 +154,18 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
       direction: "inbound",
       text: transcript,
     } satisfies VoiceConversationMessageDto;
-    const turn: PreparedVoiceTurnDto = {
-      callerContext: this.callerContext,
-      conversationHistory: [...this.conversationHistory],
-      currentMessage,
-      memoryEntries: this.memoryEntries,
-    };
     const turnId = this.startNewTurn();
 
     try {
+      await this.refreshExecutionAgentThreads();
+      const turn: PreparedVoiceTurnDto = {
+        callerContext: this.callerContext,
+        conversationHistory: [...this.conversationHistory],
+        currentMessage,
+        executionAgentThreads: this.executionAgentThreads,
+        memoryEntries: this.memoryEntries,
+      };
+
       await this.recordInboundMessage(currentMessage);
       await startActiveObservation(
         WHATSAPP_VOICE_TRACE_NAME,
@@ -217,6 +232,17 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
   // ============================================================================
   // HELPER FUNCTIONS
   // ============================================================================
+
+  /**
+   * Reloads persisted execution-agent threads for the current caller.
+   * @returns Nothing
+   */
+  private async refreshExecutionAgentThreads(): Promise<void> {
+    this.executionAgentThreads = await this.whatsappCoreStore.listExecutionAgentThreads({
+      limit: MAX_EXECUTION_AGENT_THREADS,
+      userId: this.callerContext.supabaseUserId,
+    });
+  }
 
   /**
    * Receives one read-only execution snapshot from the delegated execution flow.

@@ -8,6 +8,7 @@
  */
 
 import type { MemoryEntry } from "../memory.js";
+import type { ExecutionAgentThreadDto } from "@dublin/whatsapp-core";
 import type { WhatsAppCallerContext } from "../whatsappRuntime.js";
 
 // ============================================================================
@@ -24,12 +25,14 @@ export interface PreparedVoiceTurnDto {
   callerContext: WhatsAppCallerContext;
   conversationHistory: VoiceConversationMessageDto[];
   currentMessage: VoiceConversationMessageDto;
+  executionAgentThreads: ExecutionAgentThreadDto[];
   memoryEntries: MemoryEntry[];
 }
 
 export interface PreparedVoiceConversationStartDto {
   callerContext: WhatsAppCallerContext;
   conversationHistory: VoiceConversationMessageDto[];
+  executionAgentThreads: ExecutionAgentThreadDto[];
   memoryEntries: MemoryEntry[];
 }
 

@@ -26,6 +26,7 @@ function createPreparedTurn() {
       text: "check my inbox",
       userId: "user-1",
     },
+    executionAgentThreads: [],
     linkedUser: {
       userId: "user-1",
       whatsappPhone: "+15551234567",
