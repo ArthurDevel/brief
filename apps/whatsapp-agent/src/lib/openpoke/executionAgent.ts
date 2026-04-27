@@ -11,6 +11,7 @@ import { startActiveObservation } from "@langfuse/tracing";
 import { Composio } from "@composio/core";
 import {
   createWhatsAppCoreStore,
+  postProcessExecutionToolResultData,
   type ExecutionAgentMessageDto,
   type ExecutionAgentThreadDto,
   type ExecutionAgentToolCallDto,
@@ -670,7 +671,7 @@ async function executeToolCall(
         const result = await session.executeTool(toolCall.name, toolCall.arguments);
         const formattedResult = {
           arguments: toolCall.arguments,
-          result: formatToolResult(toolCall.name, result),
+          result: formatToolResult(toolCall.name, result, toolCall.arguments),
           status: "success",
           tool: toolCall.name,
         };
@@ -751,7 +752,11 @@ function normalizeParametersSchema(parameters: unknown): Record<string, unknown>
  * @param result - Raw tool result
  * @returns Structured tool result
  */
-function formatToolResult(toolName: string, result: unknown): unknown {
+function formatToolResult(
+  toolName: string,
+  result: unknown,
+  toolArguments: Record<string, unknown>
+): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return result;
   }
@@ -767,7 +772,7 @@ function formatToolResult(toolName: string, result: unknown): unknown {
 
   if (Object.prototype.hasOwnProperty.call(typedResult, "data")) {
     return {
-      data: typedResult.data,
+      data: postProcessExecutionToolResultData(toolName, typedResult.data, toolArguments),
       logId: typedResult.logId ?? null,
       tool: toolName,
     };

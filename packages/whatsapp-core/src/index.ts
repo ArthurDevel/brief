@@ -7,6 +7,7 @@
  */
 
 export * from "./errors.js";
+export * from "./executionToolResultFormatter.js";
 export * from "./normalizeWhatsAppPhone.js";
 export * from "./types.js";
 export * from "./whatsappCoreStore.js";
