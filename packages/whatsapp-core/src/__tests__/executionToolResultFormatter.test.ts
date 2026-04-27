@@ -25,6 +25,10 @@ describe("postProcessExecutionToolResultData", () => {
                   value: "Alice <alice@example.com>",
                 },
                 {
+                  name: "To",
+                  value: "team@example.com",
+                },
+                {
                   name: "Subject",
                   value: "Quarterly update",
                 },
@@ -40,14 +44,15 @@ describe("postProcessExecutionToolResultData", () => {
     expect(result).toEqual({
       messages: [
         {
+          from: "Alice <alice@example.com>",
           id: "message-1",
           labels: ["INBOX"],
           preview:
             "Hello there. This email body is much longer than the preview we want to keep in memory.",
           receivedAt: "2026-04-27T09:00:00.000Z",
-          sender: "Alice <alice@example.com>",
           subject: "Quarterly update",
           threadId: "thread-1",
+          to: "team@example.com",
           unread: true,
           url: "https://mail.google.com/mail/u/0/#inbox/abc",
         },
@@ -88,6 +93,10 @@ describe("postProcessExecutionToolResultData", () => {
                           value: "Bob <bob@example.com>",
                         },
                         {
+                          name: "To",
+                          value: "ops@example.com",
+                        },
+                        {
                           name: "Subject",
                           value: "Inbox item",
                         },
@@ -115,13 +124,14 @@ describe("postProcessExecutionToolResultData", () => {
             data: {
               messages: [
                 {
+                  from: "Bob <bob@example.com>",
                   id: "message-2",
                   labels: [],
                   preview: "Short preview from Gmail.",
                   receivedAt: null,
-                  sender: "Bob <bob@example.com>",
                   subject: "Inbox item",
                   threadId: "thread-2",
+                  to: "ops@example.com",
                   unread: false,
                   url: null,
                 },
@@ -136,7 +146,7 @@ describe("postProcessExecutionToolResultData", () => {
     });
   });
 
-  it("reduces a full Gmail message fetch to readable email text", () => {
+  it("reduces a full Gmail message fetch to metadata plus readable email text", () => {
     const result = postProcessExecutionToolResultData({
       toolArguments: {
         format: "full",
@@ -147,13 +157,42 @@ describe("postProcessExecutionToolResultData", () => {
         messageId: "message-3",
         messageText:
           "<html><body><h1>Status</h1><p>Hello team,</p><p>The project is on track.</p></body></html>",
+        messageTimestamp: "2026-04-27T11:00:00.000Z",
         payload: {
+          headers: [
+            {
+              name: "From",
+              value: "Manager <manager@example.com>",
+            },
+            {
+              name: "To",
+              value: "team@example.com",
+            },
+            {
+              name: "Cc",
+              value: "ops@example.com",
+            },
+            {
+              name: "Subject",
+              value: "Status",
+            },
+          ],
           mimeType: "text/html",
         },
+        threadId: "thread-3",
       },
     });
 
-    expect(result).toBe("Status\nHello team,\nThe project is on track.");
+    expect(result).toEqual({
+      cc: "ops@example.com",
+      from: "Manager <manager@example.com>",
+      fullText: "Status\nHello team,\nThe project is on track.",
+      id: "message-3",
+      receivedAt: "2026-04-27T11:00:00.000Z",
+      subject: "Status",
+      threadId: "thread-3",
+      to: "team@example.com",
+    });
   });
 
   it("reduces a nested full Gmail message fetch inside COMPOSIO_MULTI_EXECUTE_TOOL", () => {
@@ -209,12 +248,105 @@ describe("postProcessExecutionToolResultData", () => {
         {
           index: 0,
           response: {
-            data: "Hello team,\n\nThis is the full plain-text email body.",
+            data: {
+              cc: null,
+              from: "Unknown sender",
+              fullText: "Hello team,\n\nThis is the full plain-text email body.",
+              id: "message-4",
+              receivedAt: null,
+              subject: "(no subject)",
+              threadId: null,
+              to: null,
+            },
             successful: true,
           },
           toolSlug: "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
         },
       ],
     });
+  });
+
+  it("reduces a Gmail thread fetch to full text for each message", () => {
+    const result = postProcessExecutionToolResultData({
+      toolArguments: {
+        thread_id: "thread-5",
+      },
+      toolName: "GMAIL_FETCH_MESSAGE_BY_THREAD_ID",
+      toolResultData: {
+        messages: [
+          {
+            messageId: "message-6",
+            messageText: "<p>Second email.</p>",
+            messageTimestamp: "2026-04-27T12:05:00.000Z",
+            payload: {
+              headers: [
+                { name: "From", value: "Bob <bob@example.com>" },
+                { name: "To", value: "team@example.com" },
+                { name: "Subject", value: "Re: Plan" },
+              ],
+              mimeType: "text/html",
+            },
+            threadId: "thread-5",
+          },
+          {
+            messageId: "message-5",
+            messageText: "<p>First email.</p>",
+            messageTimestamp: "2026-04-27T12:00:00.000Z",
+            payload: {
+              headers: [
+                { name: "From", value: "Alice <alice@example.com>" },
+                { name: "To", value: "team@example.com" },
+                { name: "Subject", value: "Plan" },
+              ],
+              mimeType: "text/html",
+            },
+            threadId: "thread-5",
+          },
+        ],
+      },
+    });
+
+    expect(result).toEqual({
+      messages: [
+        {
+          cc: null,
+          from: "Alice <alice@example.com>",
+          fullText: "First email.",
+          id: "message-5",
+          receivedAt: "2026-04-27T12:00:00.000Z",
+          subject: "Plan",
+          threadId: "thread-5",
+          to: "team@example.com",
+        },
+        {
+          cc: null,
+          from: "Bob <bob@example.com>",
+          fullText: "Second email.",
+          id: "message-6",
+          receivedAt: "2026-04-27T12:05:00.000Z",
+          subject: "Re: Plan",
+          threadId: "thread-5",
+          to: "team@example.com",
+        },
+      ],
+      threadId: "thread-5",
+    });
+  });
+
+  it("marks Gmail attachments as unsupported", () => {
+    const result = postProcessExecutionToolResultData({
+      toolArguments: {
+        attachment_id: "attachment-1",
+        message_id: "message-7",
+      },
+      toolName: "GMAIL_GET_ATTACHMENT",
+      toolResultData: {
+        file: {
+          s3url: "https://example.com/file.pdf",
+        },
+      },
+    });
+
+    expect(result).toBe("attachments not supported yet");
   });
 });

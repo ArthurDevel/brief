@@ -23,6 +23,7 @@ interface HeaderEntry {
 }
 
 interface GmailMessageDto {
+  cc?: string;
   display_url?: string;
   labelIds?: string[];
   messageId?: string;
@@ -43,6 +44,23 @@ interface GmailMessageDto {
   sender?: string;
   subject?: string;
   threadId?: string;
+  to?: string;
+}
+
+interface GmailFullMessageDto {
+  from: string;
+  fullText: string;
+  id: string | null;
+  receivedAt: string | null;
+  subject: string;
+  threadId: string | null;
+  to: string | null;
+  cc: string | null;
+}
+
+interface GmailFullThreadDto {
+  messages: GmailFullMessageDto[];
+  threadId: string | null;
 }
 
 interface GmailPayloadPartDto {
@@ -55,13 +73,14 @@ interface GmailPayloadPartDto {
 }
 
 interface GmailMessageSummaryDto {
+  from: string;
   id: string | null;
   labels: string[];
   preview: string;
   receivedAt: string | null;
-  sender: string;
   subject: string;
   threadId: string | null;
+  to: string | null;
   unread: boolean;
   url: string | null;
 }
@@ -85,6 +104,8 @@ const TOOL_RESULT_FORMATTERS: Partial<Record<string, ExecutionToolResultFormatte
   COMPOSIO_MULTI_EXECUTE_TOOL: formatComposioMultiExecuteToolResult,
   GMAIL_FETCH_EMAILS: formatGmailFetchEmailsResult,
   GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID: formatGmailFetchMessageByMessageIdResult,
+  GMAIL_FETCH_MESSAGE_BY_THREAD_ID: formatGmailFetchMessageByThreadIdResult,
+  GMAIL_GET_ATTACHMENT: formatGmailGetAttachmentResult,
   GMAIL_LIST_LABELS: formatGmailListLabelsResult,
   GMAIL_SEND_EMAIL: formatGmailSendEmailResult,
 };
@@ -189,7 +210,7 @@ function formatGmailSendEmailResult(
 /**
  * Formats one full Gmail message fetch into readable email text only.
  * @param input - Tool result formatter input
- * @returns Readable full email text
+ * @returns Full Gmail message text plus identifying metadata
  */
 function formatGmailFetchMessageByMessageIdResult(
   input: ExecutionToolResultFormatterInputDto
@@ -199,12 +220,42 @@ function formatGmailFetchMessageByMessageIdResult(
     return input.toolResultData;
   }
 
-  const fullEmailText = extractFullEmailText(data as GmailMessageDto);
-  if (!fullEmailText) {
-    return "";
+  return buildFullGmailMessage(data as GmailMessageDto);
+}
+
+/**
+ * Formats one Gmail thread fetch into full text for each returned message.
+ * @param input - Tool result formatter input
+ * @returns Full Gmail thread content
+ */
+function formatGmailFetchMessageByThreadIdResult(
+  input: ExecutionToolResultFormatterInputDto
+): unknown {
+  const data = asRecord(input.toolResultData);
+  if (!data) {
+    return input.toolResultData;
   }
 
-  return fullEmailText;
+  const rawMessages = Array.isArray(data.messages)
+    ? data.messages.filter(isRecord).map((message) => message as GmailMessageDto)
+    : [];
+  const messages = rawMessages
+    .slice()
+    .sort(compareGmailMessagesByTimestamp)
+    .map(buildFullGmailMessage);
+
+  return {
+    messages,
+    threadId: messages[0]?.threadId ?? getOptionalString(data.threadId),
+  } satisfies GmailFullThreadDto;
+}
+
+/**
+ * Formats Gmail attachments as unsupported for agent execution.
+ * @returns Unsupported attachment marker
+ */
+function formatGmailGetAttachmentResult(): string {
+  return "attachments not supported yet";
 }
 
 /**
@@ -290,9 +341,8 @@ function summarizeGmailMessage(message: Record<string, unknown>): GmailMessageSu
     || gmailMessage.preview?.subject?.trim()
     || extractHeader(gmailMessage, "subject")
     || "(no subject)";
-  const sender = gmailMessage.sender?.trim()
-    || extractHeader(gmailMessage, "from")
-    || "Unknown sender";
+  const from = getGmailFrom(gmailMessage);
+  const to = getGmailTo(gmailMessage);
   const previewSource = gmailMessage.preview?.body?.trim()
     || stripHtml(gmailMessage.messageText?.trim() || "");
   const preview = previewSource
@@ -300,17 +350,36 @@ function summarizeGmailMessage(message: Record<string, unknown>): GmailMessageSu
     : "";
 
   return {
+    from,
     id: gmailMessage.messageId ?? null,
     labels: Array.isArray(gmailMessage.labelIds)
       ? gmailMessage.labelIds.filter((label) => label !== "UNREAD")
       : [],
     preview,
     receivedAt: gmailMessage.messageTimestamp ?? null,
-    sender,
     subject,
     threadId: gmailMessage.threadId ?? null,
+    to,
     unread: gmailMessage.labelIds?.includes("UNREAD") ?? false,
     url: gmailMessage.display_url ?? null,
+  };
+}
+
+/**
+ * Builds one full Gmail message DTO with readable text.
+ * @param message - Raw Gmail message payload
+ * @returns Full Gmail message content
+ */
+function buildFullGmailMessage(message: GmailMessageDto): GmailFullMessageDto {
+  return {
+    cc: getGmailCc(message),
+    from: getGmailFrom(message),
+    fullText: extractFullEmailText(message),
+    id: message.messageId ?? null,
+    receivedAt: message.messageTimestamp ?? null,
+    subject: getGmailSubject(message),
+    threadId: message.threadId ?? null,
+    to: getGmailTo(message),
   };
 }
 
@@ -344,6 +413,47 @@ function extractFullEmailText(message: GmailMessageDto): string {
 }
 
 /**
+ * Returns the normalized subject for one Gmail message.
+ * @param message - Raw Gmail message payload
+ * @returns Message subject
+ */
+function getGmailSubject(message: GmailMessageDto): string {
+  return message.subject?.trim()
+    || message.preview?.subject?.trim()
+    || extractHeader(message, "subject")
+    || "(no subject)";
+}
+
+/**
+ * Returns the normalized sender for one Gmail message.
+ * @param message - Raw Gmail message payload
+ * @returns Message sender
+ */
+function getGmailFrom(message: GmailMessageDto): string {
+  return message.sender?.trim()
+    || extractHeader(message, "from")
+    || "Unknown sender";
+}
+
+/**
+ * Returns the normalized To recipients for one Gmail message.
+ * @param message - Raw Gmail message payload
+ * @returns To recipients or null
+ */
+function getGmailTo(message: GmailMessageDto): string | null {
+  return message.to?.trim() || extractHeader(message, "to") || null;
+}
+
+/**
+ * Returns the normalized Cc recipients for one Gmail message.
+ * @param message - Raw Gmail message payload
+ * @returns Cc recipients or null
+ */
+function getGmailCc(message: GmailMessageDto): string | null {
+  return message.cc?.trim() || extractHeader(message, "cc") || null;
+}
+
+/**
  * Returns the requested nested tools from one Composio multi-execute call.
  * @param toolArguments - Raw outer meta-tool arguments
  * @returns Ordered requested tool descriptors
@@ -359,6 +469,35 @@ function getRequestedComposioTools(
     arguments: isRecord(tool.arguments) ? tool.arguments : undefined,
     tool_slug: typeof tool.tool_slug === "string" ? tool.tool_slug : undefined,
   }));
+}
+
+/**
+ * Sorts Gmail messages by their receive timestamp, oldest first.
+ * @param left - Left Gmail message
+ * @param right - Right Gmail message
+ * @returns Sort order
+ */
+function compareGmailMessagesByTimestamp(
+  left: GmailMessageDto,
+  right: GmailMessageDto
+): number {
+  const leftTimestamp = getGmailMessageSortTimestamp(left);
+  const rightTimestamp = getGmailMessageSortTimestamp(right);
+  return leftTimestamp - rightTimestamp;
+}
+
+/**
+ * Returns a sortable timestamp for one Gmail message.
+ * @param message - Gmail message payload
+ * @returns Milliseconds since epoch, or positive infinity when unavailable
+ */
+function getGmailMessageSortTimestamp(message: GmailMessageDto): number {
+  if (!message.messageTimestamp) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const parsedTimestamp = Date.parse(message.messageTimestamp);
+  return Number.isFinite(parsedTimestamp) ? parsedTimestamp : Number.POSITIVE_INFINITY;
 }
 
 /**

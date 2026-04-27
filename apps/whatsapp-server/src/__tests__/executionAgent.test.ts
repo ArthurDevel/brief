@@ -358,6 +358,10 @@ describe("WhatsAppTextExecutionAgentRuntime", () => {
                             value: "Sarah <sarah@example.com>",
                           },
                           {
+                            name: "To",
+                            value: "team@example.com",
+                          },
+                          {
                             name: "Subject",
                             value: "Urgent update",
                           },
@@ -417,14 +421,15 @@ describe("WhatsAppTextExecutionAgentRuntime", () => {
                 data: {
                   messages: [
                     {
+                      from: "Sarah <sarah@example.com>",
                       id: "message-1",
                       labels: ["INBOX"],
                       preview:
                         "This very large HTML email should not be kept in execution history.",
                       receivedAt: null,
-                      sender: "Sarah <sarah@example.com>",
                       subject: "Urgent update",
                       threadId: "thread-1",
+                      to: "team@example.com",
                       unread: true,
                       url: "https://mail.google.com/mail/u/0/#inbox/abc",
                     },

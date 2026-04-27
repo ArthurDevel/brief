@@ -133,6 +133,10 @@ describe("mapSessionToolsToLiveKitTools", () => {
                   value: "Alex <alex@example.com>",
                 },
                 {
+                  name: "To",
+                  value: "team@example.com",
+                },
+                {
                   name: "Subject",
                   value: "Inbox summary",
                 },
@@ -188,14 +192,15 @@ describe("mapSessionToolsToLiveKitTools", () => {
     expect(JSON.parse(result)).toEqual({
       messages: [
         {
+          from: "Alex <alex@example.com>",
           id: "message-1",
           labels: ["INBOX"],
           preview:
             "This email body is much larger than what the voice agent should keep.",
           receivedAt: null,
-          sender: "Alex <alex@example.com>",
           subject: "Inbox summary",
           threadId: "thread-1",
+          to: "team@example.com",
           unread: true,
           url: "https://mail.google.com/mail/u/0/#inbox/abc",
         },
@@ -203,5 +208,54 @@ describe("mapSessionToolsToLiveKitTools", () => {
       resultSizeEstimate: 1,
     });
     expect(result).not.toContain("messageText");
+  });
+
+  it("returns plain text when Gmail attachments are unsupported", async () => {
+    const executeMock = vi.fn().mockResolvedValue({
+      data: {
+        file: {
+          s3url: "https://example.com/file.pdf",
+        },
+      },
+      error: null,
+      successful: true,
+    });
+
+    const tools = mapSessionToolsToLiveKitTools(
+      [
+        {
+          type: "function",
+          function: {
+            name: "GMAIL_GET_ATTACHMENT",
+            description: "Fetch one Gmail attachment.",
+            parameters: {
+              type: "object",
+            },
+          },
+        },
+      ],
+      {
+        tools: {
+          executeMetaTool: vi.fn(),
+        },
+      } as never,
+      {
+        sessionId: "session_123",
+        execute: executeMock,
+      }
+    );
+
+    const result = await tools.GMAIL_GET_ATTACHMENT.execute(
+      {
+        attachment_id: "attachment-1",
+        message_id: "message-1",
+      },
+      {
+        ctx: {} as never,
+        toolCallId: "tool_call_attachment_1",
+      }
+    );
+
+    expect(result).toBe("attachments not supported yet");
   });
 });

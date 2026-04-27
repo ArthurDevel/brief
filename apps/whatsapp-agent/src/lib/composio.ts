@@ -241,7 +241,6 @@ function isComposioMetaTool(toolSlug: string): boolean {
 }
 
 /**
-/**
  * Formats selected Composio tool results into smaller spoken-friendly payloads.
  * @param toolSlug - Executed Composio tool slug
  * @param toolArguments - Tool arguments used for execution
@@ -257,11 +256,13 @@ function formatToolResult(
     return JSON.stringify(result);
   }
 
-  return JSON.stringify(
-    postProcessExecutionToolResultData({
-      toolArguments,
-      toolName: toolSlug,
-      toolResultData: result.data ?? result,
-    })
-  );
+  const formattedResult = postProcessExecutionToolResultData({
+    toolArguments,
+    toolName: toolSlug,
+    toolResultData: result.data ?? result,
+  });
+
+  return typeof formattedResult === "string"
+    ? formattedResult
+    : JSON.stringify(formattedResult);
 }
