@@ -40,6 +40,10 @@ describe("buildVoiceOpenPokeInteractionUserPrompt", () => {
       ],
     });
 
+    expect(buildVoiceOpenPokeInteractionSystemPrompt()).toContain(
+      "You are BrewDock on WhatsApp voice."
+    );
+    expect(buildVoiceOpenPokeInteractionSystemPrompt()).not.toContain("You are OpenPoke");
     expect(buildVoiceOpenPokeInteractionSystemPrompt()).toContain("interaction agent");
     expect(prompt).toContain("<channel_context>");
     expect(prompt).toContain("<user_memory>");

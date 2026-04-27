@@ -7,6 +7,10 @@ import {
 describe("buildWhatsAppTextSystemPrompt", () => {
   it("requires tool calls for WhatsApp text interaction", () => {
     expect(buildWhatsAppTextSystemPrompt()).toContain(
+      "You are BrewDock on WhatsApp text."
+    );
+    expect(buildWhatsAppTextSystemPrompt()).not.toContain("You are OpenPoke");
+    expect(buildWhatsAppTextSystemPrompt()).toContain(
       "Always communicate with the user through the available tools."
     );
     expect(buildWhatsAppTextSystemPrompt()).toContain(
@@ -20,6 +24,9 @@ describe("buildWhatsAppTextSystemPrompt", () => {
     );
     expect(buildWhatsAppTextSystemPrompt()).toContain(
       "reuse that exact case-sensitive string"
+    );
+    expect(buildWhatsAppTextSystemPrompt()).toContain(
+      "press the Call button in WhatsApp to start a voice call"
     );
   });
 });

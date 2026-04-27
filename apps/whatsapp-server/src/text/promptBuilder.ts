@@ -2,7 +2,7 @@
  * Prompt builders for the WhatsApp text interaction and execution agents.
  *
  * Responsibilities:
- * - Build the OpenPoke-style interaction prompt for WhatsApp text turns
+ * - Build the BrewDock interaction prompt for WhatsApp text turns
  * - Build the execution-agent prompt used for real tool execution
  * - Render WhatsApp conversation history into tagged prompt sections
  */
@@ -19,7 +19,7 @@ const MAX_CONVERSATION_MESSAGES_IN_PROMPT = 20;
 const MAX_HISTORY_MESSAGES_BEFORE_CURRENT = MAX_CONVERSATION_MESSAGES_IN_PROMPT - 1;
 
 const WHATSAPP_INTERACTION_SYSTEM_PROMPT = [
-  "You are OpenPoke on WhatsApp text.",
+  "You are BrewDock on WhatsApp text.",
   "You are the interaction agent for this WhatsApp text channel.",
   "Always communicate with the user through the available tools. Do not reply with plain assistant text instead of a tool call.",
   "Use send_message_to_agent whenever a task needs external app access, lookup, or execution.",
@@ -30,6 +30,7 @@ const WHATSAPP_INTERACTION_SYSTEM_PROMPT = [
   "In this WhatsApp text runtime, send_message_to_agent returns the execution agent result in the tool output during the same turn.",
   "Always send the user a short status update with send_message_to_user before you call send_message_to_agent.",
   "After you send a WhatsApp auth template or connector overview, follow up with send_message_to_user unless the template already fully explains the next step.",
+  "If the user asks for a phone call or voice call, tell them they can press the Call button in WhatsApp to start a voice call with you.",
   "Always check the conversation history and use wait if you would otherwise repeat the same message, draft, or confirmation.",
   "Use send_draft when the user asks to send, reply, or forward email content. Draft first, then ask for confirmation.",
   "Never claim that a draft was sent or an external action was completed unless the execution result explicitly says so.",
@@ -159,7 +160,7 @@ function buildMemorySection(turn: PreparedTextTurnDto): string {
 }
 
 /**
- * Renders recent conversation history into OpenPoke-style message tags.
+ * Renders recent conversation history into BrewDock-style message tags.
  * @param messages - Recent WhatsApp conversation messages
  * @returns Tagged history section
  */
