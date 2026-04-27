@@ -88,6 +88,7 @@ export interface VoiceOpenPokeExecutionAgent {
 
 const WHATSAPP_VOICE_EXECUTION_MODEL = "google/gemini-3-flash-preview";
 const WHATSAPP_VOICE_EXECUTION_FAILURE_SUMMARIZER_MODEL = "google/gemini-3-flash-preview";
+const COMPOSIO_SEARCH_TOOLKIT = "COMPOSIO_SEARCH";
 const MAX_PERSISTED_EXECUTION_MESSAGES = 20;
 const MAX_TOOL_ITERATIONS = 8;
 
@@ -398,13 +399,17 @@ export class VoiceOpenPokeExecutionAgentRuntime implements VoiceOpenPokeExecutio
           apiKey: this.composioApiKey,
         });
         const connectedToolkitSlugs = Object.keys(callerContext.connectedAccountsByToolkit);
+        const executionToolkitSlugs = [
+          ...connectedToolkitSlugs,
+          COMPOSIO_SEARCH_TOOLKIT,
+        ];
         const session = await composio.create(callerContext.supabaseUserId, {
           manageConnections: false,
           workbench: {
             enable: false,
           },
           connectedAccounts: callerContext.connectedAccountsByToolkit,
-          ...(connectedToolkitSlugs.length > 0 ? { toolkits: connectedToolkitSlugs } : {}),
+          toolkits: executionToolkitSlugs,
         });
         const sessionTools = await session.tools() as SessionToolDefinition[];
         if (sessionTools.length === 0) {
