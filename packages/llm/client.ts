@@ -250,7 +250,7 @@ function mapRequestMessage(message: LlmChatMessageDto): LlmRequestMessage {
               arguments: JSON.stringify(toolCall.arguments),
               name: toolCall.name,
             },
-            ...(toolCall.id ? { id: toolCall.id } : {}),
+            id: toolCall.id ?? toolCall.name,
             type: "function" as const,
           })),
         }

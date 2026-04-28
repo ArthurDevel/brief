@@ -139,4 +139,79 @@ describe("fitExecutionHistoryToTokenBudget", () => {
       }),
     ]);
   });
+
+  it("drops orphan tool messages when a raw message limit starts mid tool-call pair", () => {
+    const persistedMessages = [
+      createExecutionMessage({
+        content: "{\"status\":\"success\"}",
+        id: "message-1",
+        role: "tool",
+        toolCallId: "tool-1",
+        toolName: "GMAIL_FETCH_EMAILS",
+        toolResult: {
+          ok: true,
+        },
+      }),
+      createExecutionMessage({
+        content: "Recent user message",
+        id: "message-2",
+      }),
+    ];
+
+    const retainedMessages = fitExecutionHistoryToTokenBudget({
+      maxPromptTokens: 10000,
+      persistedMessages,
+      systemMessage: "System prompt",
+      toolSchemas: [],
+      userMessage: "Continue.",
+    });
+
+    expect(retainedMessages).toEqual([
+      expect.objectContaining({
+        id: "message-2",
+      }),
+    ]);
+  });
+
+  it("keeps tool-call pairs that use the tool name as the fallback tool call id", () => {
+    const persistedMessages = [
+      createExecutionMessage({
+        content: "Checking Gmail.",
+        id: "message-1",
+        role: "assistant",
+        toolCalls: [
+          {
+            arguments: {
+              query: "in:inbox",
+            },
+            id: null,
+            name: "GMAIL_FETCH_EMAILS",
+          },
+        ],
+      }),
+      createExecutionMessage({
+        content: "{\"status\":\"success\"}",
+        id: "message-2",
+        role: "tool",
+        toolArguments: {
+          query: "in:inbox",
+        },
+        toolCallId: "GMAIL_FETCH_EMAILS",
+        toolName: "GMAIL_FETCH_EMAILS",
+        toolResult: {
+          ok: true,
+        },
+      }),
+    ];
+
+    const retainedMessages = fitExecutionHistoryToTokenBudget({
+      maxPromptTokens: 10000,
+      persistedMessages,
+      systemMessage: "System prompt",
+      toolSchemas: [],
+      userMessage: "Continue.",
+    });
+
+    expect(retainedMessages).toEqual(persistedMessages);
+  });
 });

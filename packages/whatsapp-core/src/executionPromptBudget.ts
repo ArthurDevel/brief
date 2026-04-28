@@ -87,6 +87,11 @@ function groupExecutionMessagesIntoReplayUnits(
       break;
     }
 
+    if (currentMessage.role === "tool") {
+      currentIndex += 1;
+      continue;
+    }
+
     if (currentMessage.role !== "assistant" || !currentMessage.toolCalls?.length) {
       replayUnits.push({
         messages: [currentMessage],
@@ -97,7 +102,7 @@ function groupExecutionMessagesIntoReplayUnits(
 
     const toolCallIds = new Set(
       currentMessage.toolCalls
-        .map((toolCall) => toolCall.id)
+        .map((toolCall) => toolCall.id ?? toolCall.name)
         .filter((toolCallId): toolCallId is string => Boolean(toolCallId))
     );
     const groupedMessages = [currentMessage];
@@ -117,9 +122,14 @@ function groupExecutionMessagesIntoReplayUnits(
       currentIndex += 1;
     }
 
-    replayUnits.push({
-      messages: groupedMessages,
-    });
+    if (
+      toolCallIds.size === currentMessage.toolCalls.length &&
+      groupedMessages.length === toolCallIds.size + 1
+    ) {
+      replayUnits.push({
+        messages: groupedMessages,
+      });
+    }
   }
 
   return replayUnits;
