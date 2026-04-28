@@ -120,4 +120,57 @@ describe("createLlmTextClient", () => {
       toolCalls: [],
     });
   });
+
+  it("serializes fallback tool call ids when replaying assistant tool calls", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "Done.",
+              },
+            },
+          ],
+          model: "llama-3.3-70b",
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createLlmTextClient({
+      apiKey: "cerebras-key",
+      model: "llama-3.3-70b",
+      provider: "cerebras",
+    });
+
+    await client.createChatCompletion({
+      messages: [
+        {
+          content: "Checking tools.",
+          role: "assistant",
+          toolCalls: [
+            {
+              arguments: {
+                query: "urgent",
+              },
+              id: null,
+              name: "GMAIL_FETCH_EMAILS",
+            },
+          ],
+        },
+        {
+          content: "{\"status\":\"success\"}",
+          role: "tool",
+          toolCallId: "GMAIL_FETCH_EMAILS",
+        },
+      ],
+    });
+
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+
+    expect(requestBody.messages[0].tool_calls[0].id).toBe("GMAIL_FETCH_EMAILS");
+    expect(requestBody.messages[1].tool_call_id).toBe("GMAIL_FETCH_EMAILS");
+  });
 });
