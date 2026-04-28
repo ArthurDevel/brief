@@ -20,19 +20,20 @@ import type {
   AppendExecutionAgentToolResultDto,
   ExecutionAgentMessageDto,
   ExecutionAgentThreadDto,
+  ExecutionAgentToolCallDto,
   FindOrCreateExecutionAgentThreadDto,
-  ListWhatsAppConversationMessagesDto,
+  ListExecutionAgentThreadsDto,
   ListExecutionAgentMessagesDto,
+  ListWhatsAppConversationMessagesDto,
+  StoreExecutionAgentMessageDto,
+  StoreExecutionAgentMessagesDto,
   StoreInboundWhatsAppTextMessageDto,
   StoreInboundWhatsAppTextMessageResultDto,
   StoreOutboundWhatsAppTextMessageDto,
-  StoreExecutionAgentMessageDto,
-  StoreExecutionAgentMessagesDto,
   TouchExecutionAgentThreadDto,
   WhatsAppConversationMessageDto,
   WhatsAppLinkedUserDto,
   WhatsAppMemoryEntryDto,
-  ExecutionAgentToolCallDto,
 } from "./types.js";
 
 // ============================================================================
@@ -302,6 +303,32 @@ export class WhatsAppCoreStore {
   }
 
   /**
+   * Loads recent persisted execution-agent threads for one user.
+   * @param input - Thread list lookup DTO
+   * @returns Execution-agent threads ordered most recently updated first
+   */
+  async listExecutionAgentThreads(
+    input: ListExecutionAgentThreadsDto
+  ): Promise<ExecutionAgentThreadDto[]> {
+    const { data, error } = await this.supabase
+      .from("execution_agent_threads")
+      .select("id, user_id, agent_name, created_at, updated_at")
+      .eq("user_id", input.userId)
+      .order("updated_at", { ascending: false })
+      .limit(input.limit);
+
+    if (error) {
+      throw new Error(`Failed to load execution-agent threads: ${error.message}`);
+    }
+
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    return data.map((row) => this.mapExecutionAgentThreadRow(row as ExecutionAgentThreadRow));
+  }
+
+  /**
    * Loads recent execution-agent messages for one persisted thread.
    * @param input - Thread message lookup DTO
    * @returns Execution-agent messages ordered oldest-first
@@ -472,7 +499,7 @@ export class WhatsAppCoreStore {
    * @param phone - Raw or normalized phone
    * @returns Linked user DTO
    */
-  private async resolveOrCreateLinkedUserByPhone(
+  async resolveOrCreateLinkedUserByPhone(
     phone: string
   ): Promise<WhatsAppLinkedUserDto> {
     const normalizedPhone = this.requireNormalizedPhone(phone);

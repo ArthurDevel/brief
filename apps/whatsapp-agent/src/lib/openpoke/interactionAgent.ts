@@ -2,19 +2,20 @@
  * WhatsApp voice interaction agent runtime.
  *
  * Responsibilities:
- * - Run the OpenPoke-style interaction loop for one WhatsApp voice turn
+ * - Run the BrewDock interaction loop for one WhatsApp voice turn
  * - Execute interaction tools and aggregate user-visible voice actions
  * - Hand off external work to the execution agent when needed
  */
 
 import { startActiveObservation } from "@langfuse/tracing";
-import {
-  FetchOpenRouterTextClient,
-  type OpenRouterChatMessageDto,
-  type OpenRouterTextClient,
-  type OpenRouterToolCallDto,
-  type OpenRouterToolSchemaDto,
-} from "./openRouterClient.js";
+import { createLlmTextClient } from "@dublin/llm/client";
+import type {
+  LlmChatMessageDto,
+  LlmProvider,
+  LlmTextClient,
+  LlmToolCallDto,
+  LlmToolSchemaDto,
+} from "@dublin/llm/types";
 import {
   buildVoiceOpenPokeConversationStartUserPrompt,
   buildVoiceOpenPokeInteractionSystemPrompt,
@@ -30,7 +31,7 @@ import type {
   VoiceUserVisibleActionDto,
 } from "./types.js";
 import type { VoiceOpenPokeExecutionAgent } from "./executionAgent.js";
-import type { AgentEnv } from "../env.js";
+import { getLlmApiKey, type AgentEnv } from "../env.js";
 import type {
   AppendVoiceInteractionAgentToolResultDto,
   VoiceInteractionAgentStore,
@@ -69,6 +70,7 @@ export interface WaitArgumentsDto {
 // CONSTANTS
 // ============================================================================
 
+const WHATSAPP_VOICE_INTERACTION_PROVIDER: LlmProvider = "openrouter";
 const WHATSAPP_VOICE_INTERACTION_MODEL = "google/gemini-3-flash-preview";
 const MAX_TOOL_ITERATIONS = 8;
 const SUPPORTED_CONNECTOR_TOOLKITS = [
@@ -78,7 +80,7 @@ const SUPPORTED_CONNECTOR_TOOLKITS = [
   "outlook",
 ] as const;
 
-const INTERACTION_TOOL_SCHEMAS: OpenRouterToolSchemaDto[] = [
+const INTERACTION_TOOL_SCHEMAS: LlmToolSchemaDto[] = [
   {
     type: "function",
     function: {
@@ -180,23 +182,23 @@ const INTERACTION_TOOL_SCHEMAS: OpenRouterToolSchemaDto[] = [
 export class VoiceOpenPokeInteractionAgentRuntime {
   private readonly assistantInstructions: string;
   private readonly executionAgent: VoiceOpenPokeExecutionAgent;
-  private readonly openRouterClient: OpenRouterTextClient;
+  private readonly llmClient: LlmTextClient;
   private readonly voiceInteractionAgentStore: VoiceInteractionAgentStore | null;
 
   /**
    * Creates the WhatsApp voice interaction runtime.
-   * @param openRouterClient - OpenRouter client used for interaction planning
+   * @param llmClient - LLM client used for interaction planning
    * @param executionAgent - Execution agent used for external tasks
    * @param assistantInstructions - Caller-facing assistant instructions from config
    * @param voiceInteractionAgentStore - Optional voice interaction-agent store for persistence
    */
   constructor(
-    openRouterClient: OpenRouterTextClient,
+    llmClient: LlmTextClient,
     executionAgent: VoiceOpenPokeExecutionAgent,
     assistantInstructions = "",
     voiceInteractionAgentStore: VoiceInteractionAgentStore | null = null
   ) {
-    this.openRouterClient = openRouterClient;
+    this.llmClient = llmClient;
     this.executionAgent = executionAgent;
     this.assistantInstructions = assistantInstructions;
     this.voiceInteractionAgentStore = voiceInteractionAgentStore;
@@ -286,7 +288,7 @@ export class VoiceOpenPokeInteractionAgentRuntime {
           input: observationInput,
         });
 
-        const messages: OpenRouterChatMessageDto[] = [
+        const messages: LlmChatMessageDto[] = [
           {
             role: "system",
             content: buildVoiceOpenPokeInteractionSystemPrompt(this.assistantInstructions),
@@ -300,7 +302,7 @@ export class VoiceOpenPokeInteractionAgentRuntime {
         let waitRequested = false;
 
         for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-          const assistantMessage = await this.openRouterClient.createChatCompletion({
+          const assistantMessage = await this.llmClient.createChatCompletion({
             messages,
             tools: INTERACTION_TOOL_SCHEMAS,
           });
@@ -372,14 +374,14 @@ export class VoiceOpenPokeInteractionAgentRuntime {
   /**
    * Executes one interaction tool call and returns the loop summary.
    * @param turn - Prepared voice turn
-   * @param toolCall - Parsed OpenRouter tool call
+   * @param toolCall - Parsed LLM tool call
    * @param emitAction - Optional callback for immediate user-visible actions
    * @param executionObserver - Optional observer for delegated execution snapshots
    * @returns Tool result plus loop metadata
    */
   private async executeToolCall(
     turn: PreparedVoiceTurnDto | PreparedVoiceConversationStartDto,
-    toolCall: OpenRouterToolCallDto,
+    toolCall: LlmToolCallDto,
     emitAction?: (action: VoiceUserVisibleActionDto) => Promise<void>,
     executionObserver?: VoiceExecutionObserver
   ): Promise<ToolExecutionSummary & { toolResult: string }> {
@@ -629,9 +631,10 @@ export function createVoiceOpenPokeInteractionAgent(
   voiceInteractionAgentStore: VoiceInteractionAgentStore | null = null
 ): VoiceOpenPokeInteractionAgentRuntime {
   return new VoiceOpenPokeInteractionAgentRuntime(
-    new FetchOpenRouterTextClient({
-      apiKey: env.openRouterApiKey,
+    createLlmTextClient({
+      apiKey: getLlmApiKey(WHATSAPP_VOICE_INTERACTION_PROVIDER),
       model: WHATSAPP_VOICE_INTERACTION_MODEL,
+      provider: WHATSAPP_VOICE_INTERACTION_PROVIDER,
     }),
     executionAgent,
     env.livekitAgentInstructions,

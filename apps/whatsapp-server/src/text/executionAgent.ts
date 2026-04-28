@@ -2,7 +2,7 @@
  * WhatsApp text execution agent runtime.
  *
  * Responsibilities:
- * - Run a tool-enabled execution loop with OpenRouter
+ * - Run a tool-enabled execution loop with a provider-backed LLM client
  * - Reload persisted execution history for one user + agent thread
  * - Create a user-scoped Composio session for the linked WhatsApp user
  * - Execute Composio and WhatsApp auth tools for one interaction turn
@@ -10,22 +10,25 @@
 
 import { startActiveObservation } from "@langfuse/tracing";
 import { Composio } from "@composio/core";
+import { createLlmTextClient } from "@dublin/llm/client";
 import {
   createWhatsAppCoreStore,
+  fitExecutionHistoryToTokenBudget,
+  postProcessExecutionToolResultData,
   type ExecutionAgentMessageDto,
   type ExecutionAgentThreadDto,
   type StoreExecutionAgentMessageDto,
   type WhatsAppCoreStore,
   type WhatsAppLinkedUserDto,
 } from "@dublin/whatsapp-core";
-import { getWhatsAppTextAgentEnv } from "./env.js";
-import {
-  FetchOpenRouterTextClient,
-  type OpenRouterChatMessageDto,
-  type OpenRouterTextClient,
-  type OpenRouterToolCallDto,
-  type OpenRouterToolSchemaDto,
-} from "./openRouterClient.js";
+import type {
+  LlmChatMessageDto,
+  LlmProvider,
+  LlmTextClient,
+  LlmToolCallDto,
+  LlmToolSchemaDto,
+} from "@dublin/llm/types";
+import { getWhatsAppTextAgentEnv, getWhatsAppTextLlmApiKey } from "./env.js";
 import {
   buildWhatsAppExecutionFailureSummarizerSystemPrompt,
   buildWhatsAppExecutionSystemPrompt,
@@ -70,7 +73,7 @@ interface ComposioExecutionSession {
     toolName: string,
     toolArguments: Record<string, unknown>
   ) => Promise<unknown>;
-  toolSchemas: OpenRouterToolSchemaDto[];
+  toolSchemas: LlmToolSchemaDto[];
 }
 
 interface ExecutionTraceEntryDto {
@@ -89,10 +92,16 @@ export interface WhatsAppTextExecutionAgent {
 // CONSTANTS
 // ============================================================================
 
-const WHATSAPP_TEXT_EXECUTION_MODEL = "google/gemini-3-flash-preview";
+const WHATSAPP_TEXT_EXECUTION_PROVIDER: LlmProvider = "cerebras";
+const WHATSAPP_TEXT_EXECUTION_MODEL = "zai-glm-4.7";
+const WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_PROVIDER: LlmProvider = "openrouter";
 const WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_MODEL = "google/gemini-3-flash-preview";
+const COMPOSIO_SEARCH_TOOLKIT = "COMPOSIO_SEARCH";
 const MAX_PERSISTED_EXECUTION_MESSAGES = 20;
+const MAX_EXECUTION_PROMPT_TOKENS = 130000;
 const MAX_TOOL_ITERATIONS = 8;
+
+const runningExecutionAgentKeys = new Set<string>();
 
 // ============================================================================
 // MAIN CLASS
@@ -100,8 +109,8 @@ const MAX_TOOL_ITERATIONS = 8;
 
 export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionAgent {
   private readonly composioApiKey: string;
-  private readonly openRouterClient: OpenRouterTextClient;
-  private readonly summarizerClient: OpenRouterTextClient;
+  private readonly llmClient: LlmTextClient;
+  private readonly summarizerClient: LlmTextClient;
   private readonly whatsappCoreStore: WhatsAppCoreStore;
   private readonly whatsappAccessToken: string;
   private readonly whatsappApiVersion: string;
@@ -109,8 +118,8 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
 
   /**
    * Creates the execution runtime for WhatsApp text tasks.
-   * @param openRouterClient - OpenRouter client used for execution planning
-   * @param summarizerClient - OpenRouter client used for failed-execution summaries
+   * @param llmClient - LLM client used for execution planning
+   * @param summarizerClient - LLM client used for failed-execution summaries
    * @param whatsappCoreStore - Shared store used for persisted execution threads
    * @param composioApiKey - Composio API key for user-scoped sessions
    * @param whatsappAccessToken - Meta Graph access token for auth tools
@@ -118,15 +127,15 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
    * @param whatsappPhoneNumberId - Sending phone number ID for auth tools
    */
   constructor(
-    openRouterClient: OpenRouterTextClient,
-    summarizerClient: OpenRouterTextClient,
+    llmClient: LlmTextClient,
+    summarizerClient: LlmTextClient,
     whatsappCoreStore: WhatsAppCoreStore,
     composioApiKey: string,
     whatsappAccessToken: string,
     whatsappApiVersion: string,
     whatsappPhoneNumberId: string
   ) {
-    this.openRouterClient = openRouterClient;
+    this.llmClient = llmClient;
     this.summarizerClient = summarizerClient;
     this.whatsappCoreStore = whatsappCoreStore;
     this.composioApiKey = composioApiKey;
@@ -147,6 +156,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
         const startedAt = Date.now();
         const executionTrace: ExecutionTraceEntryDto[] = [];
         let thread: ExecutionAgentThreadDto | null = null;
+        const executionKey = buildExecutionAgentKey(input.linkedUser.userId, input.agentName);
         console.info("[whatsapp-server] execution agent started", {
           agentName: input.agentName,
           instructionLength: input.instructions.length,
@@ -166,21 +176,59 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
             agentName: input.agentName,
             userId: input.linkedUser.userId,
           });
+
+          if (runningExecutionAgentKeys.has(executionKey)) {
+            const busyResponse = buildExecutionAgentBusyResponse(input.agentName);
+            console.info("[whatsapp-server] execution agent busy", {
+              agentName: input.agentName,
+              userId: input.linkedUser.userId,
+            });
+
+            agentObservation.update({
+              output: {
+                response: busyResponse,
+                success: false,
+              },
+            });
+
+            return {
+              agentName: input.agentName,
+              response: busyResponse,
+              success: false,
+            };
+          }
+
+          runningExecutionAgentKeys.add(executionKey);
           const persistedMessages = await this.whatsappCoreStore.listExecutionAgentMessages({
             limit: MAX_PERSISTED_EXECUTION_MESSAGES,
             threadId: thread.id,
             userId: input.linkedUser.userId,
           });
           const session = await this.createExecutionSession(input.linkedUser);
-          const messages: OpenRouterChatMessageDto[] = [
+          const systemMessage = buildWhatsAppExecutionSystemPrompt(
+            input.agentName,
+            session.connectedToolkitSlugs
+          );
+          const replaySafePersistedMessages = fitExecutionHistoryToTokenBudget({
+            maxPromptTokens: MAX_EXECUTION_PROMPT_TOKENS,
+            persistedMessages,
+            systemMessage,
+            toolSchemas: session.toolSchemas,
+            userMessage: input.instructions,
+          });
+          if (replaySafePersistedMessages.length < persistedMessages.length) {
+            console.info("[whatsapp-server] trimmed persisted execution history for prompt budget", {
+              agentName: input.agentName,
+              originalMessageCount: persistedMessages.length,
+              retainedMessageCount: replaySafePersistedMessages.length,
+            });
+          }
+          const messages: LlmChatMessageDto[] = [
             {
               role: "system",
-              content: buildWhatsAppExecutionSystemPrompt(
-                input.agentName,
-                session.connectedToolkitSlugs
-              ),
+              content: systemMessage,
             },
-            ...persistedMessages.map(mapPersistedExecutionMessageToOpenRouterMessage),
+            ...replaySafePersistedMessages.map(mapPersistedExecutionMessageToLlmMessage),
             {
               role: "user",
               content: input.instructions,
@@ -198,7 +246,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
               toolCount: session.toolSchemas.length,
             });
 
-            const assistantMessage = await this.openRouterClient.createChatCompletion({
+            const assistantMessage = await this.llmClient.createChatCompletion({
               messages,
               tools: session.toolSchemas,
             });
@@ -310,6 +358,8 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
             response: summary,
             success: false,
           };
+        } finally {
+          runningExecutionAgentKeys.delete(executionKey);
         }
       },
       {
@@ -381,8 +431,13 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
             : []
         );
         const connectedToolkitSlugs = Object.keys(connectedAccountsByToolkit);
+        const executionToolkitSlugs = [
+          ...connectedToolkitSlugs,
+          COMPOSIO_SEARCH_TOOLKIT,
+        ];
         console.info("[whatsapp-server] loaded connected accounts for execution session", {
           connectedToolkitSlugs,
+          executionToolkitSlugs,
           userId: linkedUser.userId,
         });
 
@@ -402,7 +457,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
               linkedUser.whatsappPhone
             ),
           },
-          ...(connectedToolkitSlugs.length > 0 ? { toolkits: connectedToolkitSlugs } : {}),
+          toolkits: executionToolkitSlugs,
         });
         const sessionTools = await session.tools() as SessionToolDefinition[];
         if (sessionTools.length === 0) {
@@ -438,7 +493,7 @@ export class WhatsAppTextExecutionAgentRuntime implements WhatsAppTextExecutionA
 
             return session.execute(toolName, toolArguments);
           },
-          toolSchemas: mapSessionToolsToOpenRouterSchemas(sessionTools),
+          toolSchemas: mapSessionToolsToLlmSchemas(sessionTools),
         };
       }
     );
@@ -506,13 +561,15 @@ export function createWhatsAppTextExecutionAgent(): WhatsAppTextExecutionAgentRu
   const env = getWhatsAppTextAgentEnv();
 
   return new WhatsAppTextExecutionAgentRuntime(
-    new FetchOpenRouterTextClient({
-      apiKey: env.openRouterApiKey,
+    createLlmTextClient({
+      apiKey: getWhatsAppTextLlmApiKey(WHATSAPP_TEXT_EXECUTION_PROVIDER),
       model: WHATSAPP_TEXT_EXECUTION_MODEL,
+      provider: WHATSAPP_TEXT_EXECUTION_PROVIDER,
     }),
-    new FetchOpenRouterTextClient({
-      apiKey: env.openRouterApiKey,
+    createLlmTextClient({
+      apiKey: getWhatsAppTextLlmApiKey(WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_PROVIDER),
       model: WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_MODEL,
+      provider: WHATSAPP_TEXT_EXECUTION_FAILURE_SUMMARIZER_PROVIDER,
     }),
     createWhatsAppCoreStore({
       supabaseServiceRoleKey: env.supabaseServiceRoleKey,
@@ -530,14 +587,33 @@ export function createWhatsAppTextExecutionAgent(): WhatsAppTextExecutionAgentRu
 // ============================================================================
 
 /**
+ * Builds the busy response returned when the same executor is already running.
+ * @param agentName - Executor agent name
+ * @returns User-safe busy response
+ */
+function buildExecutionAgentBusyResponse(agentName: string): string {
+  return `${agentName} is already working on a previous request. Please wait a moment before sending another task to this same executor agent.`;
+}
+
+/**
+ * Builds the in-process lock key for one user's named executor agent.
+ * @param userId - Supabase user ID
+ * @param agentName - Executor agent name
+ * @returns Stable lock key
+ */
+function buildExecutionAgentKey(userId: string, agentName: string): string {
+  return `${userId}:${agentName}`;
+}
+
+/**
  * Executes one session-backed tool call and normalizes the tool payload.
  * @param session - Active Composio execution session
- * @param toolCall - Parsed OpenRouter tool call
+ * @param toolCall - Parsed LLM tool call
  * @returns Structured tool result for the execution loop
  */
 async function executeToolCall(
   session: ComposioExecutionSession,
-  toolCall: OpenRouterToolCallDto
+  toolCall: LlmToolCallDto
 ): Promise<Record<string, unknown>> {
   return await startActiveObservation(
     `execution-tool:${toolCall.name}`,
@@ -557,7 +633,7 @@ async function executeToolCall(
         const result = await session.executeTool(toolCall.name, toolCall.arguments);
         const formattedResult = {
           arguments: toolCall.arguments,
-          result: formatToolResult(toolCall.name, result),
+          result: formatToolResult(toolCall.name, toolCall.arguments, result),
           status: "success",
           tool: toolCall.name,
         };
@@ -596,13 +672,13 @@ async function executeToolCall(
 }
 
 /**
- * Maps one persisted execution-agent row back into an OpenRouter chat message.
+ * Maps one persisted execution-agent row back into an LLM chat message.
  * @param message - Persisted execution-agent message DTO
- * @returns OpenRouter chat message DTO
+ * @returns LLM chat message DTO
  */
-function mapPersistedExecutionMessageToOpenRouterMessage(
+function mapPersistedExecutionMessageToLlmMessage(
   message: ExecutionAgentMessageDto
-): OpenRouterChatMessageDto {
+): LlmChatMessageDto {
   if (message.role === "assistant") {
     return {
       content: message.content,
@@ -649,14 +725,14 @@ function buildUserExecutionAgentMessage(content: string): StoreExecutionAgentMes
 }
 
 /**
- * Builds one persisted assistant row for an OpenRouter execution step.
- * @param assistantMessage - Assistant step returned by OpenRouter
+ * Builds one persisted assistant row for an LLM execution step.
+ * @param assistantMessage - Assistant step returned by the LLM client
  * @returns Persisted execution-agent message DTO
  */
 function buildAssistantExecutionAgentMessage(
   assistantMessage: {
     content: string;
-    toolCalls: OpenRouterToolCallDto[];
+    toolCalls: LlmToolCallDto[];
   }
 ): StoreExecutionAgentMessageDto {
   return {
@@ -683,7 +759,7 @@ function buildAssistantExecutionAgentMessage(
  * @returns Persisted execution-agent message DTO
  */
 function buildToolExecutionAgentMessage(
-  toolCall: OpenRouterToolCallDto,
+  toolCall: LlmToolCallDto,
   toolCallId: string,
   content: string,
   toolResult: Record<string, unknown>
@@ -746,13 +822,13 @@ function buildConnectedAccountsByToolkit(
 }
 
 /**
- * Maps Composio session tools into OpenRouter function schemas.
+ * Maps Composio session tools into LLM function schemas.
  * @param sessionTools - Tool definitions returned by Composio
- * @returns OpenRouter-compatible function schemas
+ * @returns LLM-compatible function schemas
  */
-function mapSessionToolsToOpenRouterSchemas(
+function mapSessionToolsToLlmSchemas(
   sessionTools: SessionToolDefinition[]
-): OpenRouterToolSchemaDto[] {
+): LlmToolSchemaDto[] {
   return sessionTools.map((tool) => {
     const name = tool.function?.name?.trim();
     if (!name) {
@@ -790,10 +866,15 @@ function normalizeParametersSchema(parameters: unknown): Record<string, unknown>
 /**
  * Normalizes tool execution payloads across Composio response shapes.
  * @param toolName - Tool name used for execution
+ * @param toolArguments - Tool arguments used for execution
  * @param result - Raw tool result
  * @returns Structured tool result
  */
-function formatToolResult(toolName: string, result: unknown): unknown {
+function formatToolResult(
+  toolName: string,
+  toolArguments: Record<string, unknown>,
+  result: unknown
+): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return result;
   }
@@ -809,7 +890,11 @@ function formatToolResult(toolName: string, result: unknown): unknown {
 
   if (Object.prototype.hasOwnProperty.call(typedResult, "data")) {
     return {
-      data: typedResult.data,
+      data: postProcessExecutionToolResultData({
+        toolArguments,
+        toolName,
+        toolResultData: typedResult.data,
+      }),
       logId: typedResult.logId ?? null,
       tool: toolName,
     };

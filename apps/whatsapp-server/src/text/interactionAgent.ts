@@ -2,21 +2,22 @@
  * WhatsApp text interaction agent runtime.
  *
  * Responsibilities:
- * - Run the OpenPoke-style interaction loop for one WhatsApp text turn
+ * - Run the BrewDock interaction loop for one WhatsApp text turn
  * - Execute interaction tools and aggregate user-visible WhatsApp actions
  * - Hand off external work to the execution agent when needed
  */
 
 import { startActiveObservation } from "@langfuse/tracing";
+import { createLlmTextClient } from "@dublin/llm/client";
+import type {
+  LlmChatMessageDto,
+  LlmProvider,
+  LlmTextClient,
+  LlmToolCallDto,
+  LlmToolSchemaDto,
+} from "@dublin/llm/types";
 import { createWhatsAppTextExecutionAgent, type WhatsAppTextExecutionAgent } from "./executionAgent.js";
-import { getWhatsAppTextAgentEnv } from "./env.js";
-import {
-  FetchOpenRouterTextClient,
-  type OpenRouterChatMessageDto,
-  type OpenRouterTextClient,
-  type OpenRouterToolCallDto,
-  type OpenRouterToolSchemaDto,
-} from "./openRouterClient.js";
+import { getWhatsAppTextLlmApiKey } from "./env.js";
 import {
   buildWhatsAppTextSystemPrompt,
   buildWhatsAppTextUserPrompt,
@@ -68,6 +69,7 @@ export interface WaitArgumentsDto {
 // CONSTANTS
 // ============================================================================
 
+const WHATSAPP_TEXT_INTERACTION_PROVIDER: LlmProvider = "openrouter";
 const WHATSAPP_TEXT_INTERACTION_MODEL = "google/gemini-3-flash-preview";
 const MAX_TOOL_ITERATIONS = 8;
 const SUPPORTED_CONNECTOR_TOOLKITS = [
@@ -77,7 +79,7 @@ const SUPPORTED_CONNECTOR_TOOLKITS = [
   "outlook",
 ] as const;
 
-const INTERACTION_TOOL_SCHEMAS: OpenRouterToolSchemaDto[] = [
+const INTERACTION_TOOL_SCHEMAS: LlmToolSchemaDto[] = [
   {
     type: "function",
     function: {
@@ -205,18 +207,18 @@ const INTERACTION_TOOL_SCHEMAS: OpenRouterToolSchemaDto[] = [
 
 export class WhatsAppInteractionAgent {
   private readonly executionAgent: WhatsAppTextExecutionAgent;
-  private readonly openRouterClient: OpenRouterTextClient;
+  private readonly llmClient: LlmTextClient;
 
   /**
    * Creates the WhatsApp interaction runtime.
-   * @param openRouterClient - OpenRouter client used for interaction planning
+   * @param llmClient - LLM client used for interaction planning
    * @param executionAgent - Execution agent used for external tasks
    */
   constructor(
-    openRouterClient: OpenRouterTextClient,
+    llmClient: LlmTextClient,
     executionAgent: WhatsAppTextExecutionAgent
   ) {
-    this.openRouterClient = openRouterClient;
+    this.llmClient = llmClient;
     this.executionAgent = executionAgent;
   }
 
@@ -251,7 +253,7 @@ export class WhatsAppInteractionAgent {
             },
           });
 
-          const messages: OpenRouterChatMessageDto[] = [
+          const messages: LlmChatMessageDto[] = [
             {
               role: "system",
               content: buildWhatsAppTextSystemPrompt(),
@@ -271,7 +273,7 @@ export class WhatsAppInteractionAgent {
               messageCount: messages.length,
             });
 
-            const assistantMessage = await this.openRouterClient.createChatCompletion({
+            const assistantMessage = await this.llmClient.createChatCompletion({
               messages,
               tools: INTERACTION_TOOL_SCHEMAS,
             });
@@ -370,12 +372,12 @@ export class WhatsAppInteractionAgent {
   /**
    * Executes one interaction tool call and returns the loop summary.
    * @param turn - Prepared WhatsApp turn
-   * @param toolCall - Parsed OpenRouter tool call
+   * @param toolCall - Parsed LLM tool call
    * @returns Tool result plus loop metadata
    */
   private async executeToolCall(
     turn: PreparedTextTurnDto,
-    toolCall: OpenRouterToolCallDto,
+    toolCall: LlmToolCallDto,
     emitAction?: (action: WhatsAppUserVisibleActionDto) => Promise<void>
   ): Promise<ToolExecutionSummary & { toolResult: string }> {
     return await startActiveObservation(
@@ -614,12 +616,11 @@ export class WhatsAppInteractionAgent {
  * @returns Ready-to-use interaction runtime
  */
 export function createWhatsAppInteractionAgent(): WhatsAppInteractionAgent {
-  const env = getWhatsAppTextAgentEnv();
-
   return new WhatsAppInteractionAgent(
-    new FetchOpenRouterTextClient({
-      apiKey: env.openRouterApiKey,
+    createLlmTextClient({
+      apiKey: getWhatsAppTextLlmApiKey(WHATSAPP_TEXT_INTERACTION_PROVIDER),
       model: WHATSAPP_TEXT_INTERACTION_MODEL,
+      provider: WHATSAPP_TEXT_INTERACTION_PROVIDER,
     }),
     createWhatsAppTextExecutionAgent()
   );

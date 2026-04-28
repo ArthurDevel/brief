@@ -9,11 +9,15 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/whatsapp-agent/package.json apps/whatsapp-agent/package.json
 COPY apps/whatsapp-agent/tsconfig.json apps/whatsapp-agent/tsconfig.json
 COPY apps/whatsapp-agent/tsconfig.build.json apps/whatsapp-agent/tsconfig.build.json
+COPY packages/llm/package.json packages/llm/package.json
 COPY packages/whatsapp-core/package.json packages/whatsapp-core/package.json
 
 RUN pnpm install --frozen-lockfile
 
 COPY apps/whatsapp-agent/src apps/whatsapp-agent/src
+COPY packages/llm/client.ts packages/llm/client.ts
+COPY packages/llm/types.ts packages/llm/types.ts
+COPY packages/llm/providers packages/llm/providers
 COPY packages/whatsapp-core/src packages/whatsapp-core/src
 
 RUN pnpm --filter @dublin/whatsapp-agent build
@@ -30,6 +34,7 @@ COPY --from=builder /app/node_modules /app/node_modules
 COPY --from=builder /app/apps/whatsapp-agent/package.json /app/apps/whatsapp-agent/package.json
 COPY --from=builder /app/apps/whatsapp-agent/node_modules /app/apps/whatsapp-agent/node_modules
 COPY --from=builder /app/apps/whatsapp-agent/dist /app/apps/whatsapp-agent/dist
+COPY --from=builder /app/packages/llm /app/packages/llm
 COPY --from=builder /app/packages/whatsapp-core /app/packages/whatsapp-core
 
 CMD ["node_modules/.bin/tsx", "dist/bootstrap.js", "start"]

@@ -1,51 +1,30 @@
 /**
- * OpenRouter chat client for the WhatsApp text runtimes.
+ * Shared fetch-based LLM client factory.
  *
  * Responsibilities:
- * - Send chat-completions requests with optional function tools
- * - Normalize assistant text and tool calls from OpenRouter responses
- * - Keep OpenRouter request/response parsing out of the runtimes
+ * - Create one provider-backed text client from simple config
+ * - Normalize request and response payloads for tool-calling chat completions
+ * - Keep provider-specific HTTP details out of the agent runtimes
  */
 
 import { startActiveObservation } from "@langfuse/tracing";
+import { createCerebrasRequestConfig } from "./providers/cerebras.js";
+import { createOpenRouterRequestConfig } from "./providers/openrouter.js";
+import type {
+  CreateLlmChatCompletionDto,
+  CreateLlmTextClientDto,
+  LlmAssistantMessageDto,
+  LlmChatMessageDto,
+  LlmProviderRequestConfig,
+  LlmTextClient,
+  LlmToolCallDto,
+} from "./types.js";
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-export interface OpenRouterToolSchemaDto {
-  function: {
-    description: string;
-    name: string;
-    parameters: Record<string, unknown>;
-  };
-  type: "function";
-}
-
-export interface OpenRouterToolCallDto {
-  arguments: Record<string, unknown>;
-  id: string | null;
-  name: string;
-}
-
-export interface OpenRouterChatMessageDto {
-  content: string;
-  role: "assistant" | "system" | "tool" | "user";
-  toolCallId?: string;
-  toolCalls?: OpenRouterToolCallDto[];
-}
-
-export interface OpenRouterAssistantMessageDto {
-  content: string;
-  toolCalls: OpenRouterToolCallDto[];
-}
-
-export interface CreateOpenRouterChatCompletionDto {
-  messages: OpenRouterChatMessageDto[];
-  tools?: OpenRouterToolSchemaDto[];
-}
-
-interface OpenRouterResponseToolCall {
+interface LlmResponseToolCall {
   function?: {
     arguments?: string;
     name?: string;
@@ -53,35 +32,24 @@ interface OpenRouterResponseToolCall {
   id?: string;
 }
 
-interface OpenRouterResponseMessage {
+interface LlmResponseMessage {
   content?: string | Array<{
     text?: string;
     type?: string;
   }>;
-  tool_calls?: OpenRouterResponseToolCall[];
+  tool_calls?: LlmResponseToolCall[];
 }
 
-interface OpenRouterChatCompletionResponse {
+interface LlmChatCompletionResponse {
   choices?: Array<{
-    message?: OpenRouterResponseMessage;
+    message?: LlmResponseMessage;
   }>;
   id?: string;
   model?: string;
-  usage?: OpenRouterUsage;
+  usage?: LlmUsage;
 }
 
-export interface OpenRouterTextClient {
-  createChatCompletion(
-    input: CreateOpenRouterChatCompletionDto
-  ): Promise<OpenRouterAssistantMessageDto>;
-}
-
-interface OpenRouterClientConfig {
-  apiKey: string;
-  model: string;
-}
-
-interface OpenRouterRequestToolCall {
+interface LlmRequestToolCall {
   function: {
     arguments: string;
     name: string;
@@ -90,14 +58,14 @@ interface OpenRouterRequestToolCall {
   type: "function";
 }
 
-interface OpenRouterRequestMessage {
+interface LlmRequestMessage {
   content: string;
   role: "assistant" | "system" | "tool" | "user";
   tool_call_id?: string;
-  tool_calls?: OpenRouterRequestToolCall[];
+  tool_calls?: LlmRequestToolCall[];
 }
 
-interface OpenRouterUsage {
+interface LlmUsage {
   completion_tokens?: number;
   prompt_tokens?: number;
   reasoning_tokens?: number;
@@ -105,26 +73,36 @@ interface OpenRouterUsage {
 }
 
 // ============================================================================
-// CONSTANTS
+// MAIN FACTORY
 // ============================================================================
 
-const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
+/**
+ * Creates one provider-backed LLM text client.
+ * @param input - Provider, model, and API key
+ * @returns Provider-backed text client
+ */
+export function createLlmTextClient(input: CreateLlmTextClientDto): LlmTextClient {
+  const providerConfig = createProviderRequestConfig(input);
+
+  return new FetchLlmTextClient(providerConfig, input.model);
+}
 
 // ============================================================================
 // MAIN CLASS
 // ============================================================================
 
-export class FetchOpenRouterTextClient implements OpenRouterTextClient {
-  private readonly apiKey: string;
+class FetchLlmTextClient implements LlmTextClient {
   private readonly model: string;
+  private readonly providerConfig: LlmProviderRequestConfig;
 
   /**
-   * Creates the OpenRouter fetch client.
-   * @param config - OpenRouter API config
+   * Creates one fetch-backed LLM text client.
+   * @param providerConfig - Provider-specific request config
+   * @param model - Provider model name
    */
-  constructor(config: OpenRouterClientConfig) {
-    this.apiKey = config.apiKey;
-    this.model = config.model;
+  constructor(providerConfig: LlmProviderRequestConfig, model: string) {
+    this.providerConfig = providerConfig;
+    this.model = model;
   }
 
   /**
@@ -133,10 +111,10 @@ export class FetchOpenRouterTextClient implements OpenRouterTextClient {
    * @returns Assistant message with text and parsed tool calls
    */
   async createChatCompletion(
-    input: CreateOpenRouterChatCompletionDto
-  ): Promise<OpenRouterAssistantMessageDto> {
+    input: CreateLlmChatCompletionDto
+  ): Promise<LlmAssistantMessageDto> {
     return await startActiveObservation(
-      "openrouter-chat-completion",
+      this.providerConfig.requestLabel,
       async (generation) => {
         generation.update({
           input: {
@@ -144,18 +122,15 @@ export class FetchOpenRouterTextClient implements OpenRouterTextClient {
             tools: input.tools?.map((tool) => tool.function.name) ?? [],
           },
           metadata: {
-            provider: "openrouter",
+            provider: this.providerConfig.providerLabel,
           },
           model: this.model,
         });
 
         try {
-          const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
+          const response = await fetch(this.providerConfig.url, {
             method: "POST",
-            headers: {
-              Authorization: `Bearer ${this.apiKey}`,
-              "Content-Type": "application/json",
-            },
+            headers: this.providerConfig.headers,
             body: JSON.stringify({
               messages: input.messages.map((message) => mapRequestMessage(message)),
               model: this.model,
@@ -171,12 +146,12 @@ export class FetchOpenRouterTextClient implements OpenRouterTextClient {
               output: {
                 error: payload,
               },
-              statusMessage: "OpenRouter chat completion failed",
+              statusMessage: `${this.providerConfig.providerLabel} chat completion failed`,
             });
-            throw new Error(`OpenRouter chat completion failed: ${payload}`);
+            throw new Error(`${this.providerConfig.providerLabel} chat completion failed: ${payload}`);
           }
 
-          const payload = await response.json() as OpenRouterChatCompletionResponse;
+          const payload = await response.json() as LlmChatCompletionResponse;
           const assistantMessage = extractAssistantMessage(payload);
 
           generation.update({
@@ -214,11 +189,30 @@ export class FetchOpenRouterTextClient implements OpenRouterTextClient {
 // ============================================================================
 
 /**
- * Maps OpenRouter usage fields into Langfuse usage details.
- * @param usage - Usage payload returned by OpenRouter
- * @returns Langfuse-compatible usage details using documented input/output keys
+ * Creates the provider-specific request config.
+ * @param input - Provider selection and credentials
+ * @returns Provider request config
  */
-function mapUsageDetails(usage: OpenRouterUsage): Record<string, number> {
+function createProviderRequestConfig(
+  input: CreateLlmTextClientDto
+): LlmProviderRequestConfig {
+  if (input.provider === "openrouter") {
+    return createOpenRouterRequestConfig(input.apiKey);
+  }
+
+  if (input.provider === "cerebras") {
+    return createCerebrasRequestConfig(input.apiKey);
+  }
+
+  throw new Error(`LLM provider "${input.provider}" is not implemented.`);
+}
+
+/**
+ * Maps usage fields into Langfuse usage details.
+ * @param usage - Usage payload returned by the provider
+ * @returns Langfuse-compatible usage details
+ */
+function mapUsageDetails(usage: LlmUsage): Record<string, number> {
   const usageDetails: Record<string, number> = {};
 
   if (typeof usage.prompt_tokens === "number") {
@@ -240,16 +234,12 @@ function mapUsageDetails(usage: OpenRouterUsage): Record<string, number> {
   return usageDetails;
 }
 
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
 /**
- * Converts one local request DTO into the OpenRouter wire format.
+ * Converts one local request DTO into the provider wire format.
  * @param message - Local chat message DTO
- * @returns OpenRouter request message
+ * @returns Provider request message
  */
-function mapRequestMessage(message: OpenRouterChatMessageDto): OpenRouterRequestMessage {
+function mapRequestMessage(message: LlmChatMessageDto): LlmRequestMessage {
   return {
     content: message.content,
     role: message.role,
@@ -260,7 +250,7 @@ function mapRequestMessage(message: OpenRouterChatMessageDto): OpenRouterRequest
               arguments: JSON.stringify(toolCall.arguments),
               name: toolCall.name,
             },
-            ...(toolCall.id ? { id: toolCall.id } : {}),
+            id: toolCall.id ?? toolCall.name,
             type: "function" as const,
           })),
         }
@@ -272,16 +262,16 @@ function mapRequestMessage(message: OpenRouterChatMessageDto): OpenRouterRequest
 }
 
 /**
- * Extracts the assistant text and tool calls from one OpenRouter payload.
- * @param response - Raw OpenRouter response payload
+ * Extracts the assistant text and tool calls from one provider payload.
+ * @param response - Raw chat-completion response payload
  * @returns Parsed assistant message DTO
  */
 function extractAssistantMessage(
-  response: OpenRouterChatCompletionResponse
-): OpenRouterAssistantMessageDto {
+  response: LlmChatCompletionResponse
+): LlmAssistantMessageDto {
   const message = response.choices?.[0]?.message;
   if (!message) {
-    throw new Error("OpenRouter chat completion did not return an assistant message");
+    throw new Error("Chat completion did not return an assistant message.");
   }
 
   return {
@@ -292,11 +282,11 @@ function extractAssistantMessage(
 
 /**
  * Extracts text content from one assistant message payload.
- * @param content - Raw OpenRouter message content
+ * @param content - Raw message content
  * @returns Normalized plain-text content
  */
 function extractAssistantText(
-  content: OpenRouterResponseMessage["content"]
+  content: LlmResponseMessage["content"]
 ): string {
   if (typeof content === "string") {
     return content.trim();
@@ -315,12 +305,12 @@ function extractAssistantText(
 
 /**
  * Extracts and validates tool calls from one assistant message.
- * @param toolCalls - Raw tool call array from OpenRouter
+ * @param toolCalls - Raw tool calls from the provider
  * @returns Parsed tool-call DTOs
  */
 function extractToolCalls(
-  toolCalls: OpenRouterResponseToolCall[] | undefined
-): OpenRouterToolCallDto[] {
+  toolCalls: LlmResponseToolCall[] | undefined
+): LlmToolCallDto[] {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
     return [];
   }
@@ -328,17 +318,28 @@ function extractToolCalls(
   return toolCalls.map((toolCall) => {
     const name = toolCall.function?.name?.trim();
     if (!name) {
-      throw new Error("OpenRouter returned a tool call without a function name");
+      throw new Error("The provider returned a tool call without a function name.");
     }
 
     const rawArguments = toolCall.function?.arguments?.trim() ?? "{}";
-    const parsedArguments = JSON.parse(rawArguments) as Record<string, unknown>;
-    if (typeof parsedArguments !== "object" || parsedArguments === null || Array.isArray(parsedArguments)) {
-      throw new Error(`OpenRouter returned invalid arguments for tool ${name}`);
+    let parsedArguments: unknown;
+
+    try {
+      parsedArguments = JSON.parse(rawArguments);
+    } catch (error) {
+      throw new Error(
+        `The provider returned invalid JSON arguments for tool ${name}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+
+    if (!parsedArguments || typeof parsedArguments !== "object" || Array.isArray(parsedArguments)) {
+      throw new Error(`The provider returned non-object tool arguments for tool ${name}.`);
     }
 
     return {
-      arguments: parsedArguments,
+      arguments: parsedArguments as Record<string, unknown>,
       id: toolCall.id?.trim() || null,
       name,
     };

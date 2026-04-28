@@ -7,6 +7,10 @@ import {
 describe("buildWhatsAppTextSystemPrompt", () => {
   it("requires tool calls for WhatsApp text interaction", () => {
     expect(buildWhatsAppTextSystemPrompt()).toContain(
+      "You are BrewDock on WhatsApp text."
+    );
+    expect(buildWhatsAppTextSystemPrompt()).not.toContain("You are OpenPoke");
+    expect(buildWhatsAppTextSystemPrompt()).toContain(
       "Always communicate with the user through the available tools."
     );
     expect(buildWhatsAppTextSystemPrompt()).toContain(
@@ -20,6 +24,9 @@ describe("buildWhatsAppTextSystemPrompt", () => {
     );
     expect(buildWhatsAppTextSystemPrompt()).toContain(
       "reuse that exact case-sensitive string"
+    );
+    expect(buildWhatsAppTextSystemPrompt()).toContain(
+      "press the Call button in WhatsApp to start a voice call"
     );
   });
 });
@@ -59,6 +66,15 @@ describe("buildWhatsAppTextUserPrompt", () => {
         text: "current user message",
         userId: "user-1",
       },
+      executionAgentThreads: [
+        {
+          agentName: "gmailInbox",
+          createdAt: "2026-04-22T09:00:00.000Z",
+          id: "thread-1",
+          updatedAt: "2026-04-22T10:00:00.000Z",
+          userId: "user-1",
+        },
+      ],
       linkedUser: {
         userId: "user-1",
         whatsappPhone: "+15551234567",
@@ -72,6 +88,11 @@ describe("buildWhatsAppTextUserPrompt", () => {
     });
 
     expect(prompt).toContain("<conversation_history>");
+    expect(prompt).toContain("<execution_agent_threads>");
+    expect(prompt).toContain("- gmailInbox (updated 2026-04-22T10:00:00.000Z)");
+    expect(prompt).toContain(
+      "If none are relevant, create a new persisted thread by using a different short camelCase agent_name."
+    );
     expect(prompt).toContain("<user_message timestamp=\"2026-04-22T10:00:00.000Z\">");
     expect(prompt).toContain("<poke_reply timestamp=\"2026-04-22T10:00:10.000Z\">");
     expect(prompt).toContain("<new_user_message>\ncurrent user message\n</new_user_message>");
@@ -107,6 +128,7 @@ describe("buildWhatsAppTextUserPrompt", () => {
         text: "current user message",
         userId: "user-1",
       },
+      executionAgentThreads: [],
       linkedUser: {
         userId: "user-1",
         whatsappPhone: "+15551234567",

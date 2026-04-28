@@ -115,4 +115,147 @@ describe("mapSessionToolsToLiveKitTools", () => {
     });
     expect(result).toBe("{\"successful\":true}");
   });
+
+  it("shrinks Gmail fetch payloads returned by Composio tools", async () => {
+    const executeMock = vi.fn().mockResolvedValue({
+      data: {
+        messages: [
+          {
+            display_url: "https://mail.google.com/mail/u/0/#inbox/abc",
+            labelIds: ["UNREAD", "INBOX"],
+            messageId: "message-1",
+            messageText:
+              "<html><body>This email body is much larger than what the voice agent should keep.</body></html>",
+            payload: {
+              headers: [
+                {
+                  name: "From",
+                  value: "Alex <alex@example.com>",
+                },
+                {
+                  name: "To",
+                  value: "team@example.com",
+                },
+                {
+                  name: "Subject",
+                  value: "Inbox summary",
+                },
+              ],
+            },
+            threadId: "thread-1",
+          },
+        ],
+      },
+      error: null,
+      successful: true,
+    });
+
+    const tools = mapSessionToolsToLiveKitTools(
+      [
+        {
+          type: "function",
+          function: {
+            name: "GMAIL_FETCH_EMAILS",
+            description: "Fetch Gmail messages.",
+            parameters: {
+              type: "object",
+            },
+          },
+        },
+      ],
+      {
+        tools: {
+          executeMetaTool: vi.fn(),
+        },
+      } as never,
+      {
+        sessionId: "session_123",
+        execute: executeMock,
+      }
+    );
+
+    const result = await tools.GMAIL_FETCH_EMAILS.execute(
+      {
+        max_results: 5,
+        query: "in:inbox",
+      },
+      {
+        ctx: {} as never,
+        toolCallId: "tool_call_gmail_1",
+      }
+    );
+
+    expect(executeMock).toHaveBeenCalledWith("GMAIL_FETCH_EMAILS", {
+      max_results: 5,
+      query: "in:inbox",
+    });
+    expect(JSON.parse(result)).toEqual({
+      messages: [
+        {
+          from: "Alex <alex@example.com>",
+          id: "message-1",
+          labels: ["INBOX"],
+          preview:
+            "This email body is much larger than what the voice agent should keep.",
+          receivedAt: null,
+          subject: "Inbox summary",
+          threadId: "thread-1",
+          to: "team@example.com",
+          unread: true,
+          url: "https://mail.google.com/mail/u/0/#inbox/abc",
+        },
+      ],
+      resultSizeEstimate: 1,
+    });
+    expect(result).not.toContain("messageText");
+  });
+
+  it("returns plain text when Gmail attachments are unsupported", async () => {
+    const executeMock = vi.fn().mockResolvedValue({
+      data: {
+        file: {
+          s3url: "https://example.com/file.pdf",
+        },
+      },
+      error: null,
+      successful: true,
+    });
+
+    const tools = mapSessionToolsToLiveKitTools(
+      [
+        {
+          type: "function",
+          function: {
+            name: "GMAIL_GET_ATTACHMENT",
+            description: "Fetch one Gmail attachment.",
+            parameters: {
+              type: "object",
+            },
+          },
+        },
+      ],
+      {
+        tools: {
+          executeMetaTool: vi.fn(),
+        },
+      } as never,
+      {
+        sessionId: "session_123",
+        execute: executeMock,
+      }
+    );
+
+    const result = await tools.GMAIL_GET_ATTACHMENT.execute(
+      {
+        attachment_id: "attachment-1",
+        message_id: "message-1",
+      },
+      {
+        ctx: {} as never,
+        toolCallId: "tool_call_attachment_1",
+      }
+    );
+
+    expect(result).toBe("attachments not supported yet");
+  });
 });

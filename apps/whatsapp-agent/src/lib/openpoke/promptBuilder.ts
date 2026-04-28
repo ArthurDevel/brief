@@ -1,8 +1,8 @@
 /**
- * Prompt builders for the WhatsApp voice OpenPoke runtimes.
+ * Prompt builders for the WhatsApp voice BrewDock runtimes.
  *
  * Responsibilities:
- * - Build the OpenPoke-style interaction prompt for WhatsApp voice turns
+ * - Build the BrewDock interaction prompt for WhatsApp voice turns
  * - Build the execution-agent prompt used for real tool execution
  * - Render voice conversation history into the same tagged structure as text
  */
@@ -22,7 +22,7 @@ const MAX_CONVERSATION_MESSAGES_IN_PROMPT = 20;
 const MAX_HISTORY_MESSAGES_BEFORE_CURRENT = MAX_CONVERSATION_MESSAGES_IN_PROMPT - 1;
 
 const WHATSAPP_VOICE_INTERACTION_SYSTEM_PROMPT = [
-  "You are OpenPoke on WhatsApp voice.",
+  "You are BrewDock on WhatsApp voice.",
   "You are the interaction agent for this WhatsApp voice channel.",
   "Always communicate with the user through the available tools. Do not reply with plain assistant text instead of a tool call.",
   "Use send_message_to_agent whenever a task needs external app access, lookup, or execution.",
@@ -127,6 +127,7 @@ export function buildVoiceOpenPokeInteractionUserPrompt(
   const sections = [
     buildChannelContextSection(turn),
     buildMemorySection(turn),
+    buildExecutionAgentThreadsSection(turn),
     buildConversationHistorySection(recentConversationHistory),
     `<new_user_message>\n${escapePromptText(turn.currentMessage.text)}\n</new_user_message>`,
   ];
@@ -148,6 +149,7 @@ export function buildVoiceOpenPokeConversationStartUserPrompt(
   const sections = [
     buildChannelContextSection(turn),
     buildMemorySection(turn),
+    buildExecutionAgentThreadsSection(turn),
     buildConversationHistorySection(recentConversationHistory),
     [
       "<conversation_start>",
@@ -201,7 +203,40 @@ function buildMemorySection(
 }
 
 /**
- * Renders recent conversation history into OpenPoke-style message tags.
+ * Renders existing execution-agent threads for reuse decisions.
+ * @param turn - Prepared voice turn or conversation-start context
+ * @returns Tagged execution-agent thread section
+ */
+function buildExecutionAgentThreadsSection(
+  turn: PreparedVoiceTurnDto | PreparedVoiceConversationStartDto
+): string {
+  if (turn.executionAgentThreads.length === 0) {
+    return [
+      "<execution_agent_threads>",
+      EMPTY_SECTION_VALUE,
+      "No persisted execution-agent threads exist yet. If delegation is needed, create one by choosing a new short camelCase agent_name.",
+      "</execution_agent_threads>",
+    ].join("\n");
+  }
+
+  const threadLines = turn.executionAgentThreads
+    .map((thread) => {
+      return `- ${escapePromptText(thread.agentName)} (updated ${escapePromptText(thread.updatedAt)})`;
+    })
+    .join("\n");
+
+  return [
+    "<execution_agent_threads>",
+    "Existing persisted execution-agent threads for this user:",
+    threadLines,
+    "Reuse one of these exact agent_name values when it is relevant to the task so the execution agent can continue that thread.",
+    "If none are relevant, create a new persisted thread by using a different short camelCase agent_name.",
+    "</execution_agent_threads>",
+  ].join("\n");
+}
+
+/**
+ * Renders recent conversation history into BrewDock-style message tags.
  * @param messages - Recent conversation messages
  * @returns Tagged history section
  */

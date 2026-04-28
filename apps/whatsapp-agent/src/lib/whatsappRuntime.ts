@@ -3,11 +3,12 @@
  *
  * Responsibilities:
  * - Parse LiveKit participant metadata from the WhatsApp bridge
- * - Resolve the matching Supabase user by whatsapp_phone
+ * - Resolve or create the matching Supabase user by whatsapp_phone
  * - Load the live Composio connections for the caller
  */
 
 import { Composio } from "@composio/core";
+import { createWhatsAppCoreStore } from "@dublin/whatsapp-core";
 import { createClient } from "@supabase/supabase-js";
 import type { AgentEnv } from "./env.js";
 import {
@@ -80,15 +81,21 @@ export async function resolveWhatsAppCallerContext(
       persistSession: false,
     },
   });
+  const coreStore = createWhatsAppCoreStore({
+    supabaseServiceRoleKey: env.supabaseServiceRoleKey,
+    supabaseUrl: env.supabaseUrl,
+  });
+
+  const linkedUser = await coreStore.resolveOrCreateLinkedUserByPhone(metadata.caller);
 
   const callerLookupStartedAt = Date.now();
   const { data: callerRow, error: callerError } = await supabase
     .from("user_settings")
     .select("user_id, whatsapp_voice_config")
-    .eq("whatsapp_phone", metadata.caller)
+    .eq("user_id", linkedUser.userId)
     .maybeSingle();
   console.info("[whatsapp-agent] user_settings lookup complete", {
-    callerPhone: metadata.caller,
+    callerPhone: linkedUser.whatsappPhone,
     foundUser: Boolean((callerRow as CallerLookupRow | null)?.user_id),
     elapsedMs: Date.now() - callerLookupStartedAt,
     totalElapsedMs: Date.now() - startedAt,
@@ -99,7 +106,7 @@ export async function resolveWhatsAppCallerContext(
   }
 
   if (!(callerRow as CallerLookupRow | null)?.user_id) {
-    throw new Error("I could not find an account for this WhatsApp number. Sign in from the WhatsApp link first.");
+    throw new Error("Failed to load the WhatsApp caller settings.");
   }
 
   const userId = (callerRow as CallerLookupRow).user_id;
@@ -135,7 +142,7 @@ export async function resolveWhatsAppCallerContext(
   });
 
   return {
-    callerPhone: metadata.caller,
+    callerPhone: linkedUser.whatsappPhone,
     connectionGuidanceMessage: buildConnectionGuidanceMessage(connections),
     connectedAccountsByToolkit,
     supabaseUserId: userId,

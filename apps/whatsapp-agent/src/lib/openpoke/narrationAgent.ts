@@ -8,11 +8,13 @@
  */
 
 import type { AgentEnv } from "../env.js";
-import {
-  FetchOpenRouterTextClient,
-  type OpenRouterChatMessageDto,
-  type OpenRouterTextClient,
-} from "./openRouterClient.js";
+import { createLlmTextClient } from "@dublin/llm/client";
+import type {
+  LlmChatMessageDto,
+  LlmProvider,
+  LlmTextClient,
+} from "@dublin/llm/types";
+import { getLlmApiKey } from "../env.js";
 import type {
   VoiceNarrationRequestDto,
   VoiceNarrationResultDto,
@@ -23,6 +25,7 @@ import type {
 // CONSTANTS
 // ============================================================================
 
+const WHATSAPP_VOICE_NARRATION_PROVIDER: LlmProvider = "openrouter";
 const WHATSAPP_VOICE_NARRATION_MODEL = "google/gemini-3-flash-preview";
 const MAX_RECENT_MESSAGES = 5;
 const MAX_NARRATION_LENGTH = 120;
@@ -44,14 +47,14 @@ const WHATSAPP_VOICE_NARRATION_SYSTEM_PROMPT = [
 // ============================================================================
 
 export class VoiceOpenPokeNarrationAgentRuntime implements VoiceOpenPokeNarrationAgent {
-  private readonly openRouterClient: OpenRouterTextClient;
+  private readonly llmClient: LlmTextClient;
 
   /**
    * Creates the narration runtime for WhatsApp voice waits.
-   * @param openRouterClient - OpenRouter client used for narration generation
+   * @param llmClient - LLM client used for narration generation
    */
-  constructor(openRouterClient: OpenRouterTextClient) {
-    this.openRouterClient = openRouterClient;
+  constructor(llmClient: LlmTextClient) {
+    this.llmClient = llmClient;
   }
 
   /**
@@ -62,7 +65,7 @@ export class VoiceOpenPokeNarrationAgentRuntime implements VoiceOpenPokeNarratio
   async generateNarration(
     input: VoiceNarrationRequestDto
   ): Promise<VoiceNarrationResultDto | null> {
-    const assistantMessage = await this.openRouterClient.createChatCompletion({
+    const assistantMessage = await this.llmClient.createChatCompletion({
       messages: buildNarrationMessages(input),
     });
     const message = normalizeNarrationMessage(assistantMessage.content);
@@ -90,9 +93,10 @@ export function createVoiceOpenPokeNarrationAgent(
   env: AgentEnv
 ): VoiceOpenPokeNarrationAgentRuntime {
   return new VoiceOpenPokeNarrationAgentRuntime(
-    new FetchOpenRouterTextClient({
-      apiKey: env.openRouterApiKey,
+    createLlmTextClient({
+      apiKey: getLlmApiKey(WHATSAPP_VOICE_NARRATION_PROVIDER),
       model: WHATSAPP_VOICE_NARRATION_MODEL,
+      provider: WHATSAPP_VOICE_NARRATION_PROVIDER,
     })
   );
 }
@@ -108,7 +112,7 @@ export function createVoiceOpenPokeNarrationAgent(
  */
 function buildNarrationMessages(
   input: VoiceNarrationRequestDto
-): OpenRouterChatMessageDto[] {
+): LlmChatMessageDto[] {
   const recentMessages = input.activeExecution.recentMessages
     .slice(-MAX_RECENT_MESSAGES)
     .map((message) => `- ${message}`)
