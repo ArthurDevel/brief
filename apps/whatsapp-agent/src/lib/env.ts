@@ -47,7 +47,7 @@ export function getEnv(): AgentEnv {
 
   const livekitUrl = requireEnv("LIVEKIT_URL");
 
-  cachedEnv = {
+  const env: AgentEnv = {
     livekitAgentName: process.env.LIVEKIT_AGENT_NAME?.trim() || "whatsapp-composio-agent",
     livekitAgentGreeting:
       process.env.LIVEKIT_AGENT_GREETING?.trim() ||
@@ -83,6 +83,9 @@ export function getEnv(): AgentEnv {
     webAppUrl: requireEnv("WEB_APP_URL"),
     internalApiKey: requireEnv("INTERNAL_API_KEY"),
   };
+
+  validateWhatsAppVoiceProviderEnv(env);
+  cachedEnv = env;
 
   return cachedEnv;
 }
@@ -126,4 +129,31 @@ function readOptionalEnv(name: string): string | undefined {
   }
 
   return value;
+}
+
+/**
+ * Validates the selected WhatsApp voice provider credentials at startup.
+ * @param env - Loaded agent environment
+ * @returns Nothing. Throws when the selected provider cannot run.
+ */
+function validateWhatsAppVoiceProviderEnv(env: AgentEnv): void {
+  const ttsProvider = env.whatsappTtsProvider.trim().toLowerCase();
+
+  if (ttsProvider === "xai") {
+    if (!env.xaiApiKey) {
+      throw new Error("XAI_API_KEY environment variable is required when WHATSAPP_TTS_PROVIDER=xai.");
+    }
+    return;
+  }
+
+  if (ttsProvider === "deepgram") {
+    if (!env.deepgramApiKey) {
+      throw new Error("DEEPGRAM_API_KEY environment variable is required when WHATSAPP_TTS_PROVIDER=deepgram.");
+    }
+    return;
+  }
+
+  throw new Error(
+    `WHATSAPP_TTS_PROVIDER must be "deepgram" or "xai". Received "${env.whatsappTtsProvider}".`
+  );
 }
