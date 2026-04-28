@@ -20,9 +20,12 @@ import {
 import { notifyWhatsAppEndOfSession } from "./lib/webApp.js";
 import {
   createWhatsAppTts,
+  createWhatsAppStt,
+} from "./lib/voice/factory.js";
+import {
   getDefaultWhatsAppVoiceConfig,
   type WhatsAppVoiceConfig,
-} from "./lib/whatsappVoice.js";
+} from "./lib/voice/types.js";
 import { getUserMemoryEntries, type MemoryEntry } from "./lib/memory.js";
 import {
   createWhatsAppCoreStore,
@@ -290,8 +293,8 @@ async function entry(ctx: JobContext): Promise<void> {
   }
 
   const session = new voice.AgentSession({
-    stt: env.livekitSttModel,
-    tts: createWhatsAppTts(env.deepgramApiKey, voiceConfig)
+    stt: createWhatsAppStt(env),
+    tts: createWhatsAppTts(env, voiceConfig)
   });
 
   const closed = new Promise<void>((resolve) => {

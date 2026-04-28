@@ -8,7 +8,7 @@ import {
   buildVoiceOpenPokeInteractionUserPrompt,
 } from "../openpoke/promptBuilder.js";
 import type { VoiceOpenPokeExecutionAgent } from "../openpoke/executionAgent.js";
-import { getDefaultWhatsAppVoiceConfig } from "../whatsappVoice.js";
+import { getDefaultWhatsAppVoiceConfig } from "../voice/types.js";
 
 describe("buildVoiceOpenPokeInteractionUserPrompt", () => {
   it("renders the same text-style tagged sections for a voice turn", () => {

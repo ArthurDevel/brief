@@ -14,7 +14,7 @@ import type { AgentEnv } from "./env.js";
 import {
   parseStoredWhatsAppVoiceConfig,
   type WhatsAppVoiceConfig,
-} from "./whatsappVoice.js";
+} from "./voice/types.js";
 
 // ============================================================================
 // TYPES

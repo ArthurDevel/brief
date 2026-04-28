@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEnv } from "../env.js";
-import { getDefaultWhatsAppVoiceConfig } from "../whatsappVoice.js";
+import { getDefaultWhatsAppVoiceConfig } from "../voice/types.js";
 
 // ============================================================================
 // MOCKS
@@ -56,6 +56,7 @@ import { resolveWhatsAppCallerContext } from "../whatsappRuntime.js";
 const TEST_ENV: AgentEnv = {
   composioApiKey: "composio_test_key",
   deepgramApiKey: "deepgram_test_key",
+  xaiApiKey: "xai_test_key",
   internalApiKey: "internal_test_key",
   livekitAgentGreeting: "Hello",
   livekitAgentInstructions: "Instructions",
@@ -63,8 +64,6 @@ const TEST_ENV: AgentEnv = {
   livekitApiKey: "livekit_api_key",
   livekitApiSecret: "livekit_api_secret",
   livekitHttpUrl: "https://livekit.example.com",
-  livekitLlmModel: "openai/gpt-4.1-mini",
-  livekitSttModel: "deepgram/nova-3:en",
   livekitWsUrl: "wss://livekit.example.com",
   openRouterApiKey: "openrouter_test_key",
   supabaseServiceRoleKey: "supabase_service_role_key",
@@ -72,7 +71,13 @@ const TEST_ENV: AgentEnv = {
   webAppUrl: "https://app.example.com",
   whatsappAccessToken: "whatsapp_access_token",
   whatsappApiVersion: "23",
+  whatsappDeepgramSttModel: "deepgram/nova-3:en",
+  whatsappDefaultDeepgramVoice: "aura-2-andromeda-en",
+  whatsappDefaultXaiVoice: "ara",
   whatsappPhoneNumberId: "123456789",
+  whatsappSttProvider: "deepgram",
+  whatsappTtsProvider: "deepgram",
+  whatsappXaiSttModel: "xai/stt-1:en",
 };
 
 // ============================================================================
