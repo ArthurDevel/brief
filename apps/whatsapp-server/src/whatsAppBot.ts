@@ -890,6 +890,7 @@ export class WhatsAppBot {
   }
 
   private async handleConnect(callId: string, call: WhatsAppCall): Promise<void> {
+    const startedAt = Date.now();
     const offerSdp = call.session?.sdp;
     if (!offerSdp) {
       return;
@@ -902,11 +903,24 @@ export class WhatsAppBot {
     const [audioTrack, audioPort, disposeAudioTrack] = await MediaStreamTrackFactory.rtpSource({
       kind: "audio"
     });
+    console.info("[whatsapp-server] voice call rtp source created", {
+      callId,
+      elapsedMs: Date.now() - startedAt
+    });
     const peerConnection = new RTCPeerConnection({
       iceServers: getVoiceBotEnv().iceServers
     });
+    console.info("[whatsapp-server] voice call peer connection created", {
+      callId,
+      elapsedMs: Date.now() - startedAt
+    });
     const incomingTrackPromise = this.waitForIncomingAudioTrack(peerConnection);
     const liveKitSession = await this.roomManager.createCallSession(callId, normalizedCaller ?? undefined);
+    console.info("[whatsapp-server] voice call livekit session created", {
+      callId,
+      roomName: liveKitSession.roomName,
+      elapsedMs: Date.now() - startedAt
+    });
 
     const activeCall: ActiveCallSession = {
       callId,
@@ -920,14 +934,35 @@ export class WhatsAppBot {
 
     try {
       peerConnection.addTrack(audioTrack);
+      console.info("[whatsapp-server] voice call outbound track added", {
+        callId,
+        elapsedMs: Date.now() - startedAt
+      });
       await peerConnection.setRemoteDescription({ type: "offer", sdp: offerSdp });
+      console.info("[whatsapp-server] voice call remote description set", {
+        callId,
+        elapsedMs: Date.now() - startedAt
+      });
 
       const answer = await peerConnection.createAnswer();
+      console.info("[whatsapp-server] voice call answer created", {
+        callId,
+        elapsedMs: Date.now() - startedAt
+      });
       await peerConnection.setLocalDescription({
         type: "answer",
         sdp: answer.sdp
       });
+      console.info("[whatsapp-server] voice call local description set", {
+        callId,
+        elapsedMs: Date.now() - startedAt
+      });
       await waitForIceGathering(peerConnection, 3000);
+      console.info("[whatsapp-server] voice call ice gathering wait complete", {
+        callId,
+        iceGatheringState: peerConnection.iceGatheringState,
+        elapsedMs: Date.now() - startedAt
+      });
 
       const localSdp = peerConnection.localDescription?.sdp;
       if (!localSdp) {
@@ -940,10 +975,23 @@ export class WhatsAppBot {
       };
 
       await this.transport.preAcceptCall(callId, session);
+      console.info("[whatsapp-server] voice call pre-accept complete", {
+        callId,
+        elapsedMs: Date.now() - startedAt
+      });
       await this.transport.acceptCall(callId, session, "whatsapp-server-greeting");
+      console.info("[whatsapp-server] voice call accept complete", {
+        callId,
+        elapsedMs: Date.now() - startedAt
+      });
 
       try {
         await waitForConnection(peerConnection, 8000);
+        console.info("[whatsapp-server] voice call peer connection ready", {
+          callId,
+          connectionState: peerConnection.connectionState,
+          elapsedMs: Date.now() - startedAt
+        });
       } catch (error) {
         console.warn(
           `[whatsapp-server] call ${callId} did not reach connected state before audio bridge: ${
@@ -953,6 +1001,10 @@ export class WhatsAppBot {
       }
 
       const incomingTrack = await incomingTrackPromise;
+      console.info("[whatsapp-server] voice call incoming track ready", {
+        callId,
+        elapsedMs: Date.now() - startedAt
+      });
       const bridge = new WhatsAppLiveKitBridge({
         callId,
         roomName: liveKitSession.roomName,
@@ -966,6 +1018,10 @@ export class WhatsAppBot {
 
       activeCall.bridge = bridge;
       await bridge.start();
+      console.info("[whatsapp-server] voice call livekit bridge started", {
+        callId,
+        elapsedMs: Date.now() - startedAt
+      });
       await bridge.waitUntilClosed();
     } catch (error) {
       console.error(`[whatsapp-server] failed to handle call ${callId}`, error);
