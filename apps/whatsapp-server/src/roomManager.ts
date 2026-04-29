@@ -66,18 +66,7 @@ export class LiveKitRoomManager {
       transport: "whatsapp"
     });
 
-    await this.roomClient.createRoom({
-      name: roomName,
-      emptyTimeout: 30,
-      departureTimeout: 15,
-      maxParticipants: 3
-    }).catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.toLowerCase().includes("already exists")) {
-        throw error;
-      }
-    });
-
+    // LiveKit CreateDispatch creates the room when it does not exist.
     await this.dispatchClient.createDispatch(roomName, this.env.agentName, { metadata });
 
     const token = new AccessToken(this.env.apiKey, this.env.apiSecret, {

@@ -1,0 +1,12 @@
+{
+  "name": "whatsapp-startup-latency-testscript",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "measure": "node measureStartupLatency.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

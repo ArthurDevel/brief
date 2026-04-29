@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-bridge-and-xai-streaming-testscript",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "measure:livekit": "node measureLiveKitDispatchTiming.mjs",
+    "measure:bridge": "node measureBridgeSetupTiming.mjs",
+    "measure:xai": "node xai-tts-http-streaming.mjs"
+  },
+  "dependencies": {
+    "@livekit/protocol": "1.43.0",
+    "livekit-server-sdk": "2.15.1",
+    "werift": "^0.22.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
