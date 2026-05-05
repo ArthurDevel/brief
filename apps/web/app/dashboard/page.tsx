@@ -378,7 +378,7 @@ function EmptySessionsCard() {
           No sessions yet
         </h2>
         <p style={{ fontSize: 15, color: "var(--text-secondary)", margin: "0 0 18px 0", lineHeight: 1.5 }}>
-          BrewDock now starts conversations through WhatsApp. This dashboard is where you review what
+          OpenPokeButVoice now starts conversations through WhatsApp. This dashboard is where you review what
           happened afterward and manage the settings that support those sessions.
         </p>
 
@@ -432,7 +432,7 @@ function OnboardingCard({ settings, emailStatus }: { settings: UserSettings; ema
           <div style={{ maxWidth: 560 }}>
             <h2 style={{ margin: "0 0 6px 0" }}>Finish onboarding</h2>
             <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0 }}>
-              Connect your inbox so BrewDock can process email during WhatsApp sessions.
+              Connect your inbox so OpenPokeButVoice can process email during WhatsApp sessions.
             </p>
           </div>
           <span

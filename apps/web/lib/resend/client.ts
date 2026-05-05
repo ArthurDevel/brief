@@ -26,7 +26,7 @@ const FONT_FAMILY =
 /**
  * Builds the full "From" field for Resend emails.
  * If RESEND_FROM_NAME is set, returns "Name <address>", otherwise just the address.
- * @returns Formatted from string (e.g. "BrewDock <noreply@brewdock.com>")
+ * @returns Formatted from string (e.g. "OpenPokeButVoice <noreply@OpenPokeButVoice.com>")
  */
 function getFromField(): string {
   const address = process.env.RESEND_FROM_ADDRESS;
@@ -124,7 +124,7 @@ export async function sendEngagementEmail(
     subject: content.subject,
     html,
     headers: {
-      "List-Unsubscribe": `<mailto:unsubscribe@brewdock.com?subject=unsubscribe>`,
+      "List-Unsubscribe": `<mailto:unsubscribe@OpenPokeButVoice.com?subject=unsubscribe>`,
     },
   });
 
@@ -195,7 +195,7 @@ export function buildEngagementEmailHtml(content: EngagementEmailContent): strin
                     B
                   </td>
                   <td style="padding-left:8px; font-family:${FONT_FAMILY}; font-size:16px; font-weight:700; color:#000000; letter-spacing:-0.02em;">
-                    BrewDock
+                    OpenPokeButVoice
                   </td>
                 </tr>
               </table>
@@ -233,13 +233,13 @@ export function buildEngagementEmailHtml(content: EngagementEmailContent): strin
           <tr>
             <td style="padding:24px 40px; background-color:#fafafa; border-top:1px solid #e4e4e7;">
               <p style="margin:0 0 4px 0; font-family:${FONT_FAMILY}; font-size:12px; font-weight:600; color:#71717a;">
-                BrewDock
+                OpenPokeButVoice
               </p>
               <p style="margin:0 0 12px 0; font-family:${FONT_FAMILY}; font-size:12px; font-weight:500; color:#a1a1aa;">
                 Do your email while you drive.
               </p>
               <p style="margin:0; font-family:${FONT_FAMILY}; font-size:11px; font-weight:400; color:#a1a1aa; line-height:1.5;">
-                BrewDock Inc., 2 Marina Blvd B300, San Francisco, CA 94123
+                OpenPokeButVoice Inc., 2 Marina Blvd B300, San Francisco, CA 94123
               </p>
             </td>
           </tr>

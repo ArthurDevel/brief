@@ -93,7 +93,7 @@ interface CreateWhatsAppCoreStoreConfig {
 // ============================================================================
 
 const UNIQUE_VIOLATION_CODE = "23505";
-const DEFAULT_WHATSAPP_AUTH_EMAIL_DOMAIN = "wa.brewdock.invalid";
+const DEFAULT_WHATSAPP_AUTH_EMAIL_DOMAIN = "wa.OpenPokeButVoice.invalid";
 const WHATSAPP_SIGNUP_SOURCE = "whatsapp";
 
 // ============================================================================

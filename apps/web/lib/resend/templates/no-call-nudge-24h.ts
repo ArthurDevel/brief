@@ -13,7 +13,7 @@ import type { EngagementEmailContent } from "../../engagement/types";
 /**
  * Returns the email content for the 24h no-call nudge.
  * @param landerUrl - The lander site base URL (not used for this template)
- * @param appUrl - The app base URL (e.g. https://app.brewdock.com)
+ * @param appUrl - The app base URL (e.g. https://app.OpenPokeButVoice.com)
  * @returns Email content with subject, heading, body, CTA text, and CTA URL
  */
 export function getContent(

@@ -251,11 +251,11 @@ describe("WhatsAppCoreStore", () => {
       app_metadata: {
         signup_source: "whatsapp",
       },
-      email: "wa_15551234567@wa.brewdock.invalid",
+      email: "wa_15551234567@wa.OpenPokeButVoice.invalid",
       id: "user-1",
       user_metadata: {
         whatsapp_auth: true,
-        whatsapp_auth_email: "wa_15551234567@wa.brewdock.invalid",
+        whatsapp_auth_email: "wa_15551234567@wa.OpenPokeButVoice.invalid",
         whatsapp_phone: "+15551234567",
       },
     });

@@ -2,7 +2,7 @@
  * Prompt builders for the WhatsApp text interaction and execution agents.
  *
  * Responsibilities:
- * - Build the BrewDock interaction prompt for WhatsApp text turns
+ * - Build the OpenPokeButVoice interaction prompt for WhatsApp text turns
  * - Build the execution-agent prompt used for real tool execution
  * - Render WhatsApp conversation history into tagged prompt sections
  */
@@ -19,7 +19,7 @@ const MAX_CONVERSATION_MESSAGES_IN_PROMPT = 20;
 const MAX_HISTORY_MESSAGES_BEFORE_CURRENT = MAX_CONVERSATION_MESSAGES_IN_PROMPT - 1;
 
 const WHATSAPP_INTERACTION_SYSTEM_PROMPT = [
-  "You are BrewDock on WhatsApp text.",
+  "You are OpenPokeButVoice on WhatsApp text.",
   "You are the interaction agent for this WhatsApp text channel.",
   "Always communicate with the user through the available tools. Do not reply with plain assistant text instead of a tool call.",
   "Use send_message_to_agent whenever a task needs external app access, lookup, or execution.",
@@ -192,7 +192,7 @@ function buildExecutionAgentThreadsSection(turn: PreparedTextTurnDto): string {
 }
 
 /**
- * Renders recent conversation history into BrewDock-style message tags.
+ * Renders recent conversation history into OpenPokeButVoice-style message tags.
  * @param messages - Recent WhatsApp conversation messages
  * @returns Tagged history section
  */

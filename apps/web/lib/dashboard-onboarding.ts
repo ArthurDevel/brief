@@ -45,7 +45,7 @@ function resolveEmailStep(
     case "error":
       return {
         complete: false,
-        description: "Fix your inbox connection so BrewDock can process email",
+        description: "Fix your inbox connection so OpenPokeButVoice can process email",
         href: "/dashboard/settings?tab=email",
         primaryLabel: "Fix inbox",
       };
@@ -54,7 +54,7 @@ function resolveEmailStep(
     default:
       return {
         complete: false,
-        description: "Required so BrewDock can read and act on email",
+        description: "Required so OpenPokeButVoice can read and act on email",
         href: "/dashboard/settings?tab=email",
         primaryLabel: "Connect inbox",
       };
