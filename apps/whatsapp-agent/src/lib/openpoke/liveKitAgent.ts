@@ -1,10 +1,10 @@
 /**
  * LiveKit-facing voice agent that delegates interaction logic to the explicit
- * voice BrewDock runtime.
+ * voice OpenPokeButVoice runtime.
  *
  * Responsibilities:
  * - Receive finalized user transcripts from LiveKit
- * - Build text-style BrewDock turns for the interaction runtime
+ * - Build text-style OpenPokeButVoice turns for the interaction runtime
  * - Speak only the user-visible actions returned by the interaction runtime
  */
 
@@ -74,7 +74,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
    * Creates the LiveKit-facing voice agent.
    * @param env - Agent environment config
    * @param callerContext - Caller-scoped runtime context
-   * @param interactionAgent - Explicit voice BrewDock interaction runtime
+   * @param interactionAgent - Explicit voice OpenPokeButVoice interaction runtime
    * @param narrationAgent - Text-only narration runtime used during execution waits
    * @param memoryEntries - Loaded user memory entries
    * @param whatsappCoreStore - Shared WhatsApp core store
@@ -92,7 +92,7 @@ export class VoiceOpenPokeLiveKitAgent extends voice.Agent {
     voiceInteractionAgentStore: VoiceInteractionAgentStore | null
   ) {
     super({
-      instructions: "WhatsApp voice BrewDock runtime",
+      instructions: "WhatsApp voice OpenPokeButVoice runtime",
     });
 
     this.env = env;

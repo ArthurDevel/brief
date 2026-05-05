@@ -34,6 +34,6 @@ describe("maskWhatsAppPhone", () => {
 
 describe("buildWhatsAppSyntheticEmail", () => {
   it("builds a deterministic internal email from the phone number", () => {
-    expect(buildWhatsAppSyntheticEmail("+1 555 123 4567")).toBe("wa_15551234567@wa.brewdock.invalid");
+    expect(buildWhatsAppSyntheticEmail("+1 555 123 4567")).toBe("wa_15551234567@wa.OpenPokeButVoice.invalid");
   });
 });

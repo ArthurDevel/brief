@@ -12,7 +12,7 @@ import type { EngagementEmailContent } from "../../engagement/types";
 
 /**
  * Returns the email content for the 72h incomplete onboarding nudge.
- * @param landerUrl - The lander site base URL (e.g. https://brewdock.com)
+ * @param landerUrl - The lander site base URL (e.g. https://OpenPokeButVoice.com)
  * @param appUrl - The app base URL (not used for this template)
  * @returns Email content with subject, heading, body, CTA text, and CTA URL
  */

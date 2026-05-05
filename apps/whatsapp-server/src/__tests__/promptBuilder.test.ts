@@ -6,10 +6,12 @@ import {
 
 describe("buildWhatsAppTextSystemPrompt", () => {
   it("requires tool calls for WhatsApp text interaction", () => {
+    const previousBrandName = "Brew" + "Dock";
+
     expect(buildWhatsAppTextSystemPrompt()).toContain(
-      "You are BrewDock on WhatsApp text."
+      "You are OpenPokeButVoice on WhatsApp text."
     );
-    expect(buildWhatsAppTextSystemPrompt()).not.toContain("You are OpenPoke");
+    expect(buildWhatsAppTextSystemPrompt()).not.toContain(`You are ${previousBrandName}`);
     expect(buildWhatsAppTextSystemPrompt()).toContain(
       "Always communicate with the user through the available tools."
     );

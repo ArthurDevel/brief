@@ -17,7 +17,7 @@ import type { EngagementEmailContent } from "../../engagement/types";
 /**
  * Returns the email content for the email verified message.
  * @param landerUrl - The lander site base URL (not used for this template)
- * @param appUrl - The app base URL (e.g. https://app.brewdock.com)
+ * @param appUrl - The app base URL (e.g. https://app.OpenPokeButVoice.com)
  * @returns Email content with subject, heading, body, CTA text, and CTA URL
  */
 export function getContent(
@@ -27,7 +27,7 @@ export function getContent(
   return {
     subject: "Your email is verified",
     heading: "Your email is verified",
-    body: "Your account is ready. Next, finish the remaining setup in BrewDock so you can clear your inbox hands-free on your next drive.",
+    body: "Your account is ready. Next, finish the remaining setup in OpenPokeButVoice so you can clear your inbox hands-free on your next drive.",
     ctaText: "Open dashboard",
     ctaUrl: `${appUrl}/dashboard`,
   };

@@ -2,7 +2,7 @@
  * WhatsApp voice interaction agent runtime.
  *
  * Responsibilities:
- * - Run the BrewDock interaction loop for one WhatsApp voice turn
+ * - Run the OpenPokeButVoice interaction loop for one WhatsApp voice turn
  * - Execute interaction tools and aggregate user-visible voice actions
  * - Hand off external work to the execution agent when needed
  */

@@ -129,7 +129,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               B
             </div>
             <span style={{ fontSize: "28px", fontWeight: "400", fontFamily: "var(--font-ibm-plex-serif), serif", letterSpacing: "-0.5px", color: "var(--text-primary)" }}>
-              BrewDock
+              OpenPokeButVoice
             </span>
           </div>
 
@@ -202,7 +202,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 B
               </div>
               <span style={{ fontSize: "20px", fontWeight: "400", fontFamily: "var(--font-ibm-plex-serif), serif", letterSpacing: "-0.5px", color: "var(--text-primary)" }}>
-                BrewDock
+                OpenPokeButVoice
               </span>
             </div>
             <button 

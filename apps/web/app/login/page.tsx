@@ -28,7 +28,7 @@ export default function LoginPage() {
             B
           </div>
           <span style={{ fontSize: "28px", fontWeight: "400", fontFamily: "var(--font-ibm-plex-serif), serif", letterSpacing: "-0.5px", color: "var(--text-primary)" }}>
-            BrewDock
+            OpenPokeButVoice
           </span>
         </div>
         <LoginForm />

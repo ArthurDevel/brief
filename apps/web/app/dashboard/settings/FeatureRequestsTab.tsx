@@ -137,7 +137,7 @@ export default function FeatureRequestsTab() {
       <div className="settings-panel">
         <h2 >Submit a Request</h2>
         <p className={SETTINGS_SECTION_COPY}>
-          Tell us what would make BrewDock more useful for your workflow.
+          Tell us what would make OpenPokeButVoice more useful for your workflow.
         </p>
         <form onSubmit={handleSubmit} className={`${SETTINGS_MAX_WIDTH} ${SETTINGS_FIELD_CARD}`}>
           <label className={SETTINGS_FIELD_LABEL}>Feature request</label>

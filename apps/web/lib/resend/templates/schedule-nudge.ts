@@ -13,7 +13,7 @@ import type { EngagementEmailContent } from "../../engagement/types";
 /**
  * Returns the email content for the schedule nudge email.
  * @param landerUrl - The lander site base URL (not used for this template)
- * @param appUrl - The app base URL (e.g. https://app.brewdock.com)
+ * @param appUrl - The app base URL (e.g. https://app.OpenPokeButVoice.com)
  * @returns Email content with subject, heading, body, CTA text, and CTA URL
  */
 export function getContent(
@@ -23,7 +23,7 @@ export function getContent(
   return {
     subject: "Never miss your morning inbox clear",
     heading: "Never miss your morning inbox clear",
-    body: "Schedule a daily call so BrewDock rings you automatically -- clear your inbox without even thinking about it.",
+    body: "Schedule a daily call so OpenPokeButVoice rings you automatically -- clear your inbox without even thinking about it.",
     ctaText: "Set up schedule",
     ctaUrl: `${appUrl}/dashboard/settings`,
   };

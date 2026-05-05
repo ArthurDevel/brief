@@ -2,7 +2,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 
 const DEFAULT_WHATSAPP_PATH = "/whatsapp";
-const DEFAULT_WHATSAPP_AUTH_EMAIL_DOMAIN = "wa.brewdock.invalid";
+const DEFAULT_WHATSAPP_AUTH_EMAIL_DOMAIN = "wa.OpenPokeButVoice.invalid";
 
 export interface WhatsAppProfile {
   authPhone: string | null;

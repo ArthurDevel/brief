@@ -255,7 +255,7 @@ export default function VoiceTab() {
             )}
           </div>
           <p className={SETTINGS_SECTION_COPY}>
-            Choose the voice BrewDock should use during WhatsApp voice sessions.
+            Choose the voice OpenPokeButVoice should use during WhatsApp voice sessions.
           </p>
           {voices.length === 0 ? (
             <p className="text-[13px] text-[var(--text-secondary)]">Loading voices...</p>

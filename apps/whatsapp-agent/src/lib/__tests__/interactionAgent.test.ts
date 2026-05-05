@@ -12,6 +12,8 @@ import { getDefaultWhatsAppVoiceConfig } from "../voice/types.js";
 
 describe("buildVoiceOpenPokeInteractionUserPrompt", () => {
   it("renders the same text-style tagged sections for a voice turn", () => {
+    const previousBrandName = "Brew" + "Dock";
+
     const prompt = buildVoiceOpenPokeInteractionUserPrompt({
       callerContext: {
         callerPhone: "+15551234567",
@@ -50,9 +52,9 @@ describe("buildVoiceOpenPokeInteractionUserPrompt", () => {
     });
 
     expect(buildVoiceOpenPokeInteractionSystemPrompt()).toContain(
-      "You are BrewDock on WhatsApp voice."
+      "You are OpenPokeButVoice on WhatsApp voice."
     );
-    expect(buildVoiceOpenPokeInteractionSystemPrompt()).not.toContain("You are OpenPoke");
+    expect(buildVoiceOpenPokeInteractionSystemPrompt()).not.toContain(`You are ${previousBrandName}`);
     expect(buildVoiceOpenPokeInteractionSystemPrompt()).toContain("interaction agent");
     expect(prompt).toContain("<channel_context>");
     expect(prompt).toContain("<user_memory>");

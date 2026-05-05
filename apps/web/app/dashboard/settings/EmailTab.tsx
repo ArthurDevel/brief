@@ -324,7 +324,7 @@ export default function EmailTab() {
       <section className="settings-panel">
         <h2>Email Provider</h2>
         <p className={SETTINGS_SECTION_COPY}>
-          Choose how BrewDock should connect to your inbox. Hosted providers use secure OAuth; custom lets you enter IMAP and SMTP details manually.
+          Choose how OpenPokeButVoice should connect to your inbox. Hosted providers use secure OAuth; custom lets you enter IMAP and SMTP details manually.
         </p>
         <div className={`${SETTINGS_MAX_WIDTH} flex`}>
           {PROVIDERS.map((p) => (
@@ -459,7 +459,7 @@ export default function EmailTab() {
           <section className="settings-panel">
             <h2>IMAP (Incoming Mail)</h2>
             <p className={SETTINGS_SECTION_COPY}>
-              Enter the server details BrewDock should use to read incoming email.
+              Enter the server details OpenPokeButVoice should use to read incoming email.
             </p>
             <div className={`${SETTINGS_MAX_WIDTH} grid grid-cols-1 gap-4 md:grid-cols-2`}>
               <InputField label="Host" value={imapHost} onChange={setImapHost} placeholder="imap.example.com" />
@@ -481,7 +481,7 @@ export default function EmailTab() {
           <section className="settings-panel">
             <h2>SMTP (Outgoing Mail)</h2>
             <p className={SETTINGS_SECTION_COPY}>
-              Enter the server details BrewDock should use to draft and send email.
+              Enter the server details OpenPokeButVoice should use to draft and send email.
             </p>
             <div className={`${SETTINGS_MAX_WIDTH} grid grid-cols-1 gap-4 md:grid-cols-2`}>
               <InputField label="Host" value={smtpHost} onChange={setSmtpHost} placeholder="smtp.example.com" />
@@ -530,10 +530,10 @@ export default function EmailTab() {
           <video
             controls
             playsInline
-            poster={`${VIDEO_BUCKET_BASE}/brewdock-unipile-thumbnail.jpg`}
+            poster={`${VIDEO_BUCKET_BASE}/OpenPokeButVoice-unipile-thumbnail.jpg`}
             className="w-full"
           >
-            <source src={`${VIDEO_BUCKET_BASE}/brewdock-unipile.mp4`} type="video/mp4" />
+            <source src={`${VIDEO_BUCKET_BASE}/OpenPokeButVoice-unipile.mp4`} type="video/mp4" />
             Your browser does not support the video tag.
           </video>
         </div>
